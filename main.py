@@ -430,11 +430,19 @@ class LoginRequest(BaseModel):
 
 class ConfigUpdate(BaseModel):
     event_title: Optional[str] = None
-    adult_draws_adult: Optional[int] = Field(default=None, ge=0, le=MAX_DRAW_QUOTA)
-    adult_draws_child: Optional[int] = Field(default=None, ge=0, le=MAX_DRAW_QUOTA)
-    child_draws_adult: Optional[int] = Field(default=None, ge=0, le=MAX_DRAW_QUOTA)
+    adult_draws_adult: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
+    adult_draws_child: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
+    child_draws_adult: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
     child_draws_child: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
     budget_note: Optional[str] = None
+
+    @field_validator("adult_draws_adult", "adult_draws_child", "child_draws_adult", "child_draws_child")
+    @classmethod
+    def _quota_in_range(cls, value: Optional[int]) -> Optional[int]:
+        # The lower bound is checked explicitly: a bare `ge` is dropped on Optional[int].
+        if value is not None and not 0 <= value <= MAX_DRAW_QUOTA:
+            raise ValueError(f"must be between 0 and {MAX_DRAW_QUOTA}")
+        return value
 
 
 class ParticipantCreate(BaseModel):

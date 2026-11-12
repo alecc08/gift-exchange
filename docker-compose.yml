@@ -1,0 +1,13 @@
+services:
+  gift-exchange:
+    build: .
+    image: gift-exchange:latest
+    container_name: gift-exchange
+    ports:
+      - "8085:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      DB_PATH: /app/data/exchange.db
+    restart: unless-stopped
