@@ -203,6 +203,8 @@
 
 <div id="snow" aria-hidden="true"></div>
 
+<div id="toasts" class="fixed bottom-5 right-5 z-50 flex flex-col items-end gap-2" aria-live="polite"></div>
+
 <div class="relative z-10">
 
   <header class="max-w-5xl mx-auto px-5 pt-7 flex items-start justify-between gap-4">
@@ -242,11 +244,13 @@
           <form @submit.prevent="login">
             <label class="label" for="pw" x-text="t('login.password')"></label>
             <input id="pw" type="password" x-model="pwDraft" class="field mt-1.5" autocomplete="current-password"
-                   :placeholder="t('login.placeholder')">
-            <button class="btn btn-primary w-full mt-4 py-2.5" x-text="t('login.button')"></button>
+                   :placeholder="t('login.placeholder')" autofocus :disabled="busy">
+            <button class="btn btn-primary w-full mt-4 py-2.5" :disabled="busy || !pwDraft">
+              <span x-text="busy ? t('login.checking') : t('login.button')"></span>
+            </button>
           </form>
-          <p x-show="loginError" x-cloak class="mt-3 text-sm text-holly-600 flex items-center gap-2">
-            <svg class="w-4 h-4 shrink-0"><use href="#i-alert"/></svg><span x-text="t('login.error')"></span>
+          <p x-show="loginError" x-cloak class="mt-3 text-sm text-holly-600 flex items-start gap-2">
+            <svg class="w-4 h-4 shrink-0 mt-0.5"><use href="#i-alert"/></svg><span x-text="loginError"></span>
           </p>
         </div>
       </section>
@@ -261,23 +265,38 @@
             <span class="text-sm text-pine-600" x-text="rosterSummary"></span>
             <span class="text-sm text-pine-600/70" x-text="giftForecast"></span>
           </div>
-          <button @click="loadState()" class="btn btn-quiet px-3 py-2 text-xs">
-            <svg class="w-3.5 h-3.5"><use href="#i-refresh"/></svg><span x-text="t('admin.refresh')"></span>
-          </button>
+          <div class="flex items-center gap-2">
+            <button @click="copyAllLinks()" :disabled="participants.length === 0" class="btn btn-quiet px-3 py-2 text-xs">
+              <svg class="w-3.5 h-3.5"><use href="#i-link"/></svg>
+              <span x-text="copiedAll ? t('roster.copied') : t('admin.copyAll')"></span>
+            </button>
+            <button @click="loadState()" class="btn btn-quiet px-3 py-2 text-xs">
+              <svg class="w-3.5 h-3.5"><use href="#i-refresh"/></svg><span x-text="t('admin.refresh')"></span>
+            </button>
+          </div>
         </div>
 
-        <div x-show="banner" x-cloak class="rounded-2xl bg-holly-100 ring-1 ring-holly-500/25 px-5 py-4 flex items-start gap-3 fade-up">
+        <div x-show="securityNotice" x-cloak class="rounded-2xl bg-gold-100 ring-1 ring-gold-500/25 px-5 py-3.5 flex items-start gap-3">
+          <svg class="w-4 h-4 text-gold-600 shrink-0 mt-0.5"><use href="#i-alert"/></svg>
+          <p class="text-sm text-gold-600" x-text="securityNotice"></p>
+        </div>
+
+        <div x-show="warnings.length" x-cloak class="rounded-2xl bg-holly-100/70 ring-1 ring-holly-500/20 px-5 py-4">
+          <p class="text-sm font-semibold text-holly-700 flex items-center gap-2">
+            <svg class="w-4 h-4 shrink-0"><use href="#i-alert"/></svg><span x-text="t('warn.title')"></span>
+          </p>
+          <template x-for="warning in warnings" :key="warning">
+            <p class="text-sm text-holly-700/85 mt-1 pl-6" x-text="warning"></p>
+          </template>
+        </div>
+
+        <div x-show="adminError" x-cloak class="rounded-2xl bg-holly-100 ring-1 ring-holly-500/25 px-5 py-4 flex items-start gap-3 fade-up">
           <svg class="w-5 h-5 text-holly-600 shrink-0 mt-0.5"><use href="#i-alert"/></svg>
           <div>
-            <p class="text-sm font-semibold text-holly-700" x-text="bannerTitle"></p>
-            <p class="text-sm text-holly-700/85 mt-0.5" x-text="banner"></p>
+            <p class="text-sm font-semibold text-holly-700" x-text="adminErrorTitle"></p>
+            <p class="text-sm text-holly-700/85 mt-0.5" x-text="adminError"></p>
           </div>
-          <button @click="banner=''" class="ml-auto text-holly-700/60 hover:text-holly-700 text-lg leading-none">&times;</button>
-        </div>
-
-        <div x-show="notice" x-cloak class="rounded-2xl bg-pine-50 ring-1 ring-pine-500/20 px-5 py-3.5 flex items-center gap-3 fade-up">
-          <svg class="w-4 h-4 text-pine-600 shrink-0"><use href="#i-check"/></svg>
-          <p class="text-sm text-pine-700" x-text="notice"></p>
+          <button @click="adminError=''" class="ml-auto text-holly-700/60 hover:text-holly-700 text-lg leading-none">&times;</button>
         </div>
 
         <!-- Panel 1 — rules & quotas -->
@@ -293,12 +312,17 @@
           <div class="grid md:grid-cols-2 gap-4 mt-6">
             <div>
               <label class="label" for="title" x-text="t('rules.eventTitle')"></label>
-              <input id="title" class="field mt-1.5" x-model="cfg.event_title" :disabled="locked">
+              <input id="title" class="field mt-1.5" x-model="cfg.event_title" :disabled="locked"
+                     :maxlength="limits.event_title">
+              <p class="text-[11px] text-pine-600/60 mt-1 text-right"
+                 x-text="(cfg.event_title || '').length + '/' + limits.event_title"></p>
             </div>
             <div>
               <label class="label" for="budget" x-text="t('rules.budget')"></label>
               <input id="budget" class="field mt-1.5" x-model="cfg.budget_note" :disabled="locked"
-                     :placeholder="t('rules.budgetPlaceholder')">
+                     :placeholder="t('rules.budgetPlaceholder')" :maxlength="limits.budget_note">
+              <p class="text-[11px] text-pine-600/60 mt-1 text-right"
+                 x-text="(cfg.budget_note || '').length + '/' + limits.budget_note"></p>
             </div>
           </div>
 
@@ -317,34 +341,48 @@
                   <tr>
                     <td class="p-3 text-pine-700 font-medium" x-text="t('rules.eachAdult')"></td>
                     <td class="p-3 text-center">
-                      <input type="number" min="0" max="10" class="field w-20 text-center mx-auto"
-                             x-model.number="cfg.adult_draws_adult" :disabled="locked">
+                      <input type="number" min="0" :max="limits.max_quota" class="field w-20 text-center mx-auto"
+                             x-model.number="cfg.adult_draws_adult" :disabled="locked"
+                             :aria-label="t('rules.eachAdult') + ' → ' + t('role.ADULT')">
                     </td>
                     <td class="p-3 text-center">
-                      <input type="number" min="0" max="10" class="field w-20 text-center mx-auto"
-                             x-model.number="cfg.adult_draws_child" :disabled="locked">
+                      <input type="number" min="0" :max="limits.max_quota" class="field w-20 text-center mx-auto"
+                             x-model.number="cfg.adult_draws_child" :disabled="locked"
+                             :aria-label="t('rules.eachAdult') + ' → ' + t('role.CHILD')">
                     </td>
                   </tr>
                   <tr>
                     <td class="p-3 text-pine-700 font-medium" x-text="t('rules.eachChild')"></td>
                     <td class="p-3 text-center">
-                      <input type="number" min="0" max="10" class="field w-20 text-center mx-auto"
-                             x-model.number="cfg.child_draws_adult" :disabled="locked">
+                      <input type="number" min="0" :max="limits.max_quota" class="field w-20 text-center mx-auto"
+                             x-model.number="cfg.child_draws_adult" :disabled="locked"
+                             :aria-label="t('rules.eachChild') + ' → ' + t('role.ADULT')">
                     </td>
                     <td class="p-3 text-center">
-                      <input type="number" min="0" max="10" class="field w-20 text-center mx-auto"
-                             x-model.number="cfg.child_draws_child" :disabled="locked">
+                      <input type="number" min="0" :max="limits.max_quota" class="field w-20 text-center mx-auto"
+                             x-model.number="cfg.child_draws_child" :disabled="locked"
+                             :aria-label="t('rules.eachChild') + ' → ' + t('role.CHILD')">
                     </td>
                   </tr>
                 </tbody>
+                <tfoot>
+                  <tr class="bg-pine-50/50 text-pine-700">
+                    <td class="p-3 text-xs font-semibold" x-text="t('rules.totalToPrepare')"></td>
+                    <td class="p-3 text-center text-xs font-semibold" x-text="totals.toAdults"></td>
+                    <td class="p-3 text-center text-xs font-semibold" x-text="totals.toChildren"></td>
+                  </tr>
+                </tfoot>
               </table>
             </div>
             <p class="text-xs text-pine-600/75 mt-2" x-text="t('rules.quotaHelp')"></p>
           </div>
 
-          <div class="flex items-center gap-3 mt-6">
-            <button @click="saveConfig()" :disabled="locked || busy" class="btn btn-primary px-5 py-2.5 text-sm"
-                    x-text="t('rules.save')"></button>
+          <div class="flex flex-wrap items-center gap-3 mt-6">
+            <button @click="saveConfig()" :disabled="locked || busy || !rulesDirty" class="btn btn-primary px-5 py-2.5 text-sm">
+              <svg class="w-3.5 h-3.5"><use href="#i-check"/></svg>
+              <span x-text="t('rules.save')"></span>
+            </button>
+            <span x-show="rulesDirty" x-cloak class="chip bg-gold-100 text-gold-600" x-text="t('rules.unsaved')"></span>
             <p x-show="locked" x-cloak class="text-xs text-gold-600 flex items-center gap-1.5">
               <svg class="w-3.5 h-3.5"><use href="#i-alert"/></svg><span x-text="t('rules.lockedHint')"></span>
             </p>
@@ -364,7 +402,8 @@
           <form @submit.prevent="addParticipant()" class="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
             <div>
               <label class="label" for="p-name" x-text="t('roster.name')"></label>
-              <input id="p-name" class="field mt-1.5" x-model.trim="draft.name" :disabled="locked" :placeholder="t('roster.namePlaceholder')">
+              <input id="p-name" class="field mt-1.5" x-model.trim="draft.name" :disabled="locked"
+                     :placeholder="t('roster.namePlaceholder')" :maxlength="limits.name" autocomplete="off">
             </div>
             <div>
               <label class="label" for="p-role" x-text="t('roster.role')"></label>
@@ -375,22 +414,41 @@
             </div>
             <div>
               <label class="label" for="p-group" x-text="t('roster.group')"></label>
-              <input id="p-group" class="field mt-1.5" x-model.trim="draft.family_group" :disabled="locked" :placeholder="t('roster.groupPlaceholder')">
+              <input id="p-group" class="field mt-1.5" x-model.trim="draft.family_group" :disabled="locked"
+                     :placeholder="t('roster.groupPlaceholder')" :maxlength="limits.family_group"
+                     list="group-options" autocomplete="off">
+              <datalist id="group-options">
+                <template x-for="g in familyGroups" :key="g.name">
+                  <option :value="g.name"></option>
+                </template>
+              </datalist>
             </div>
             <div>
               <label class="label" for="p-wish" x-text="t('roster.wishlist')"></label>
               <div class="flex gap-2 mt-1.5">
-                <input id="p-wish" class="field" x-model.trim="draft.wishlist" :disabled="locked" :placeholder="t('roster.wishlistPlaceholder')">
-                <button type="submit" :disabled="locked || !draftReady" class="btn btn-primary px-4 py-2.5 text-sm shrink-0"
-                        x-text="t('roster.add')"></button>
+                <input id="p-wish" class="field" x-model.trim="draft.wishlist" :disabled="locked"
+                       :placeholder="t('roster.wishlistPlaceholder')" :maxlength="limits.wishlist">
+                <button type="submit" :disabled="locked || busy || !draftReady"
+                        class="btn btn-primary px-4 py-2.5 text-sm shrink-0" x-text="t('roster.add')"></button>
               </div>
             </div>
           </form>
 
-          <p class="text-xs text-pine-600/80 mt-3 flex items-center gap-2">
-            <svg class="w-3.5 h-3.5 text-pine-300 shrink-0"><use href="#i-flake"/></svg>
-            <span x-text="t('roster.groupHelp')"></span>
-          </p>
+          <div class="flex flex-wrap items-center gap-2 mt-3">
+            <p class="text-xs text-pine-600/80 flex items-center gap-2 mr-1">
+              <svg class="w-3.5 h-3.5 text-pine-300 shrink-0"><use href="#i-flake"/></svg>
+              <span x-text="t('roster.groupHelp')"></span>
+            </p>
+            <template x-for="g in familyGroups" :key="g.name">
+              <button @click="groupFilter = groupFilter === g.name ? '' : g.name"
+                      class="chip transition"
+                      :class="groupFilter === g.name ? 'bg-pine-700 text-white' : 'bg-pine-50 text-pine-600 hover:bg-pine-100'">
+                <span x-text="g.name"></span><span class="opacity-70" x-text="'· ' + g.count"></span>
+              </button>
+            </template>
+            <button x-show="groupFilter" x-cloak @click="groupFilter = ''" class="chip bg-black/5 text-pine-600"
+                    x-text="t('roster.filterOff')"></button>
+          </div>
 
           <div class="mt-5 overflow-x-auto">
             <table class="w-full text-sm">
@@ -404,34 +462,37 @@
                 </tr>
               </thead>
               <tbody class="divide-y divide-black/5">
-                <tr x-show="participants.length === 0">
+                <tr x-show="visibleParticipants.length === 0">
                   <td colspan="5" class="py-8 text-center text-pine-600/70" x-text="t('roster.empty')"></td>
                 </tr>
-                <template x-for="p in participants" :key="p.id">
-                  <tr>
+                <template x-for="p in visibleParticipants" :key="p.id">
+                  <tr class="hover:bg-pine-50/40 transition">
                     <td class="py-3 pr-3 align-top">
                       <p class="font-semibold text-pine-800" x-text="p.name"></p>
-                      <p x-show="p.wishlist" x-cloak class="text-xs text-pine-600/75 mt-0.5 max-w-[22rem]"
-                         x-text="t('roster.wishlistIs') + ' ' + p.wishlist"></p>
+                      <p x-show="p.wishlist" x-cloak class="text-xs text-pine-600/75 mt-0.5 max-w-[22rem] truncate"
+                         :title="p.wishlist" x-text="t('roster.wishlistIs') + ' ' + p.wishlist"></p>
                     </td>
                     <td class="py-3 px-3 align-top">
                       <span class="chip" :class="p.role === 'ADULT' ? 'bg-pine-50 text-pine-600' : 'bg-gold-100 text-gold-600'"
                             x-text="t('role.' + p.role)"></span>
+                      <p class="text-[11px] text-pine-600/65 mt-1"
+                         x-text="drawsOf(p) ? t('roster.giftsN', { n: drawsOf(p) }) : t('roster.noGiftsNote')"></p>
                     </td>
                     <td class="py-3 px-3 align-top text-pine-700" x-text="p.family_group"></td>
                     <td class="py-3 px-3 align-top">
-                      <span x-show="p.viewed_at" x-cloak class="chip bg-pine-100 text-pine-700">
+                      <span x-show="p.viewed_at" x-cloak class="chip bg-pine-100 text-pine-700" :title="formatDate(p.viewed_at)">
                         <svg class="w-3 h-3"><use href="#i-check"/></svg>
                         <span x-text="t('roster.viewed')"></span>
-                        <span class="font-normal opacity-75" x-text="formatDate(p.viewed_at)"></span>
+                        <span class="font-normal opacity-75" x-text="relative(p.viewed_at)"></span>
                       </span>
                       <span x-show="!p.viewed_at" class="chip bg-black/5 text-pine-600/70" x-text="t('roster.unopened')"></span>
                     </td>
                     <td class="py-3 pl-3 align-top text-right whitespace-nowrap">
-                      <button @click="copyLink(p)" :disabled="!p.token"
-                              class="btn btn-quiet px-3 py-1.5 text-xs" x-text="copiedId === p.id ? t('roster.copied') : t('roster.copy')"></button>
-                      <p x-show="drawsOf(p) === 0" x-cloak class="text-[11px] text-pine-600/65 mt-1" x-text="t('roster.noGiftsNote')"></p>
-                      <button x-show="!locked" x-cloak @click="removeParticipant(p)"
+                      <button @click="copyLink(p)" :disabled="!p.token" class="btn btn-quiet px-3 py-1.5 text-xs">
+                        <svg class="w-3 h-3"><use href="#i-link"/></svg>
+                        <span x-text="copiedId === p.id ? t('roster.copied') : t('roster.copy')"></span>
+                      </button>
+                      <button x-show="!locked" x-cloak @click="removeParticipant(p)" :aria-label="t('roster.delete') + ' ' + p.name"
                               class="btn btn-danger px-3 py-1.5 text-xs ml-2" x-text="t('roster.delete')"></button>
                     </td>
                   </tr>
@@ -454,18 +515,26 @@
           <p class="text-sm text-pine-600 mt-4 leading-relaxed" x-text="locked ? t('draw.lockedCopy') : t('draw.openCopy')"></p>
           <p class="text-xs text-pine-600/75 mt-2" x-text="t('draw.blindNote')"></p>
 
-          <div x-show="!locked" x-cloak class="flex flex-wrap items-center gap-3 mt-6">
-            <button @click="runDraw()" :disabled="busy || participants.length === 0"
-                    class="btn btn-primary px-6 py-3 text-sm">
+          <div x-show="!locked && participants.length === 0" x-cloak
+               class="mt-5 rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3">
+            <p class="text-sm text-pine-700" x-text="t('draw.needRoster')"></p>
+          </div>
+
+          <div x-show="!locked && participants.length > 0" x-cloak class="flex flex-wrap items-center gap-3 mt-6">
+            <button @click="runDraw()" :disabled="busy || warnings.length > 0" class="btn btn-primary px-6 py-3 text-sm">
               <svg class="w-4 h-4"><use href="#i-star"/></svg>
               <span x-text="t('draw.generate')"></span>
             </button>
             <span class="text-xs text-pine-600/75" x-text="giftForecast"></span>
+            <span x-show="warnings.length > 0" x-cloak class="chip bg-holly-100 text-holly-600"
+                  x-text="t('draw.blockedByWarnings')"></span>
           </div>
 
           <div x-show="locked" x-cloak class="flex flex-wrap items-center gap-3 mt-6">
             <button @click="resetDraw()" class="btn btn-danger px-5 py-2.5 text-sm" x-text="t('draw.reset')"></button>
             <span class="text-xs text-pine-600/75" x-text="t('draw.resetHint')"></span>
+            <span class="chip" :class="openedCount ? 'bg-pine-100 text-pine-700' : 'bg-black/5 text-pine-600/70'"
+                  x-text="t('draw.openedCount', { n: openedCount, total: participants.length })"></span>
           </div>
         </section>
       </div>
@@ -550,6 +619,13 @@
               <div class="mt-6">
                 <svg class="w-16 h-16 text-pine-300 wrapped mx-auto"><use href="#i-gift"/></svg>
                 <p class="text-pine-700 mt-4" x-text="t('p.pending')"></p>
+                <div class="flex items-center justify-center gap-2 mt-4">
+                  <button @click="refreshParticipant()" class="btn btn-quiet px-3 py-1.5 text-xs" :disabled="busy">
+                    <svg class="w-3.5 h-3.5"><use href="#i-refresh"/></svg>
+                    <span x-text="t('p.checkAgain')"></span>
+                  </button>
+                  <span class="text-[11px] text-pine-600/65" x-text="t('p.autoCheck')"></span>
+                </div>
               </div>
             </template>
 
@@ -557,7 +633,7 @@
             <template x-if="data.status === 'READY' && !revealed">
               <div class="mt-4">
                 <p class="text-pine-700" x-text="t('p.readyTease')"></p>
-                <button id="reveal-btn" class="reveal-btn mt-5" @click="reveal()">
+                <button id="reveal-btn" class="reveal-btn mt-5" @click="reveal()" autofocus>
                   <span x-text="data.assignments.length ? t('p.reveal') : t('p.revealNone')"></span>
                 </button>
                 <p class="text-[11px] text-pine-600/70 mt-3" x-text="t('p.privateNote')"></p>
@@ -602,6 +678,13 @@
                   </div>
                 </article>
               </template>
+
+              <div x-show="data.assignments.length" x-cloak class="flex items-center gap-2 pt-1">
+                <button @click="copyMyList()" class="btn btn-quiet px-3 py-1.5 text-xs">
+                  <svg class="w-3.5 h-3.5"><use href="#i-link"/></svg>
+                  <span x-text="copiedList ? t('roster.copied') : t('p.copyList')"></span>
+                </button>
+              </div>
             </div>
           </template>
 
@@ -612,12 +695,19 @@
               <h3 class="font-display text-lg text-pine-800" x-text="t('p.myWishlist')"></h3>
             </div>
             <p class="text-xs text-pine-600/75 mt-1" x-text="t('p.myWishlistHelp')"></p>
-            <textarea class="field mt-3" rows="3" x-model="wishlistDraft" :placeholder="t('p.wishlistPlaceholder')"></textarea>
-            <div class="flex items-center gap-3 mt-3">
-              <button @click="saveWishlist()" :disabled="busy" class="btn btn-primary px-5 py-2.5 text-sm" x-text="t('p.save')"></button>
-              <p x-show="wishlistSaved" x-cloak class="text-xs text-pine-600 flex items-center gap-1.5">
-                <svg class="w-3.5 h-3.5"><use href="#i-check"/></svg><span x-text="t('p.saved')"></span>
+            <textarea class="field mt-3" rows="3" x-model="wishlistDraft" @input="queueWishlistSave()"
+                      @keydown.meta.enter.prevent="saveWishlist()" @keydown.ctrl.enter.prevent="saveWishlist()"
+                      :placeholder="t('p.wishlistPlaceholder')" :maxlength="limits.wishlist"></textarea>
+            <div class="flex flex-wrap items-center gap-3 mt-3">
+              <button @click="saveWishlist()" :disabled="busy || !wishlistDirty" class="btn btn-primary px-5 py-2.5 text-sm"
+                      x-text="t('p.save')"></button>
+              <span x-show="wishlistDirty" x-cloak class="chip bg-gold-100 text-gold-600" x-text="t('p.unsaved')"></span>
+              <p x-show="!wishlistDirty && savedAt" x-cloak class="text-xs text-pine-600 flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5"><use href="#i-check"/></svg>
+                <span x-text="t('p.savedAt', { at: relative(savedAt) })"></span>
               </p>
+              <span class="text-[11px] text-pine-600/60 ml-auto"
+                    x-text="(wishlistDraft || '').length + '/' + limits.wishlist"></span>
             </div>
           </section>
         </div>
@@ -636,16 +726,27 @@ const I18N = {
     'lang.switch': 'Choix de la langue',
     'admin.lock': 'Verrouiller',
     'admin.refresh': 'Rafraîchir',
+    'admin.copyAll': 'Copier tous les liens',
 
     'login.title': 'Espace organisateur',
     'login.sub': 'Saisissez le mot de passe d’administration pour piloter l’échange.',
     'login.password': 'Mot de passe',
     'login.placeholder': 'Mot de passe d’administration',
     'login.button': 'Déverrouiller',
+    'login.checking': 'Vérification…',
     'login.error': 'Mot de passe incorrect.',
+    'login.expired': 'Session expirée. Reconnectez-vous.',
 
     'state.locked': 'Tirage verrouillé',
     'state.open': 'Tirage ouvert',
+
+    'warn.title': 'Le tirage risque d’échouer',
+    'warn.adultsNeed': 'Chaque adulte doit tirer {need} adulte(s), mais seuls {available} adulte(s) hors de son propre groupe sont éligibles.',
+    'warn.childrenNeed': 'Chaque adulte doit tirer {need} enfant(s), mais seuls {available} enfant(s) hors de son propre groupe sont éligibles.',
+    'warn.childAdultsNeed': 'Chaque enfant doit tirer {need} adulte(s), mais seuls {available} adulte(s) hors de son propre groupe sont éligibles.',
+    'warn.childChildrenNeed': 'Chaque enfant doit tirer {need} enfant(s), mais seuls {available} enfant(s) hors de son propre groupe sont éligibles.',
+    'warn.noReceivers': 'Aucun receveur n’est possible pour le rôle « {role} » avec les groupes familiaux actuels.',
+    'warn.selfOnly': 'Il n’y a qu’un seul participant : personne ne peut tirer qui que ce soit.',
 
     'rules.kicker': 'Panel 1',
     'rules.title': 'Règles & quotas',
@@ -656,8 +757,10 @@ const I18N = {
     'rules.whoDraws': 'Chaque participant tire…',
     'rules.eachAdult': 'Un adulte tire',
     'rules.eachChild': 'Un enfant tire',
-    'rules.quotaHelp': '0 = ce type de cadeau n’est pas prévu. Le nombre total de cadeaux doit rester équilibré entre donneurs et receveurs.',
+    'rules.totalToPrepare': 'Total de cadeaux à prévoir',
+    'rules.quotaHelp': '0 = ce type de cadeau n’est pas prévu. Le total doit rester équilibré entre donneurs et receveurs.',
     'rules.save': 'Enregistrer les règles',
+    'rules.unsaved': 'Modifications non enregistrées',
     'rules.lockedHint': 'Tirage verrouillé : réinitialisez-le pour modifier les règles.',
     'rules.saved': 'Règles enregistrées.',
 
@@ -679,10 +782,12 @@ const I18N = {
     'roster.viewed': 'Consulté',
     'roster.unopened': 'Non ouvert',
     'roster.copy': 'Copier le lien',
-    'roster.copied': 'Lien copié !',
+    'roster.copied': 'Copié !',
     'roster.delete': 'Supprimer',
     'roster.confirmDelete': 'Supprimer {name} de la liste des participants ?',
     'roster.noGiftsNote': 'ne tire aucun cadeau',
+    'roster.giftsN': '{n} cadeau(x) à offrir',
+    'roster.filterOff': 'Afficher tout le monde',
     'roster.summary': '{n} participant(s) · {a} adulte(s) · {c} enfant(s)',
 
     'draw.kicker': 'Panel 3',
@@ -690,15 +795,23 @@ const I18N = {
     'draw.openCopy': 'Lancez le tirage : chaque participant reçoit un lien confidentiel. Personne, y compris vous, ne voit la répartition complète.',
     'draw.lockedCopy': 'Le tirage est verrouillé. Les participants peuvent ouvrir leur lien à tout moment.',
     'draw.blindNote': 'Aucune interface organisateur n’affiche les binômes : c’est voulu.',
+    'draw.needRoster': 'Ajoutez d’abord des participants dans le Panel 2, puis relancez le tirage.',
     'draw.generate': 'Générer et verrouiller le tirage',
+    'draw.blockedByWarnings': 'Corrigez d’abord les alertes ci-dessus',
+    'draw.confirmGenerate': 'Générer le tirage maintenant ? Cela verrouille les règles et envoie {gifts} cadeau(s) aux participants. Vous ne pourrez plus les modifier sans réinitialiser.',
     'draw.done': 'Tirage généré et verrouillé. Diffusez les liens aux participants.',
+    'draw.alreadyLocked': 'Le tirage est déjà verrouillé.',
+    'draw.openedCount': '{n}/{total} lien(s) ouvert(s)',
     'draw.reset': 'Réinitialiser le tirage',
     'draw.resetHint': 'Efface les binômes et rouvre l’édition.',
     'draw.confirmReset': 'Réinitialiser le tirage ? Les binômes et les statuts « consulté » seront effacés.',
+    'draw.resetDone': 'Tirage réinitialisé. Vous pouvez modifier les règles et la liste.',
     'draw.forecast': '{gifts} cadeau(s) au total : {toAdults} pour des adultes, {toChildren} pour des enfants',
 
     'p.hello': 'Bonjour',
     'p.pending': 'le tirage n’est pas encore finalisé. Reviens bientôt !',
+    'p.checkAgain': 'Vérifier à nouveau',
+    'p.autoCheck': 'Cette page se rafraîchit toute seule.',
     'p.readyTease': 'Ton tirage t’attend. Ouvre le cadeau.',
     'p.reveal': 'Révéler mes cadeaux',
     'p.revealNone': 'Ouvrir mon lien',
@@ -706,14 +819,16 @@ const I18N = {
     'p.giftAria': 'Cadeau de Noël emballé',
     'p.revealTitle': 'Les cadeaux que tu offres',
     'p.revealSub': 'Retrouve chaque personne et ses envies.',
+    'p.copyList': 'Copier ma liste',
     'p.noGifts': 'Tu n’as aucun cadeau à offrir cette année — prépare-toi à recevoir les tiens !',
     'p.theirWishlist': 'Ses envies',
     'p.noWishlist': 'Aucune envie indiquée — laisse parler ton imagination.',
     'p.myWishlist': 'Ma liste d’envies',
-    'p.myWishlistHelp': 'Tu peux la modifier à tout moment, même après le tirage.',
+    'p.myWishlistHelp': 'Tu peux la modifier à tout moment, même après le tirage. Enregistrement automatique.',
     'p.wishlistPlaceholder': 'Ex. un livre de polars, des feutres, un pull bleu marine…',
     'p.save': 'Enregistrer',
-    'p.saved': 'Enregistré',
+    'p.unsaved': 'Non enregistré',
+    'p.savedAt': 'Enregistré {at}',
     'p.invalidTitle': 'Lien introuvable',
     'p.invalidSub': 'Ce lien n’est plus valide. Demande un nouveau lien à l’organisateur.',
 
@@ -725,8 +840,12 @@ const I18N = {
     'err.emptyTarget': 'Impossible d’offrir des cadeaux à un groupe vide : il n’y a aucun receveur possible.',
     'err.locked': 'Le tirage est verrouillé : réinitialisez-le avant de modifier quoi que ce soit.',
     'err.noParticipants': 'Ajoutez au moins un participant avant de lancer le tirage.',
+    'err.rateLimited': 'Trop de demandes. Réessayez dans {s} seconde(s).',
+    'err.rateLimitedTitle': 'Trop de demandes',
+    'err.tooLarge': 'Le contenu est trop long pour être enregistré.',
     'err.unknown': 'Une erreur est survenue. Réessayez.',
     'err.copy': 'Copie impossible : sélectionnez et copiez le lien manuellement.',
+    'notice.defaultPassword': 'Mot de passe d’administration encore par défaut : changez la variable ADMIN_PASSWORD avant de diffuser les liens.',
   },
   en: {
     'brand': 'Gift exchange',
@@ -734,16 +853,27 @@ const I18N = {
     'lang.switch': 'Language choice',
     'admin.lock': 'Lock',
     'admin.refresh': 'Refresh',
+    'admin.copyAll': 'Copy all links',
 
     'login.title': 'Organizer space',
     'login.sub': 'Enter the admin password to run the exchange.',
     'login.password': 'Password',
     'login.placeholder': 'Admin password',
     'login.button': 'Unlock',
+    'login.checking': 'Checking…',
     'login.error': 'Incorrect password.',
+    'login.expired': 'Session expired. Please sign in again.',
 
     'state.locked': 'Draw locked',
     'state.open': 'Draw open',
+
+    'warn.title': 'The draw is likely to fail',
+    'warn.adultsNeed': 'Each adult must draw {need} adult(s), but only {available} adult(s) outside their own household are eligible.',
+    'warn.childrenNeed': 'Each adult must draw {need} child(ren), but only {available} child(ren) outside their own household are eligible.',
+    'warn.childAdultsNeed': 'Each child must draw {need} adult(s), but only {available} adult(s) outside their own household are eligible.',
+    'warn.childChildrenNeed': 'Each child must draw {need} child(ren), but only {available} child(ren) outside their own household are eligible.',
+    'warn.noReceivers': 'No receiver is possible for the “{role}” role with the current family groups.',
+    'warn.selfOnly': 'There is only one participant: nobody can draw anybody.',
 
     'rules.kicker': 'Panel 1',
     'rules.title': 'Rules & draw quotas',
@@ -754,8 +884,10 @@ const I18N = {
     'rules.whoDraws': 'Each participant draws…',
     'rules.eachAdult': 'Each adult draws',
     'rules.eachChild': 'Each child draws',
-    'rules.quotaHelp': '0 = that kind of gift is not planned. Total gifts must stay balanced between givers and receivers.',
+    'rules.totalToPrepare': 'Total gifts to prepare',
+    'rules.quotaHelp': '0 = that kind of gift is not planned. Totals must stay balanced between givers and receivers.',
     'rules.save': 'Save rules',
+    'rules.unsaved': 'Unsaved changes',
     'rules.lockedHint': 'Draw locked: reset it before editing the rules.',
     'rules.saved': 'Rules saved.',
 
@@ -781,6 +913,8 @@ const I18N = {
     'roster.delete': 'Delete',
     'roster.confirmDelete': 'Remove {name} from the roster?',
     'roster.noGiftsNote': 'draws no gifts',
+    'roster.giftsN': '{n} gift(s) to buy',
+    'roster.filterOff': 'Show everyone',
     'roster.summary': '{n} participant(s) · {a} adult(s) · {c} child(ren)',
 
     'draw.kicker': 'Panel 3',
@@ -788,15 +922,23 @@ const I18N = {
     'draw.openCopy': 'Run the draw: everyone gets a private link. Nobody — including you — sees the full pairing.',
     'draw.lockedCopy': 'The draw is locked. Participants can open their link any time.',
     'draw.blindNote': 'No organizer screen ever shows the pairings — that is intentional.',
+    'draw.needRoster': 'Add participants in Panel 2 first, then run the draw.',
     'draw.generate': 'Generate & lock draw',
+    'draw.blockedByWarnings': 'Fix the warnings above first',
+    'draw.confirmGenerate': 'Run the draw now? This locks the rules and sends {gifts} gift(s) out to participants. You can only change it by resetting.',
     'draw.done': 'Draw generated and locked. Send the links to participants.',
+    'draw.alreadyLocked': 'The draw is already locked.',
+    'draw.openedCount': '{n}/{total} link(s) opened',
     'draw.reset': 'Reset draw',
     'draw.resetHint': 'Clears the pairings and reopens editing.',
     'draw.confirmReset': 'Reset the draw? Pairings and “viewed” markers will be cleared.',
+    'draw.resetDone': 'Draw reset. Rules and roster are editable again.',
     'draw.forecast': '{gifts} gift(s) in total: {toAdults} to adults, {toChildren} to children',
 
     'p.hello': 'Hi',
     'p.pending': 'the draw hasn’t been finalized yet. Check back soon!',
+    'p.checkAgain': 'Check again',
+    'p.autoCheck': 'This page refreshes itself.',
     'p.readyTease': 'Your draw is ready. Open the gift.',
     'p.reveal': 'Reveal my gifts',
     'p.revealNone': 'Open my link',
@@ -804,14 +946,16 @@ const I18N = {
     'p.giftAria': 'Wrapped Christmas gift',
     'p.revealTitle': 'The gifts you give',
     'p.revealSub': 'Each person and their wishlist.',
+    'p.copyList': 'Copy my list',
     'p.noGifts': 'You don’t need to buy any gifts this year—just get ready to receive yours!',
     'p.theirWishlist': 'Their wishlist',
     'p.noWishlist': 'No wishlist notes — let your imagination run.',
     'p.myWishlist': 'My wishlist',
-    'p.myWishlistHelp': 'You can edit it any time, even after the draw.',
+    'p.myWishlistHelp': 'You can edit it any time, even after the draw. It saves automatically.',
     'p.wishlistPlaceholder': 'e.g. a crime novel, felt pens, a navy jumper…',
     'p.save': 'Save',
-    'p.saved': 'Saved',
+    'p.unsaved': 'Not saved',
+    'p.savedAt': 'Saved {at}',
     'p.invalidTitle': 'Link not found',
     'p.invalidSub': 'This link is no longer valid. Ask the organizer for a new one.',
 
@@ -823,27 +967,36 @@ const I18N = {
     'err.emptyTarget': 'Cannot assign gifts to an empty target group: there is nobody who could receive one.',
     'err.locked': 'The draw is locked: reset it before changing anything.',
     'err.noParticipants': 'Add at least one participant before running the draw.',
+    'err.rateLimited': 'Too many requests. Try again in {s} second(s).',
+    'err.rateLimitedTitle': 'Too many requests',
+    'err.tooLarge': 'That text is too long to save.',
     'err.unknown': 'Something went wrong. Please try again.',
     'err.copy': 'Copy failed: select and copy the link manually.',
+    'notice.defaultPassword': 'The admin password is still the default one: change ADMIN_PASSWORD before sending links out.',
   },
 };
 
 /* ------------------------------- app ------------------------------- */
+const DEFAULT_LIMITS = { name: 80, family_group: 60, wishlist: 1000, event_title: 120, budget_note: 500, max_quota: 10, default_password: false };
+
 function giftExchange() {
   return {
     lang: localStorage.getItem('ge_lang') || 'fr',
     mode: 'admin',
     token: null,
+    limits: { ...DEFAULT_LIMITS },
 
-    authed: false, busy: false, loginError: false, pwDraft: '',
-    banner: '', bannerTitle: '', notice: '',
+    authed: false, busy: false, loginError: '', pwDraft: '',
+    adminError: '', adminErrorTitle: '', securityNotice: '',
     cfg: { event_title: '', budget_note: '', adult_draws_adult: 1, adult_draws_child: 2, child_draws_adult: 0, child_draws_child: 0 },
-    participants: [], locked: false,
+    savedCfg: null,
+    participants: [], locked: false, groupFilter: '',
     draft: { name: '', role: 'ADULT', family_group: '', wishlist: '' },
-    copiedId: null,
+    copiedId: null, copiedAll: false,
 
     participant: null, data: { status: '', assignments: [] }, pError: false,
-    revealed: false, burstOn: false, wishlistDraft: '', wishlistSaved: false,
+    revealed: false, burstOn: false, wishlistDraft: '', savedWishlist: '', savedAt: null,
+    wishlistSaved: false, copiedList: false, poll: null,
     burst: [],
 
     /* ---------- helpers ---------- */
@@ -857,18 +1010,61 @@ function giftExchange() {
       if (this.mode === 'participant') return this.data.event_title || this.t('brand');
       return this.cfg.event_title || this.t('admin.title');
     },
+    get adults() { return this.participants.filter(p => p.role === 'ADULT'); },
+    get children() { return this.participants.filter(p => p.role === 'CHILD'); },
     get rosterSummary() {
-      const adults = this.participants.filter(p => p.role === 'ADULT').length;
-      const children = this.participants.filter(p => p.role === 'CHILD').length;
-      return this.t('roster.summary', { n: this.participants.length, a: adults, c: children });
+      return this.t('roster.summary', { n: this.participants.length, a: this.adults.length, c: this.children.length });
     },
-    get giftForecast() {
-      const a = this.participants.filter(p => p.role === 'ADULT').length;
-      const c = this.participants.filter(p => p.role === 'CHILD').length;
-      const cfg = this.cfg;
+    get totals() {
+      const cfg = this.cfg, a = this.adults.length, c = this.children.length;
       const toAdults = a * (cfg.adult_draws_adult || 0) + c * (cfg.child_draws_adult || 0);
       const toChildren = a * (cfg.adult_draws_child || 0) + c * (cfg.child_draws_child || 0);
-      return this.t('draw.forecast', { gifts: toAdults + toChildren, toAdults, toChildren });
+      return { toAdults, toChildren, gifts: toAdults + toChildren };
+    },
+    get giftForecast() {
+      return this.t('draw.forecast', { gifts: this.totals.gifts, toAdults: this.totals.toAdults, toChildren: this.totals.toChildren });
+    },
+    get familyGroups() {
+      const counts = new Map();
+      for (const p of this.participants) {
+        const key = p.family_group.trim().toLowerCase();
+        const found = counts.get(key);
+        if (found) found.count += 1;
+        else counts.set(key, { name: p.family_group, count: 1 });
+      }
+      return [...counts.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
+    },
+    get visibleParticipants() {
+      if (!this.groupFilter) return this.participants;
+      const wanted = this.groupFilter.trim().toLowerCase();
+      return this.participants.filter(p => p.family_group.trim().toLowerCase() === wanted);
+    },
+    get openedCount() { return this.participants.filter(p => p.viewed_at).length; },
+    get rulesDirty() {
+      return this.savedCfg && JSON.stringify(this.savedCfg) !== JSON.stringify(this.cfg);
+    },
+    /* Client-side mirror of the engine's hard rules: warn before the organizer wastes a draw. */
+    get warnings() {
+      const out = [];
+      if (this.participants.length === 0 || this.locked) return out;
+      if (this.participants.length === 1) return [this.t('warn.selfOnly')];
+      const cfg = this.cfg;
+      const eligible = (p, pool) => pool.filter(q => q.family_group.trim().toLowerCase() !== p.family_group.trim().toLowerCase()).length;
+      const check = (sample, need, pool, key) => {
+        if (need <= 0) return;
+        if (pool.length === 0) { out.push(this.t('warn.noReceivers', { role: this.t('role.' + sample.role) })); return; }
+        const worst = Math.min(...pool.map(q => eligible(q, pool)));
+        if (need > worst) out.push(this.t(key, { need, available: worst }));
+      };
+      if (this.adults.length) {
+        check(this.adults[0], cfg.adult_draws_adult, this.adults, 'warn.adultsNeed');
+        check(this.adults[0], cfg.adult_draws_child, this.children, 'warn.childrenNeed');
+      }
+      if (this.children.length) {
+        check(this.children[0], cfg.child_draws_adult, this.adults, 'warn.childAdultsNeed');
+        check(this.children[0], cfg.child_draws_child, this.children, 'warn.childChildrenNeed');
+      }
+      return [...new Set(out)];
     },
     drawsOf(p) {
       const cfg = this.cfg;
@@ -876,15 +1072,25 @@ function giftExchange() {
         ? (cfg.adult_draws_adult || 0) + (cfg.adult_draws_child || 0)
         : (cfg.child_draws_adult || 0) + (cfg.child_draws_child || 0);
     },
-    get draftReady() {
-      return !!(this.draft.name && this.draft.family_group);
-    },
+    get draftReady() { return !!(this.draft.name && this.draft.family_group); },
+    get wishlistDirty() { return this.wishlistDraft !== this.savedWishlist; },
+    locale() { return this.lang === 'fr' ? 'fr-FR' : 'en-GB'; },
     formatDate(value) {
       if (!value) return '';
-      const locale = this.lang === 'fr' ? 'fr-FR' : 'en-GB';
       const date = new Date(value);
       if (Number.isNaN(date.getTime())) return value;
-      return new Intl.DateTimeFormat(locale, { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+      return new Intl.DateTimeFormat(this.locale(), { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+    },
+    relative(value) {
+      if (!value) return '';
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return value;
+      const seconds = Math.round((Date.now() - date.getTime()) / 1000);
+      const rtf = new Intl.RelativeTimeFormat(this.locale(), { numeric: 'auto' });
+      if (Math.abs(seconds) < 60) return rtf.format(-seconds, 'second');
+      if (Math.abs(seconds) < 3600) return rtf.format(-Math.round(seconds / 60), 'minute');
+      if (Math.abs(seconds) < 86400) return rtf.format(-Math.round(seconds / 3600), 'hour');
+      return rtf.format(-Math.round(seconds / 86400), 'day');
     },
 
     /* ---------- boot ---------- */
@@ -902,13 +1108,15 @@ function giftExchange() {
         };
       });
       this.makeSnow();
+      await this.loadLimits();
 
       const params = new URLSearchParams(window.location.search);
       this.token = params.get('t');
       if (this.token) {
         this.mode = 'participant';
+        this.revealed = sessionStorage.getItem('ge_revealed_' + this.token) === '1';
         await this.loadDraw();
-      } else if (sessionStorage.getItem('admin_pw')) {
+      } else if (sessionStorage.getItem('ge_admin_token') || sessionStorage.getItem('admin_pw')) {
         this.authed = true;
         await this.loadState();
       }
@@ -920,156 +1128,264 @@ function giftExchange() {
       document.documentElement.lang = lang;
     },
 
+    async loadLimits() {
+      try {
+        const response = await fetch('/api/limits');
+        if (!response.ok) return;
+        this.limits = { ...DEFAULT_LIMITS, ...(await response.json()) };
+        if (this.limits.default_password) this.securityNotice = this.t('notice.defaultPassword');
+      } catch (_err) { /* offline: keep defaults */ }
+    },
+
+    /* ---------- toasts ---------- */
+    toast(message, kind = 'info') {
+      const host = document.getElementById('toasts');
+      if (!host) return;
+      const node = document.createElement('div');
+      const palette = kind === 'error'
+        ? 'bg-holly-100 ring-holly-500/30 text-holly-700'
+        : kind === 'warn' ? 'bg-gold-100 ring-gold-500/30 text-gold-600' : 'bg-white ring-black/5 text-pine-700';
+      node.className = `pop-in flex items-start gap-2 max-w-sm rounded-2xl px-4 py-3 text-sm shadow-lift ring-1 ${palette}`;
+      node.textContent = message;
+      host.appendChild(node);
+      setTimeout(() => {
+        node.style.transition = 'opacity .3s ease, transform .3s ease';
+        node.style.opacity = '0';
+        node.style.transform = 'translateY(6px)';
+        setTimeout(() => node.remove(), 320);
+      }, kind === 'error' ? 6500 : 3800);
+    },
+
     /* ---------- transport ---------- */
+    authHeaders() {
+      const headers = {};
+      const bearer = sessionStorage.getItem('ge_admin_token');
+      if (bearer) headers['Authorization'] = 'Bearer ' + bearer;
+      const legacy = sessionStorage.getItem('admin_pw');
+      if (legacy) headers['X-Admin-Password'] = legacy;
+      return headers;
+    },
     async api(path, options = {}, withAuth = false) {
       const headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
-      if (withAuth) headers['X-Admin-Password'] = sessionStorage.getItem('admin_pw') || '';
+      if (withAuth) Object.assign(headers, this.authHeaders());
       const response = await fetch(path, { ...options, headers });
-      if (response.status === 401 && withAuth) {
+      if (withAuth && response.status === 401) {
+        sessionStorage.removeItem('ge_admin_token');
         this.authed = false;
-        sessionStorage.removeItem('admin_pw');
+        this.toast(this.t('login.expired'), 'warn');
       }
       let body = null;
       try { body = await response.json(); } catch (_err) { /* empty body */ }
-      return { ok: response.ok, status: response.status, body };
+      return { ok: response.ok, status: response.status, body, headers: response.headers };
     },
-    flash(message) {
-      this.notice = message;
-      clearTimeout(this._noticeTimer);
-      this._noticeTimer = setTimeout(() => { this.notice = ''; }, 4000);
-    },
-    showError(response, fallbackKey) {
+    errorText(response, fallbackKey) {
       const detail = typeof response?.body?.detail === 'string' ? response.body.detail : '';
-      let message = '';
-      if (detail.includes('unsolvable')) message = this.t('err.unsolvable');
-      else if (detail.includes('empty target group')) message = this.t('err.emptyTarget');
-      else if (detail.includes('locked')) message = this.t('err.locked');
-      else if (detail.includes('no participants')) message = this.t('err.noParticipants');
-      else message = detail || this.t(fallbackKey || 'err.unknown');
-      this.bannerTitle = this.t('err.title');
-      this.banner = message;
-      clearTimeout(this._bannerTimer);
-      this._bannerTimer = setTimeout(() => { this.banner = ''; }, 12000);
+      if (response.status === 401) return this.t(fallbackKey || 'err.unknown');   // "Unauthorized" is not user-facing
+      if (response.status === 429) {
+        const seconds = parseInt(response.headers?.get?.('retry-after') || '30', 10);
+        return this.t('err.rateLimited', { s: Number.isFinite(seconds) ? seconds : 30 });
+      }
+      if (response.status === 413) return this.t('err.tooLarge');
+      if (detail.includes('unsolvable')) return this.t('err.unsolvable');
+      if (detail.includes('empty target group')) return this.t('err.emptyTarget');
+      if (detail.includes('locked')) return this.t('err.locked');
+      if (detail.includes('no participants')) return this.t('err.noParticipants');
+      return detail || this.t(fallbackKey || 'err.unknown');
     },
+    showAdminError(response, fallbackKey) {
+      this.adminErrorTitle = response.status === 429
+        ? this.t('err.rateLimitedTitle') : this.t('err.title');
+      this.adminError = this.errorText(response, fallbackKey);
+    },
+    clearAdminError() { this.adminError = ''; this.adminErrorTitle = ''; },
 
     /* ---------- admin ---------- */
     async login() {
-      this.loginError = false;
+      this.busy = true;
+      this.loginError = '';
       const response = await this.api('/api/admin/login', { method: 'POST', body: JSON.stringify({ password: this.pwDraft }) });
-      if (!response.ok) { this.loginError = true; return; }
-      sessionStorage.setItem('admin_pw', this.pwDraft);
+      this.busy = false;
+      if (!response.ok) {
+        this.loginError = this.errorText(response, 'login.error');
+        return;
+      }
+      sessionStorage.removeItem('admin_pw');
+      sessionStorage.setItem('ge_admin_token', response.body.token);
       this.pwDraft = '';
       this.authed = true;
       await this.loadState();
     },
-    lock() {
+    async lock() {
+      await this.api('/api/admin/logout', { method: 'POST', body: '{}' }, true);
+      sessionStorage.removeItem('ge_admin_token');
       sessionStorage.removeItem('admin_pw');
       this.authed = false;
       this.participants = [];
-      this.banner = ''; this.notice = '';
+      this.clearAdminError();
+      this.securityNotice = '';
     },
     async loadState() {
       const response = await this.api('/api/admin/state', { method: 'GET' }, true);
       if (!response.ok) return;
       this.cfg = response.body.config;
+      this.savedCfg = { ...response.body.config };
       this.participants = response.body.participants;
       this.locked = !!response.body.config.is_locked;
+      if (response.body.config.event_title) document.title = response.body.config.event_title;
     },
     async saveConfig() {
       this.busy = true;
+      this.clearAdminError();
       const numeric = ['adult_draws_adult', 'adult_draws_child', 'child_draws_adult', 'child_draws_child'];
       const body = { event_title: this.cfg.event_title, budget_note: this.cfg.budget_note };
-      for (const key of numeric) body[key] = Math.max(0, Math.min(10, Number(this.cfg[key]) || 0));
+      for (const key of numeric) body[key] = Math.max(0, Math.min(this.limits.max_quota, Number(this.cfg[key]) || 0));
       const response = await this.api('/api/admin/config', { method: 'PUT', body: JSON.stringify(body) }, true);
       this.busy = false;
-      if (response.ok) this.flash(this.t('rules.saved')); else this.showError(response);
+      if (response.ok) this.toast(this.t('rules.saved'));
+      else this.showAdminError(response);
       await this.loadState();
     },
     async addParticipant() {
       if (!this.draftReady) return;
       this.busy = true;
+      this.clearAdminError();
       const response = await this.api('/api/admin/participants', { method: 'POST', body: JSON.stringify(this.draft) }, true);
       this.busy = false;
-      if (!response.ok) { this.showError(response); return; }
+      if (!response.ok) { this.showAdminError(response); return; }
       this.draft = { name: '', role: this.draft.role, family_group: this.draft.family_group, wishlist: '' };
       await this.loadState();
+      const field = document.getElementById('p-name');
+      if (field) field.focus();
     },
     async removeParticipant(person) {
       if (!window.confirm(this.t('roster.confirmDelete', { name: person.name }))) return;
       this.busy = true;
       const response = await this.api(`/api/admin/participants/${person.id}`, { method: 'DELETE' }, true);
       this.busy = false;
-      if (!response.ok) this.showError(response);
-      await this.loadState();
+      if (!response.ok) this.showAdminError(response);
+      else await this.loadState();
+    },
+    async writeClipboard(text) {
+      try {
+        if (navigator.clipboard && window.isSecureContext) {
+          await navigator.clipboard.writeText(text);
+          return true;
+        }
+      } catch (_err) { /* fall through to the textarea trick */ }
+      const helper = document.createElement('textarea');
+      helper.value = text;
+      helper.setAttribute('readonly', '');
+      helper.style.position = 'fixed';
+      helper.style.opacity = '0';
+      document.body.appendChild(helper);
+      helper.select();
+      let copied = false;
+      try { copied = document.execCommand('copy'); } catch (_err) { copied = false; }
+      helper.remove();
+      return copied;
     },
     async copyLink(person) {
       const url = `${window.location.origin}/?t=${person.token}`;
-      let copied = false;
-      try {
-        if (navigator.clipboard && window.isSecureContext) {
-          await navigator.clipboard.writeText(url);
-          copied = true;
-        }
-      } catch (_err) { copied = false; }
-      if (!copied) {
-        const helper = document.createElement('textarea');
-        helper.value = url;
-        helper.setAttribute('readonly', '');
-        helper.style.position = 'fixed';
-        helper.style.opacity = '0';
-        document.body.appendChild(helper);
-        helper.select();
-        try { copied = document.execCommand('copy'); } catch (_err) { copied = false; }
-        helper.remove();
-      }
-      if (!copied) { window.prompt(this.t('err.copy'), url); return; }
+      if (!(await this.writeClipboard(url))) { window.prompt(this.t('err.copy'), url); return; }
       this.copiedId = person.id;
       clearTimeout(this._copyTimer);
       this._copyTimer = setTimeout(() => { this.copiedId = null; }, 1800);
     },
+    async copyAllLinks() {
+      const lines = this.participants
+        .map(p => `${p.name} (${this.t('role.' + p.role)}, ${p.family_group}) — ${window.location.origin}/?t=${p.token}`)
+        .join('\n');
+      if (!(await this.writeClipboard(lines))) { window.prompt(this.t('err.copy'), lines); return; }
+      this.copiedAll = true;
+      this.toast(this.t('roster.copied'));
+      clearTimeout(this._copyAllTimer);
+      this._copyAllTimer = setTimeout(() => { this.copiedAll = false; }, 2200);
+    },
     async runDraw() {
+      if (this.warnings.length) return;
+      if (!window.confirm(this.t('draw.confirmGenerate', { gifts: this.totals.gifts }))) return;
       this.busy = true;
-      this.banner = '';
+      this.clearAdminError();
       const response = await this.api('/api/admin/draw', { method: 'POST', body: '{}' }, true);
       this.busy = false;
-      if (!response.ok) { this.showError(response); await this.loadState(); return; }
-      this.flash(this.t('draw.done'));
+      if (!response.ok) {
+        this.showAdminError(response);
+        if (response.status === 409) this.toast(this.t('draw.alreadyLocked'), 'warn');
+        await this.loadState();
+        return;
+      }
+      this.toast(this.t('draw.done'));
       await this.loadState();
     },
     async resetDraw() {
       if (!window.confirm(this.t('draw.confirmReset'))) return;
       this.busy = true;
+      this.clearAdminError();
       const response = await this.api('/api/admin/reset', { method: 'POST', body: '{}' }, true);
       this.busy = false;
-      if (!response.ok) { this.showError(response); return; }
+      if (!response.ok) { this.showAdminError(response); return; }
+      this.toast(this.t('draw.resetDone'));
       await this.loadState();
     },
 
     /* ---------- participant ---------- */
     async loadDraw() {
       const response = await this.api(`/api/draw/${encodeURIComponent(this.token)}`, { method: 'GET' });
-      if (!response.ok) { this.pError = true; return; }
+      if (!response.ok) {
+        this.pError = true;
+        this.toast(this.errorText(response, 'p.invalidSub'), 'error');
+        return;
+      }
+      const wasPending = this.data.status === 'PENDING';
       this.data = response.body;
       this.participant = response.body.participant;
       this.wishlistDraft = response.body.participant.wishlist || '';
+      this.savedWishlist = this.wishlistDraft;
       if (response.body.event_title) document.title = response.body.event_title;
+      if (wasPending && response.body.status === 'READY') this.toast(this.t('p.readyTease'), 'info');
+      if (response.body.status === 'PENDING') this.schedulePoll();
+    },
+    schedulePoll() {
+      clearTimeout(this.poll);
+      this.poll = setTimeout(() => { if (this.data.status === 'PENDING') this.loadDraw(); }, 25000);
+    },
+    async refreshParticipant() {
+      this.busy = true;
+      await this.loadDraw();
+      this.busy = false;
     },
     reveal() {
       this.revealed = true;
+      sessionStorage.setItem('ge_revealed_' + this.token, '1');
       this.burstOn = true;
       this.makeSnow(16, true);
       setTimeout(() => { this.burstOn = false; }, 2200);
     },
+    async copyMyList() {
+      const list = this.data.assignments.length
+        ? this.data.assignments.map(a => `${a.name} (${this.t('role.' + a.role)})${a.wishlist ? ': ' + a.wishlist : ''}`).join('\n')
+        : this.t('p.noGifts');
+      if (!(await this.writeClipboard(list))) return;
+      this.copiedList = true;
+      setTimeout(() => { this.copiedList = false; }, 1800);
+    },
+    queueWishlistSave() {
+      clearTimeout(this._saveTimer);
+      if (!this.wishlistDirty) return;
+      this._saveTimer = setTimeout(() => this.saveWishlist(), 1200);
+    },
     async saveWishlist() {
+      clearTimeout(this._saveTimer);
+      if (!this.wishlistDirty) return;
       this.busy = true;
       const response = await this.api(`/api/draw/${encodeURIComponent(this.token)}/wishlist`,
         { method: 'PUT', body: JSON.stringify({ wishlist: this.wishlistDraft }) });
       this.busy = false;
-      if (!response.ok) { this.showError(response, 'err.unknown'); return; }
+      if (!response.ok) { this.toast(this.errorText(response, 'err.unknown'), 'error'); return; }
+      this.savedWishlist = this.wishlistDraft;
+      this.savedAt = new Date().toISOString();
       if (this.data.participant) this.data.participant.wishlist = this.wishlistDraft;
       this.wishlistSaved = true;
-      clearTimeout(this._savedTimer);
-      this._savedTimer = setTimeout(() => { this.wishlistSaved = false; }, 2500);
     },
 
     /* ---------- ambience ---------- */
@@ -1078,6 +1394,7 @@ function giftExchange() {
       if (!host) return;
       if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
       const svgNS = 'http://www.w3.org/2000/svg';
+      const palette = ['rgba(47,107,82,.30)', 'rgba(20,60,46,.16)', 'rgba(199,154,59,.55)', 'rgba(120,140,152,.30)'];
       for (let i = 0; i < count; i++) {
         const size = 8 + Math.random() * 18;
         const flake = document.createElementNS(svgNS, 'svg');
@@ -1092,7 +1409,6 @@ function giftExchange() {
         const fall = fast ? 5 + Math.random() * 4 : 15 + Math.random() * 14;
         flake.style.animationDuration = `${fall}s, ${5 + Math.random() * 6}s`;
         flake.style.animationDelay = `${-Math.random() * fall}s, ${-Math.random() * 6}s`;
-        const palette = ['rgba(47,107,82,.30)', 'rgba(20,60,46,.16)', 'rgba(199,154,59,.55)', 'rgba(120,140,152,.30)'];
         flake.style.color = palette[Math.floor(Math.random() * palette.length)];
         host.appendChild(flake);
         flake.addEventListener('animationiteration', () => {
@@ -1104,6 +1420,7 @@ function giftExchange() {
   };
 }
 </script>
+
 <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.11.1/dist/cdn.min.js"></script>
 </body>
 </html>
