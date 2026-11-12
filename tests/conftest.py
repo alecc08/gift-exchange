@@ -1,5 +1,6 @@
 """Shared fixtures: a TestClient over an isolated SQLite file."""
 
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -8,6 +9,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+# Rate limiting is switched off for the functional suite (tests/test_security.py
+# exercises it with its own values). Must be set before main is imported.
+os.environ["LOGIN_RATE_LIMIT"] = "100000"
+os.environ["API_RATE_LIMIT"] = "100000"
+os.environ["DRAW_RATE_LIMIT"] = "100000"
+os.environ["LOGIN_LOCKOUT_THRESHOLD"] = "0"
 
 import main  # noqa: E402
 
@@ -19,6 +27,9 @@ PASSWORD = "s3cret"
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "exchange.db"))
     monkeypatch.setenv("ADMIN_PASSWORD", PASSWORD)
+    main.LIMITER.reset("login", "testclient")
+    main.LIMITER.reset("api", "testclient")
+    main.LIMITER.reset("draw", "testclient")
     main.init_db()
     with TestClient(main.app) as test_client:
         yield test_client

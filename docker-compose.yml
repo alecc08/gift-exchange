@@ -10,4 +10,9 @@ services:
     environment:
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       DB_PATH: /app/data/exchange.db
+      # Leave SESSION_SECRET empty to derive it from ADMIN_PASSWORD + DB_PATH (PBKDF2).
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      # Set to 1 only when a reverse proxy (Traefik/nginx) terminates TLS in front:
+      # it is what makes X-Forwarded-For trusted for rate limiting and logs.
+      TRUST_PROXY: ${TRUST_PROXY:-0}
     restart: unless-stopped

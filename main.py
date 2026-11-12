@@ -1,28 +1,40 @@
 """Configurable family gift exchange (Secret Santa) server.
 
 FastAPI + SQLite, single-file backend:
-  * admin API (config, roster, draw execution) guarded by ADMIN_PASSWORD
+  * admin API (config, roster, draw execution) guarded by ADMIN_PASSWORD or a
+    short-lived signed session token
   * public per-participant API guarded only by a UUID token
   * a randomized slot-allocation + backtracking matching engine
 
 The organizer is deliberately kept blind: no admin endpoint ever reads the
 `assignments` table.
+
+Security posture (see PLAN.md "Security hardening"): per-IP rate limits, a request
+size cap, security headers with a CDN-pinning CSP, HMAC session tokens, constant-time
+comparisons, input length caps, serialised draw/reset, and an audit trail.
 """
 
 from __future__ import annotations
 
+import base64
+import hashlib
 import hmac
+import json
+import logging
 import os
 import random
+import secrets
 import sqlite3
+import threading
+import time
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
-from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import FileResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -36,12 +48,74 @@ STATIC_DIR = BASE_DIR / "static"
 MAX_ATTEMPTS = 20000
 MAX_DRAW_QUOTA = 10
 
+# Field length caps: mirrored by the frontend so nobody hits a 422 blind.
+MAX_NAME = 80
+MAX_FAMILY_GROUP = 60
+MAX_WISHLIST = 1000
+MAX_EVENT_TITLE = 120
+MAX_BUDGET_NOTE = 500
+
 EMPTY_TARGET_GROUP = "Cannot assign gifts to an empty target group"
 UNSOLVABLE = (
     "Constraints are mathematically unsolvable with current family groups "
     "and draw counts."
 )
 LOCKED_MSG = "The draw is locked. Reset it before making changes."
+ALREADY_LOCKED = "The draw is already locked. Reset it before drawing again."
+TOO_LARGE = "Request body too large"
+
+DEFAULT_ADMIN_PASSWORD = "admin"
+
+# --------------------------------------------------------------------------- #
+# Security configuration
+# --------------------------------------------------------------------------- #
+
+
+def env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def admin_password() -> str:
+    return os.environ.get("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
+
+
+def using_default_password() -> bool:
+    return os.environ.get("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD) == DEFAULT_ADMIN_PASSWORD
+
+
+def trust_proxy() -> bool:
+    return os.environ.get("TRUST_PROXY", "").lower() in {"1", "true", "yes", "on"}
+
+
+LOGIN_LIMIT = env_int("LOGIN_RATE_LIMIT", 10)        # login attempts / minute / client
+LOGIN_LOCKOUT_THRESHOLD = env_int("LOGIN_LOCKOUT_THRESHOLD", 5)
+LOGIN_LOCKOUT_SECONDS = env_int("LOGIN_LOCKOUT_SECONDS", 300)
+DRAW_LIMIT = env_int("DRAW_RATE_LIMIT", 120)         # participant lookups / minute / client
+API_LIMIT = env_int("API_RATE_LIMIT", 300)           # everything else / minute / client
+MAX_BODY_BYTES = env_int("MAX_BODY_BYTES", 16_384)
+SESSION_TTL_SECONDS = env_int("SESSION_TTL_SECONDS", 12 * 3600)
+
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Cross-Origin-Resource-Policy": "same-origin",
+    "Content-Security-Policy": (
+        "default-src 'self'; "
+        "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net 'unsafe-inline' 'unsafe-eval'; "
+        "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com; "
+        "font-src 'self' https://fonts.gstatic.com; "
+        "img-src 'self' data:; "
+        "connect-src 'self'; "
+        "base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+    ),
+}
+
+LOGGER = logging.getLogger("gift-exchange")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS config (
@@ -83,10 +157,6 @@ def db_path() -> Path:
     return Path(os.environ.get("DB_PATH", str(BASE_DIR / "data" / "exchange.db")))
 
 
-def admin_password() -> str:
-    return os.environ.get("ADMIN_PASSWORD", "admin")
-
-
 def connect() -> sqlite3.Connection:
     path = db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +165,7 @@ def connect() -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.execute("PRAGMA journal_mode = WAL;")
+    conn.execute("PRAGMA busy_timeout = 5000;")
     return conn
 
 
@@ -116,6 +187,175 @@ def get_db() -> Iterator[sqlite3.Connection]:
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def audit(event: str, **fields: Any) -> None:
+    """One line per security-relevant event. Never logs passwords or tokens."""
+    details = " ".join(f"{key}={value}" for key, value in fields.items() if value is not None)
+    LOGGER.info("%s %s", event, details)
+
+
+def client_ip(request: Request) -> str:
+    """Client address. X-Forwarded-For is only honoured behind a trusted proxy."""
+    if trust_proxy():
+        header = request.headers.get("x-forwarded-for", "")
+        if header:
+            return header.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+class RateLimiter:
+    """Fixed-window per-client counters, keyed by scope so one endpoint cannot
+    exhaust another's budget."""
+
+    def __init__(self) -> None:
+        self._hits: dict[tuple[str, str], tuple[int, int, int]] = {}
+        self._lock = threading.Lock()
+
+    def hit(self, scope: str, key: str, limit: int, window: int = 60) -> tuple[bool, int]:
+        now = int(time.time())
+        bucket = now // window
+        identity = (scope, key)
+        with self._lock:
+            seen_bucket, count, blocked_until = self._hits.get(identity, (bucket, 0, 0))
+            if seen_bucket != bucket:
+                seen_bucket, count, blocked_until = bucket, 0, 0
+            if blocked_until > now:
+                return False, blocked_until - now
+            count += 1
+            self._hits[identity] = (seen_bucket, count, blocked_until)
+            if limit > 0 and count > limit:
+                return False, (seen_bucket + 1) * window - now
+        return True, 0
+
+    def count(self, scope: str, key: str, window: int = 60) -> int:
+        now = int(time.time())
+        with self._lock:
+            seen_bucket, count, _blocked = self._hits.get((scope, key), (now // window, 0, 0))
+            return count if seen_bucket == now // window else 0
+
+    def block(self, scope: str, key: str, seconds: int) -> None:
+        with self._lock:
+            bucket, count, _ = self._hits.get((scope, key), (int(time.time()) // 60, 0, 0))
+            self._hits[(scope, key)] = (bucket, count, int(time.time()) + seconds)
+
+    def reset(self, scope: str, key: str) -> None:
+        with self._lock:
+            self._hits.pop((scope, key), None)
+
+    def prune(self) -> None:
+        cutoff = int(time.time()) - 300
+        with self._lock:
+            for identity, (bucket, _count, blocked) in list(self._hits.items()):
+                if bucket * 60 < cutoff and blocked < int(time.time()):
+                    self._hits.pop(identity, None)
+
+
+LIMITER = RateLimiter()
+_draw_lock = threading.Lock()
+
+
+def _too_many(retry_after: int) -> HTTPException:
+    return HTTPException(
+        status_code=429,
+        detail="Too many requests. Please wait before trying again.",
+        headers={"Retry-After": str(max(1, retry_after))},
+    )
+
+
+def json_error(content: dict, status_code: int) -> JSONResponse:
+    """Plain JSON error outside the routing path (middleware), with security headers."""
+    return JSONResponse(content, status_code=status_code, headers=dict(SECURITY_HEADERS))
+
+
+def enforce_api_limit(request: Request) -> None:
+    allowed, retry = LIMITER.hit("api", client_ip(request), API_LIMIT)
+    if not allowed:
+        raise _too_many(retry)
+
+
+def enforce_draw_limit(request: Request) -> None:
+    allowed, retry = LIMITER.hit("draw", client_ip(request), DRAW_LIMIT)
+    if not allowed:
+        raise _too_many(retry)
+
+
+# --- signed, revocable session tokens -------------------------------------- #
+
+
+def _session_secret() -> bytes:
+    explicit = os.environ.get("SESSION_SECRET")
+    if explicit:
+        return explicit.encode()
+    salt = os.environ.get("DB_PATH", str(db_path())).encode()
+    return hashlib.pbkdf2_hmac("sha256", admin_password().encode(), salt, 50_000)
+
+
+_sessions: dict[str, int] = {}          # token -> expiry (epoch seconds)
+_sessions_lock = threading.Lock()
+
+
+def issue_session() -> tuple[str, int]:
+    payload = {"i": secrets.token_urlsafe(12), "e": int(time.time()) + SESSION_TTL_SECONDS}
+    body = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode()
+    signature = hmac.new(_session_secret(), body.encode(), hashlib.sha256).hexdigest()
+    token = f"{body}.{signature}"
+    with _sessions_lock:
+        _sessions[token] = payload["e"]
+    return token, SESSION_TTL_SECONDS
+
+
+def valid_session(token: str) -> bool:
+    body, _, signature = token.partition(".")
+    if not body or not signature:
+        return False
+    expected = hmac.new(_session_secret(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(signature, expected):
+        return False
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(body.encode()).decode())
+        expires = int(payload["e"])
+    except Exception:
+        return False
+    if expires < int(time.time()):
+        with _sessions_lock:
+            _sessions.pop(token, None)
+        return False
+    with _sessions_lock:
+        stored = _sessions.get(token)          # revoked by logout / cleared by restart
+        if stored is None or stored < int(time.time()):
+            _sessions.pop(token, None)
+            return False
+        _sessions[token] = expires
+    return True
+
+
+def revoke_session(token: str) -> bool:
+    with _sessions_lock:
+        return _sessions.pop(token, None) is not None
+
+
+def require_admin(
+    request: Request,
+    x_admin_password: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> None:
+    """Accepts the spec's X-Admin-Password header, or a bearer session token."""
+    supplied_password = x_admin_password is not None and hmac.compare_digest(
+        str(x_admin_password), admin_password()
+    )
+    bearer = ""
+    if authorization and authorization.lower().startswith("bearer "):
+        bearer = authorization[7:].strip()
+    if supplied_password or (bearer and valid_session(bearer)):
+        return
+    audit("admin_auth_denied", ip=client_ip(request))
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def current_bearer(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    return header[7:].strip() if header.lower().startswith("bearer ") else ""
 
 
 # --------------------------------------------------------------------------- #
@@ -425,16 +665,16 @@ def generate_draw(
 
 
 class LoginRequest(BaseModel):
-    password: str
+    password: str = Field(max_length=256)
 
 
 class ConfigUpdate(BaseModel):
-    event_title: Optional[str] = None
+    event_title: Optional[str] = Field(default=None, max_length=MAX_EVENT_TITLE)
+    budget_note: Optional[str] = Field(default=None, max_length=MAX_BUDGET_NOTE)
     adult_draws_adult: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
     adult_draws_child: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
     child_draws_adult: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
     child_draws_child: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
-    budget_note: Optional[str] = None
 
     @field_validator("adult_draws_adult", "adult_draws_child", "child_draws_adult", "child_draws_child")
     @classmethod
@@ -446,10 +686,10 @@ class ConfigUpdate(BaseModel):
 
 
 class ParticipantCreate(BaseModel):
-    name: str
+    name: str = Field(max_length=MAX_NAME)
     role: Literal["ADULT", "CHILD"]
-    family_group: str
-    wishlist: str = ""
+    family_group: str = Field(max_length=MAX_FAMILY_GROUP)
+    wishlist: str = Field(default="", max_length=MAX_WISHLIST)
 
     @field_validator("name", "family_group")
     @classmethod
@@ -461,40 +701,75 @@ class ParticipantCreate(BaseModel):
 
 
 class WishlistUpdate(BaseModel):
-    wishlist: str
+    wishlist: str = Field(max_length=MAX_WISHLIST)
+
+
+class LimitsOut(BaseModel):
+    name: int
+    family_group: int
+    wishlist: int
+    event_title: int
+    budget_note: int
+    max_quota: int
 
 
 # --------------------------------------------------------------------------- #
-# App + auth
+# App, middleware, auth plumbing
 # --------------------------------------------------------------------------- #
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    if using_default_password():
+        audit("warning", message="ADMIN_PASSWORD is unset or is the default 'admin'; "
+                                 "set a real password before sharing links")
     yield
 
 
-app = FastAPI(title="Family Gift Exchange", lifespan=lifespan)
+app = FastAPI(title="Family Gift Exchange", lifespan=lifespan, docs_url=None, redoc_url=None)
 
 
-def require_admin(x_admin_password: Optional[str] = Header(default=None)) -> None:
-    if x_admin_password is None or not hmac.compare_digest(
-        str(x_admin_password), admin_password()
-    ):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+@app.middleware("http")
+async def security_middleware(request: Request, call_next):
+    response = await call_next(request)
+    for header, value in SECURITY_HEADERS.items():
+        response.headers.setdefault(header, value)
+    return response
 
 
-@app.get("/api/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+@app.middleware("http")
+async def size_middleware(request: Request, call_next):
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > MAX_BODY_BYTES:
+        return json_error({"detail": TOO_LARGE}, 413)
+    if request.method in {"POST", "PUT", "PATCH"}:
+        body = await request.body()
+        if len(body) > MAX_BODY_BYTES:
+            return json_error({"detail": TOO_LARGE}, 413)
+    return await call_next(request)
 
 
-@app.post("/api/admin/login")
-def login(payload: LoginRequest) -> dict[str, str]:
-    if not hmac.compare_digest(payload.password, admin_password()):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return {"status": "OK"}
+@app.middleware("http")
+async def access_log_middleware(request: Request, call_next):
+    started = time.perf_counter()
+    response = await call_next(request)
+    if request.url.path.startswith("/api"):
+        audit(
+            "request",
+            ip=client_ip(request),
+            method=request.method,
+            path=request.url.path,
+            status=response.status_code,
+            ms=round((time.perf_counter() - started) * 1000, 1),
+        )
+    return response
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    audit("server_error", ip=client_ip(request), path=request.url.path, error=type(exc).__name__)
+    return json_error({"detail": "Internal server error"}, 500)
 
 
 def _config_dict(row: sqlite3.Row) -> dict[str, Any]:
@@ -519,7 +794,61 @@ def _reject_if_locked(row: sqlite3.Row) -> None:
         raise HTTPException(status_code=400, detail=LOCKED_MSG)
 
 
-@app.get("/api/admin/state")
+# --------------------------------------------------------------------------- #
+# Admin endpoints
+# --------------------------------------------------------------------------- #
+
+
+@app.get("/api/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/api/limits", dependencies=[Depends(enforce_api_limit)])
+def limits() -> dict[str, Any]:
+    """Server-side limits the frontend mirrors, so validation can't drift apart."""
+    return {
+        "name": MAX_NAME,
+        "family_group": MAX_FAMILY_GROUP,
+        "wishlist": MAX_WISHLIST,
+        "event_title": MAX_EVENT_TITLE,
+        "budget_note": MAX_BUDGET_NOTE,
+        "max_quota": MAX_DRAW_QUOTA,
+        "default_password": using_default_password(),
+    }
+
+
+@app.post("/api/admin/login", dependencies=[Depends(enforce_api_limit)])
+def login(payload: LoginRequest, request: Request) -> dict[str, Any]:
+    ip = client_ip(request)
+    allowed, retry = LIMITER.hit("login", ip, LOGIN_LIMIT)
+    if not allowed:
+        audit("login_rate_limited", ip=ip)
+        raise _too_many(retry)
+
+    if not hmac.compare_digest(payload.password, admin_password()):
+        attempts = LIMITER.count("login", ip)
+        if LOGIN_LOCKOUT_THRESHOLD > 0 and attempts >= LOGIN_LOCKOUT_THRESHOLD:
+            LIMITER.block("login", ip, LOGIN_LOCKOUT_SECONDS)
+            audit("login_lockout", ip=ip, seconds=LOGIN_LOCKOUT_SECONDS)
+            raise _too_many(LOGIN_LOCKOUT_SECONDS)
+        audit("login_failed", ip=ip)
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    LIMITER.reset("login", ip)
+    token, ttl = issue_session()
+    audit("login_ok", ip=ip, session_ttl=ttl)
+    return {"status": "OK", "token": token, "expires_in": ttl}
+
+
+@app.post("/api/admin/logout", dependencies=[Depends(enforce_api_limit)])
+def logout(request: Request, _: None = Depends(require_admin)) -> dict[str, str]:
+    revoke_session(current_bearer(request))
+    audit("logout", ip=client_ip(request))
+    return {"status": "OK"}
+
+
+@app.get("/api/admin/state", dependencies=[Depends(enforce_api_limit)])
 def admin_state(
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
@@ -543,9 +872,10 @@ def admin_state(
     return {"config": _config_dict(_load_config(conn)), "participants": participants}
 
 
-@app.put("/api/admin/config")
+@app.put("/api/admin/config", dependencies=[Depends(enforce_api_limit)])
 def update_config(
     payload: ConfigUpdate,
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -563,12 +893,14 @@ def update_config(
     if updates:
         clauses = ", ".join(f"{key} = ?" for key in updates)
         conn.execute(f"UPDATE config SET {clauses} WHERE id = 1", list(updates.values()))
+    audit("config_updated", ip=client_ip(request), fields=sorted(updates))
     return {"status": "OK", "config": _config_dict(_load_config(conn))}
 
 
-@app.post("/api/admin/participants", status_code=201)
+@app.post("/api/admin/participants", status_code=201, dependencies=[Depends(enforce_api_limit)])
 def add_participant(
     payload: ParticipantCreate,
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -576,7 +908,13 @@ def add_participant(
     cursor = conn.execute(
         "INSERT INTO participants (name, role, family_group, wishlist, token) "
         "VALUES (?, ?, ?, ?, ?)",
-        (payload.name, payload.role, payload.family_group, payload.wishlist, str(uuid.uuid4())),
+        (
+            payload.name,
+            payload.role,
+            payload.family_group,
+            payload.wishlist,
+            str(uuid.uuid4()),
+        ),
     )
     row = conn.execute(
         "SELECT id, name, role, family_group, wishlist, token, viewed_at "
@@ -597,9 +935,10 @@ def add_participant(
     }
 
 
-@app.delete("/api/admin/participants/{participant_id}")
+@app.delete("/api/admin/participants/{participant_id}", dependencies=[Depends(enforce_api_limit)])
 def delete_participant(
     participant_id: int,
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -607,15 +946,19 @@ def delete_participant(
     cursor = conn.execute("DELETE FROM participants WHERE id = ?", (participant_id,))
     if cursor.rowcount == 0:
         raise HTTPException(status_code=404, detail="Participant not found")
+    audit("participant_deleted", ip=client_ip(request), participant_id=participant_id)
     return {"status": "OK", "deleted": participant_id}
 
 
-@app.post("/api/admin/draw")
+@app.post("/api/admin/draw", dependencies=[Depends(enforce_api_limit)])
 def run_draw(
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     config_row = _load_config(conn)
+    if config_row["is_locked"]:
+        raise HTTPException(status_code=409, detail=ALREADY_LOCKED)
     participants = [
         {"id": row["id"], "role": row["role"], "family_group": row["family_group"]}
         for row in conn.execute("SELECT id, role, family_group FROM participants ORDER BY id")
@@ -626,34 +969,39 @@ def run_draw(
     # Matching runs before any write, so a rejected draw cannot corrupt state.
     pairs = generate_draw(_config_dict(config_row), participants)
 
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute("DELETE FROM assignments")
-        conn.executemany(
-            "INSERT INTO assignments (giver_id, receiver_id) VALUES (?, ?)", pairs
-        )
-        conn.execute("UPDATE config SET is_locked = 1 WHERE id = 1")
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+    with _draw_lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DELETE FROM assignments")
+            conn.executemany(
+                "INSERT INTO assignments (giver_id, receiver_id) VALUES (?, ?)", pairs
+            )
+            conn.execute("UPDATE config SET is_locked = 1 WHERE id = 1")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    audit("draw_locked", ip=client_ip(request), assignments=len(pairs))
     return {"status": "OK", "assignments_created": len(pairs), "is_locked": 1}
 
 
-@app.post("/api/admin/reset")
+@app.post("/api/admin/reset", dependencies=[Depends(enforce_api_limit)])
 def reset_draw(
+    request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    conn.execute("BEGIN IMMEDIATE")
-    try:
-        conn.execute("DELETE FROM assignments")
-        conn.execute("UPDATE participants SET viewed_at = NULL")
-        conn.execute("UPDATE config SET is_locked = 0 WHERE id = 1")
-        conn.execute("COMMIT")
-    except Exception:
-        conn.execute("ROLLBACK")
-        raise
+    with _draw_lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("DELETE FROM assignments")
+            conn.execute("UPDATE participants SET viewed_at = NULL")
+            conn.execute("UPDATE config SET is_locked = 0 WHERE id = 1")
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    audit("draw_reset", ip=client_ip(request))
     return {"status": "OK"}
 
 
@@ -673,7 +1021,7 @@ def _participant_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row:
     return row
 
 
-@app.get("/api/draw/{token}")
+@app.get("/api/draw/{token}", dependencies=[Depends(enforce_draw_limit)])
 def get_draw(
     token: str,
     conn: sqlite3.Connection = Depends(get_db),
@@ -694,11 +1042,13 @@ def get_draw(
             },
         }
 
-    if participant["viewed_at"] is None:
+    first_view = participant["viewed_at"] is None
+    if first_view:
         conn.execute(
             "UPDATE participants SET viewed_at = ? WHERE id = ?",
             (utc_now(), participant["id"]),
         )
+        audit("link_opened", participant_id=participant["id"])
 
     rows = conn.execute(
         "SELECT p.name, p.role, p.wishlist FROM assignments a "
@@ -722,7 +1072,7 @@ def get_draw(
     }
 
 
-@app.put("/api/draw/{token}/wishlist")
+@app.put("/api/draw/{token}/wishlist", dependencies=[Depends(enforce_draw_limit)])
 def update_wishlist(
     token: str,
     payload: WishlistUpdate,
@@ -752,4 +1102,5 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 if __name__ == "__main__":  # pragma: no cover - convenience entrypoint
     import uvicorn
 
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)

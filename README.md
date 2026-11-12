@@ -63,6 +63,29 @@ To audit a running instance against the acceptance criteria:
 python tools/verify_acceptance.py http://localhost:8085
 ```
 
+## Security
+
+| Setting (env) | Default | Purpose |
+|---|---|---|
+| `ADMIN_PASSWORD` | `admin` | Organizer password. A warning is logged (and shown in the UI) while this default is in use. |
+| `SESSION_SECRET` | derived | HMAC key for session tokens; derived with PBKDF2 from the admin password when unset. |
+| `TRUST_PROXY` | `0` | Honour `X-Forwarded-For` only behind your own reverse proxy. |
+| `LOGIN_RATE_LIMIT` / `LOGIN_LOCKOUT_THRESHOLD` / `LOGIN_LOCKOUT_SECONDS` | `10` / `5` / `300` | Login attempts per minute per client, then a temporary lockout. |
+| `DRAW_RATE_LIMIT` / `API_RATE_LIMIT` | `120` / `300` | Per-minute budgets for participant links and everything else. |
+| `MAX_BODY_BYTES` | `16384` | Request body cap → 413. |
+| `SESSION_TTL_SECONDS` | `43200` | Session token lifetime. |
+
+Hardening in force: per-IP fixed-window rate limits with `429` + `Retry-After`, login lockout,
+constant-time comparisons for password and token signatures, short-lived revocable HMAC session
+tokens (`POST /api/admin/login` → `Authorization: Bearer`, `POST /api/admin/logout`; the spec's
+`X-Admin-Password` header still works), `413` body cap, Pydantic length caps on every text field,
+security headers with a CDN-pinning CSP (`frame-ancestors 'none'`, `Referrer-Policy: no-referrer`
+so a `/?t=<uuid>` link never leaks through the referrer), serialised draw/reset transactions,
+`409` instead of silently re-drawing a locked event, and an audit log of auth, draw, reset and
+link-opening events without secrets. TLS is expected to terminate at your reverse proxy.
+
+Full threat/control table: [`PLAN.md`](PLAN.md#security-hardening-addendum).
+
 ## Layout
 
 ```

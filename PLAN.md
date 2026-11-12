@@ -283,9 +283,35 @@ literally.
     that participant's draw quota is 0 — the spec allows either variant ("only enabled/shown
     for participants where draws > 0 **or** shown for all with a note"). This keeps links
     copyable for participants who still need to submit a wishlist.
-11. **Numeric inputs use `max="10"`** per spec, and the backend clamps/rejects draw values
-    outside 0–10 with HTTP 422 (FastAPI validation) so a hand-crafted request cannot create
-    an absurd roster.
+11. **Numeric inputs use `max="10"`** per spec, and the backend rejects draw values outside
+    0–10 with HTTP 422 (Pydantic validates the lower bound explicitly: a bare `ge` is dropped
+    on `Optional[int]` in Pydantic 2.14), so a hand-crafted request cannot create an absurd
+    roster.
+
+## Security hardening (addendum)
+
+Everything in §5 keeps its contract (same routes, same `X-Admin-Password` header, same status
+codes); the additions below only narrow what an attacker or a mistake can do.
+
+| Threat | Counter-measure |
+|---|---|
+| Password guessing on `POST /api/admin/login` | Fixed-window, per-IP rate limit (default 10/min) returning **429 + `Retry-After`**, and a temporary lockout after repeated failures. The client shows the remaining wait instead of a bare "wrong password". |
+| Token guessing on the public `GET /api/draw/{token}` | Per-IP budget (default 120/min, separate from the admin budget); over budget → 429. Tokens are UUIDv4 and 404s are indistinguishable. |
+| Volume abuse / oversized payloads | One shared budget for the remaining endpoints (default 300/min), and a request-body cap (default 16 KB) → 413. |
+| Password riding on every admin request | `POST /api/admin/login` also issues a short-lived HMAC-SHA256 session token (12 h default, signed with `SESSION_SECRET`, else PBKDF2 over the admin password). Admin routes accept either the spec header or `Authorization: Bearer`; `POST /api/admin/logout` revokes server-side. The frontend stores the **token**, not the password. |
+| Referrer leakage of `/?t=<uuid>` | `Referrer-Policy: no-referrer`, `<meta name="referrer" content="no-referrer">`, `X-Frame-Options: DENY`, `frame-ancestors 'none'`, `X-Content-Type-Options: nosniff` and a CSP that pins the CDNs. |
+| CDN supply-chain XSS | CSP restricts scripts to `cdn.tailwindcss.com` / `cdn.jsdelivr.net` (Alpine compiles expressions, hence `unsafe-eval`), styles to the same origins plus inline (Tailwind Play + Alpine `:style` bindings), with `base-uri 'self'`, `form-action 'none'`, `object-src 'none'`. |
+| Unbounded text stored in the DB | Pydantic length caps: name 80, family group 60, wishlist 1000, event title 120, budget note 500. The frontend mirrors them with live counters so the user never hits a 422 blind. |
+| Two concurrent draws / torn write | Draws and resets are serialised by a process lock and each runs inside one SQLite transaction; a rejected draw writes nothing. |
+| Accidentally re-drawing a locked event (invalidating links people already opened) | `POST /api/admin/draw` on a locked event → **409** ("reset first"), and the organizer must confirm the lock in the UI. |
+| Blind debugging | Requests are logged (method, path, status, latency, client IP, bucket) and login/draw/reset/logout events are logged without secrets. Client IP only honours `X-Forwarded-For` when `TRUST_PROXY=1` (behind Traefik). |
+| Default password in production | Startup logs a warning when `ADMIN_PASSWORD` is unset or equals the spec default `admin`; the UI shows the same warning to the organizer. |
+
+Deliberate non-changes, so the trade-offs are on record: no CSRF tokens (there are no cookies —
+auth is a header/bearer value, and `Origin` checks plus CSP `form-action 'none'` already block
+cross-site form posts); no TLS inside the container (published on a LAN, terminate it in Traefik);
+tokens are **not** rotated by `POST /api/admin/reset`, because that would invalidate links the
+organizer already printed — reset wipes assignments and viewed markers only.
 
 ## Verification log
 

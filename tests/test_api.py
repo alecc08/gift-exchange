@@ -76,8 +76,10 @@ def test_acceptance_no_assignments_leak_to_admin(client):
     for forbidden in ("assignment", "giver", "receiver", "pairs"):
         assert forbidden not in text.lower()
 
-    rows = client.post("/api/admin/draw", headers=ADMIN).json()
-    assert rows["assignments_created"] == 30
+    # re-drawing a locked event is refused instead of silently invalidating links
+    again = client.post("/api/admin/draw", headers=ADMIN)
+    assert again.status_code == 409
+    assert "already locked" in again.json()["detail"]
 
 
 def test_draw_matches_roster_in_db(client, db):
