@@ -210,6 +210,34 @@ Before completing the task, verify the following scenarios:
 
 ---
 
+## 8. UI & i18n requirements (addendum)
+
+Requested after the original spec, and implemented in `static/index.html`:
+
+1. **Modern, elegant design, zero build steps.** Still Tailwind CDN + Alpine.js CDN only.
+   Design language: Fraunces (display serif) + Inter (UI) from Google Fonts, a pine / holly-red /
+   gold palette, `rounded-3xl` cards on a warm ivory background with soft radial glows, small
+   uppercase section kickers ("Panel 1/2/3"), pill chips for role and status, and one accent
+   illustration per panel. No component library, no bundler.
+2. **Christmas artwork, vendored inline (no runtime CDN dependency for art).**
+   A crystalline 6-fold snowflake built from first principles (arm path + five rotations) is used
+   for the falling-snow ambience, the empty-roster hint and the decorative corner motifs; festive
+   outline icons (Christmas tree, gift, candy, star, bauble, link, refresh, check, alert) come
+   from Tabler Icons (MIT) and are inlined in one SVG sprite. The hero gift box is a bespoke SVG
+   with separately transformable `box` / `lid` / `steam` groups so it can be animated.
+3. **The reveal effect.** The participant view never dumps the assignments: it shows the wrapped
+   gift plus a single uppercase **REVEAL** button (`#reveal-btn`, sheen on hover). Clicking it
+   lifts and tilts the lid, fades in a gold halo and steam wisps, bursts 14 snowflakes outward
+   from the box, adds an extra flurry of falling snow, and staggers the recipient cards in
+   (`animation-delay: index * 120ms`). Everything is CSS-only and collapses under
+   `prefers-reduced-motion: reduce`.
+4. **French by default, English on request.** Every string lives in an `I18N.fr` / `I18N.en`
+   table; `lang="fr"` is the default, the FR/EN segmented control in the header switches both
+   views, the choice persists in `localStorage`, and `<html lang>` follows. Dates use
+   `Intl.DateTimeFormat` with `fr-FR` / `en-GB`. Backend messages stay exactly as specified
+   (English `detail` strings); the frontend maps the four known failure details to the current
+   language so the organizer's error banner is never half-translated.
+
 ## Implementation notes & deviations
 
 Deliberate changes to the spec, with reasons. Everything not listed here follows the spec
@@ -261,14 +289,69 @@ literally.
 
 ## Verification log
 
-Executed on 2026-11-12 (see `tests/` for the automated part):
+Run on 2026-11-12 against the committed code.
 
-* Unit/integration suite: `bash run_tests.sh` — 22 tests, all passing. Covers the matching
-  engine invariants (exact 30 rows, each child received exactly twice, zero same-family
-  pairings, no self-draws, no duplicate receivers, determinism under a fixed seed,
-  unsolvable-config handling), auth (401 on wrong password), lock enforcement (400 while
-  locked), blind-organizer guarantee (no assignment data in admin state), token flow,
-  `viewed_at` transition, and wishlist updates after lock.
-* Live app in Docker (`docker compose up`, host port 8085) driven with Playwright: admin
-  login, roster entry, 2x2 quota grid, copy-link feedback, participant PENDING view,
-  READY view with recipient cards and badges, locked-state input disabling, reset flow.
+### Automated — `bash run_tests.sh`
+
+36 tests, all passing (Python 3.12 venv, `fastapi==0.115.0`, `uvicorn==0.30.6`, `httpx` +
+`pytest` installed only by the runner).
+
+* `tests/test_engine.py` — acceptance scenario 1 (exactly 30 rows, 3 per adult, every child
+  received exactly twice, zero same-`family_group` pairings) across 12 seeds; balanced receiver
+  quotas for four other quota sets; case/whitespace-insensitive household matching;
+  seed determinism; zero-quota roster returns `[]`; `HTTPException(400)` for an empty target
+  group; `HTTPException(422)` with the exact spec message for two unsolvable configurations;
+  a maximal two-household case (each of 3 adults draws 2 adults) solved for 6 seeds.
+* `tests/test_api.py` — login and `X-Admin-Password` 401s; default config row; quota range
+  validation; blank name / bad role rejection; **criterion 2** (no `assignment`/`giver`/
+  `receiver`/`pairs` substring anywhere in `GET /api/admin/state` after a 30-row draw);
+  DB-level check of the 30 rows (`0` same-family or self pairings, every child received twice,
+  every adult gave 3, no child gave); **criterion 4** (`400` for config PUT, participant POST
+  and participant DELETE while locked); **criterion 3** (`viewed_at` `null` → timestamp after
+  `GET /api/draw/<uuid>`, visible in admin state, `PENDING` before the draw, stable assignments
+  across reloads, `[]` for a zero-quota child, `404` for a bad token); wishlist editable through
+  the token after locking; reset clearing assignments, `viewed_at` and `is_locked` while the
+  roster survives; `400` draw with an empty roster, `422` on an unsolvable roster leaving
+  `is_locked = 0` and no rows written.
+
+### Live instance — `tools/verify_acceptance.py http://127.0.0.1:8085`
+
+```
+1) assignments rows            : 30
+   self / same-family pairings : 0
+   ADULT receives        : [1]      CHILD receives : [2]
+   ADULT gives           : [0, 3]   CHILD gives  : [0]
+2) GET /api/admin/state        : 200 keys: ['config', 'participants']
+   leaked assignment vocabulary: none
+3) GET /api/draw/<uuid>        : 200 READY with 3 assignments
+   viewed_at                   : None -> 2026-11-12T21:01:16+00:00
+4) while locked (PUT/POST/DELETE): 400 400 400
+
+ACCEPTANCE: PASS
+```
+
+### Visual — Playwright against `http://127.0.0.1:8085` (screenshots in `screenshots/`, git-ignored)
+
+| # | What was checked | Result |
+|---|---|---|
+| 01–02 | French login card by default; wrong password shows "Mot de passe incorrect." and stays on the gate | OK |
+| 03 | Admin dashboard in FR: three panels, 2×2 quota grid defaults 1/2/0/0, snowfall rendering | OK |
+| 04 | Roster built through the UI form + 19 API adds: 20 rows, role chips, "Non ouvert" status, Copy link / Supprimer | OK |
+| 05 | EN switch: every label, chip, status, summary and forecast translated; choice persisted | OK |
+| 06 | Participant PENDING: "Bonjour Camille", "le tirage n'est pas encore finalisé. Reviens bientôt !", wishlist editor + "Enregistré" feedback | OK |
+| 07 | After "Générer et verrouiller le tirage": banner "Tirage généré et verrouillé", 9 inputs disabled, delete buttons hidden, "Réinitialiser le tirage" shown | OK |
+| 08–10 | Participant READY: wrapped gift + "RÉVÉLER MES CADEAUX"; reveal lifts the lid, gold halo, 14-snowflake burst, steam, then 3 staggered recipient cards ("Les cadeaux que tu offres") with role badges and "SES ENVIES" | OK |
+| 11–12 | Zero-quota child: "Tu n'as aucun cadeau à offrir cette année — prépare-toi à recevoir les tiens !" and in EN the exact spec sentence | OK |
+| 13 | Organizer sees the green "Consulté" badge with a French-formatted timestamp on the opened link only | OK |
+| 14 | Impossible quota (adult draws 9 adults across 5 households): red banner "Le tirage a échoué — Les contraintes sont impossibles à satisfaire…" and the event stays "Tirage ouvert" | OK |
+
+Also confirmed in the browser: clipboard "Lien copié !" feedback, `confirm()` dialog before
+reset (FR copy), and that no organizer screen ever renders pairings.
+
+### Container check
+
+`docker build` + `docker compose up -d` (image `python:3.12-slim`, host port 8085, `./data`
+mounted) was re-audited with `tools/verify_acceptance.py` → `ACCEPTANCE: PASS`
+(30 rows, 0 same-family pairings, no leak in admin state, `viewed_at` flips, `400 400 400`
+while locked), and the container-served page was driven through Playwright (FR participant view,
+reveal animation, 3 recipient cards).

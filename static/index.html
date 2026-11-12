@@ -75,9 +75,9 @@
 
   /* ---- falling snow ---- */
   #snow { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
-  #snow svg { position: absolute; top: -10vh; color: rgba(255,255,255,.85);
+  #snow svg { position: absolute; top: -10vh; color: rgba(47,107,82,.22);
               animation-name: fall, sway; animation-iteration-count: infinite;
-              animation-timing-function: linear, ease-in-out; filter: drop-shadow(0 2px 4px rgba(20,60,46,.08)); }
+              animation-timing-function: linear, ease-in-out; }
   @keyframes fall { to { transform: translateY(118vh); } }
   @keyframes sway { 0%,100% { margin-left: 0 } 25% { margin-left: 14px } 75% { margin-left: -14px } }
 
@@ -136,7 +136,7 @@
   }
 </style>
 </head>
-<body class="font-sans text-pine-800 min-h-screen grain">
+<body class="font-sans text-pine-800 min-h-screen grain" x-data="giftExchange()" x-init="boot()">
 
 <!-- Icon set: crystalline snowflake authored for this app; festive outline icons
      from Tabler Icons (MIT, https://tabler.io/icons) vendored inline, no CDN needed. -->
@@ -200,6 +200,8 @@
     </symbol>
   </defs>
 </svg>
+
+<div id="snow" aria-hidden="true"></div>
 
 <div class="relative z-10">
 
@@ -374,16 +376,23 @@
             <div>
               <label class="label" for="p-group" x-text="t('roster.group')"></label>
               <input id="p-group" class="field mt-1.5" x-model.trim="draft.family_group" :disabled="locked" :placeholder="t('roster.groupPlaceholder')">
-              <p class="text-[11px] text-pine-600/75 mt-1.5 leading-snug" x-text="t('roster.groupHelp')"></p>
             </div>
-            <div class="flex gap-2">
-              <input class="field" x-model.trim="draft.wishlist" :disabled="locked" :placeholder="t('roster.wishlist')">
-              <button type="submit" :disabled="locked || !draftReady" class="btn btn-primary px-4 py-2.5 text-sm shrink-0"
-                      x-text="t('roster.add')"></button>
+            <div>
+              <label class="label" for="p-wish" x-text="t('roster.wishlist')"></label>
+              <div class="flex gap-2 mt-1.5">
+                <input id="p-wish" class="field" x-model.trim="draft.wishlist" :disabled="locked" :placeholder="t('roster.wishlistPlaceholder')">
+                <button type="submit" :disabled="locked || !draftReady" class="btn btn-primary px-4 py-2.5 text-sm shrink-0"
+                        x-text="t('roster.add')"></button>
+              </div>
             </div>
           </form>
 
-          <div class="mt-7 overflow-x-auto">
+          <p class="text-xs text-pine-600/80 mt-3 flex items-center gap-2">
+            <svg class="w-3.5 h-3.5 text-pine-300 shrink-0"><use href="#i-flake"/></svg>
+            <span x-text="t('roster.groupHelp')"></span>
+          </p>
+
+          <div class="mt-5 overflow-x-auto">
             <table class="w-full text-sm">
               <thead>
                 <tr class="text-pine-700/80 border-b hair">
@@ -661,6 +670,7 @@ const I18N = {
     'roster.groupPlaceholder': 'Ex. Martin',
     'roster.groupHelp': 'Les personnes d’un même groupe familial ne peuvent jamais se tirer entre elles.',
     'roster.wishlist': 'Liste d’envies (facultatif)',
+    'roster.wishlistPlaceholder': 'Ex. des feutres, un livre…',
     'roster.wishlistIs': 'Envies :',
     'roster.add': 'Ajouter',
     'roster.status': 'Statut',
@@ -758,6 +768,7 @@ const I18N = {
     'roster.groupPlaceholder': 'e.g. Martin',
     'roster.groupHelp': 'People in the same family group will never draw each other.',
     'roster.wishlist': 'Wishlist (optional)',
+    'roster.wishlistPlaceholder': 'e.g. felt pens, a novel…',
     'roster.wishlistIs': 'Wishlist:',
     'roster.add': 'Add',
     'roster.status': 'Status',
@@ -1077,11 +1088,12 @@ function giftExchange() {
         flake.style.left = (Math.random() * 100) + 'vw';
         flake.style.width = size + 'px';
         flake.style.height = size + 'px';
-        flake.style.opacity = (0.22 + Math.random() * 0.5).toFixed(2);
+        flake.style.opacity = (0.55 + Math.random() * 0.45).toFixed(2);
         const fall = fast ? 5 + Math.random() * 4 : 15 + Math.random() * 14;
         flake.style.animationDuration = `${fall}s, ${5 + Math.random() * 6}s`;
         flake.style.animationDelay = `${-Math.random() * fall}s, ${-Math.random() * 6}s`;
-        flake.style.color = Math.random() > 0.75 ? 'rgba(212,175,98,.55)' : 'rgba(255,255,255,.85)';
+        const palette = ['rgba(47,107,82,.30)', 'rgba(20,60,46,.16)', 'rgba(199,154,59,.55)', 'rgba(120,140,152,.30)'];
+        flake.style.color = palette[Math.floor(Math.random() * palette.length)];
         host.appendChild(flake);
         flake.addEventListener('animationiteration', () => {
           if (fast) { flake.remove(); return; }
