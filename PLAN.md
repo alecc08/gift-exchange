@@ -313,13 +313,31 @@ cross-site form posts); no TLS inside the container (published on a LAN, termina
 tokens are **not** rotated by `POST /api/admin/reset`, because that would invalidate links the
 organizer already printed — reset wipes assignments and viewed markers only.
 
+## UX polish (addendum)
+
+The follow-up request was "improve UX and tighten backend security". The API contract from §5 is
+untouched; everything below is additive and lives in `static/index.html` plus `GET /api/limits`.
+
+| Surface | Change |
+|---|---|
+| Feedback | Toast stack (`#toasts`, `aria-live="polite"`) for saves, copies, draw results and rate limits; the inline notice/banner pair was replaced by one persistent, dismissible `adminError` block so a failure is never lost when the view re-renders. |
+| Login | Busy state ("Vérification…"), disabled until a password is typed, and the server's `429`/lockout is shown as the remaining wait instead of a bare "wrong password". |
+| Rules | Live "total gifts to prepare" row per target group; Save disabled until something actually changed (`rulesDirty` chip); character counters on title/budget; quota `max` read from the server. |
+| Feasibility | The engine's necessary conditions are mirrored client-side (`warnings`), so an impossible quota is explained **before** the draw is attempted, and "Generate" is blocked with "Corrigez d'abord les alertes ci-dessus". The server still validates independently. |
+| Draw | `confirm()` before locking (states the gift count and that it locks the rules), `409` handled as "already locked", and the locked panel counts opened links (`3/10 lien(s) ouvert(s)`). |
+| Roster | Family-group `datalist` + clickable household filter chips with counts; per-row "n cadeau(x) à offrir" / "ne tire aucun cadeau"; wishlist preview truncated with `title`; relative "Consulté · il y a 5 minutes" (full timestamp in `title`); empty-roster guidance; **Copy all links** (name, role, household, URL) with a fallback for insecure origins. |
+| Participant | PENDING page checks again automatically (25 s) and offers a manual "Vérifier à nouveau"; a toast announces the switch to READY; the reveal is remembered per link in `sessionStorage` so a refresh doesn't replay the surprise; "Copier ma liste"; wishlist autosave (1.2 s debounce) with a "Non enregistré" chip and Ctrl/⌘+Enter to save now. |
+| Limits | `GET /api/limits` publishes the Pydantic caps; the SPA binds `maxlength` and counters to them, and surfaces `default_password: true` as a visible organizer warning. |
+| Auth UX | The browser keeps the **session token** (`sessionStorage.ge_admin_token`) rather than the password; a `401` anywhere clears it and drops back to the gate with an "expired" toast. |
+| i18n | Every new string exists in FR and EN (the two tables stay key-symmetric; audited by script on each pass). FR remains the default. |
+
 ## Verification log
 
 Run on 2026-11-12 against the committed code.
 
 ### Automated — `bash run_tests.sh`
 
-36 tests, all passing (Python 3.12 venv, `fastapi==0.115.0`, `uvicorn==0.30.6`, `httpx` +
+49 tests, all passing (Python 3.12 venv, `fastapi==0.115.0`, `uvicorn==0.30.6`, `httpx` +
 `pytest` installed only by the runner).
 
 * `tests/test_engine.py` — acceptance scenario 1 (exactly 30 rows, 3 per adult, every child
@@ -339,21 +357,36 @@ Run on 2026-11-12 against the committed code.
   the token after locking; reset clearing assignments, `viewed_at` and `is_locked` while the
   roster survives; `400` draw with an empty roster, `422` on an unsolvable roster leaving
   `is_locked = 0` and no rows written.
+* `tests/test_security.py` — login rate limit + lockout (`429` with `Retry-After`, correct
+  password refused during the lockout), lockouts scoped per client, a forged `X-Forwarded-For`
+  cannot buy extra budget unless `TRUST_PROXY=1`, the participant-link budget is separate from
+  the admin one, session token issue → use → tamper → revoke (`POST /api/admin/logout`), tokens
+  signed per `SESSION_SECRET`, expired sessions rejected, the spec's `X-Admin-Password` header
+  still accepted, `413` over `MAX_BODY_BYTES`, `422` on each field-length cap (name, family
+  group, wishlist, event title, budget note, participant-wishlist), the security header set
+  (CSP with `frame-ancestors 'none'` / `base-uri 'self'`, `nosniff`, `X-Frame-Options`,
+  `Referrer-Policy`), non-leaky error bodies, and a `409` re-draw leaving `assignments`
+  byte-identical.
 
-### Live instance — `tools/verify_acceptance.py http://127.0.0.1:8085`
+### Live instance — `python tools/verify_acceptance.py`
+
+The tool now seeds criterion 1's scenario itself (10 adults + 10 children in 5 households),
+locks the draw, and then checks all four criteria against the HTTP API **and** the SQLite file,
+so the run is reproducible. Against the Docker container on `127.0.0.1:8085`:
 
 ```
+seeded acceptance scenario: 10 adults + 10 children in 5 family groups -> 30 assignments
 1) assignments rows            : 30
    self / same-family pairings : 0
    ADULT receives        : [1]      CHILD receives : [2]
    ADULT gives           : [0, 3]   CHILD gives  : [0]
 2) GET /api/admin/state        : 200 keys: ['config', 'participants']
    leaked assignment vocabulary: none
-3) GET /api/draw/<uuid>        : 200 READY with 3 assignments
-   viewed_at                   : None -> 2026-11-12T21:01:16+00:00
+3) GET /api/draw/<uuid> (Nicolas): 200 READY with 3 assignments
+   viewed_at                   : None -> 2026-11-12T22:25:52+00:00
 4) while locked (PUT/POST/DELETE): 400 400 400
 
-ACCEPTANCE: PASS
+ACCEPTANCE: PASS        (exit code 0)
 ```
 
 ### Visual — Playwright against `http://127.0.0.1:8085` (screenshots in `screenshots/`, git-ignored)

@@ -7,3 +7,5 @@ __pycache__/
 *.db-wal
 *.db-shm
 /screenshots/
+
+docs/media/manifest.json
