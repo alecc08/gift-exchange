@@ -980,8 +980,10 @@ Correct when the organizer clicks in a browser; wrong in exactly the way above w
 scripted inside the container, a health check, or a port-forward. A mail whose every link is dead on
 arrival is worse than an error on the organizer's screen, so:
 
-- `PUBLIC_BASE_URL` set → it wins outright (which also makes the share tags immune to a forged
-  `Host`), and it is the documented answer for any deployment behind a proxy;
+- `PUBLIC_BASE_URL` set → it wins outright for everything that leaves by mail, and it is the
+  documented answer for any deployment behind a proxy. (Share tags deliberately keep following the
+  request's own `Host`: a crawler wants the host it visited, and those are validated against
+  injection separately.)
 - otherwise the request's origin, **refused when it is loopback**: `503` naming the variable, the
   per-row send answering the same, and the auto-send-on-draw listing every person as skipped with
   `EMAIL_BAD_BASE_URL` while the draw itself still commits;
