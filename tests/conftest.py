@@ -54,17 +54,19 @@ def db(tmp_path):
     return open_db
 
 
-def add(client, name, role, family_group, wishlist="", group=None, email=""):
+def add(client, name, role, family_group, wishlist="", group=None, email="", draw_id=None):
     """Create a participant.
 
     `family_group` is the display surname; `group` is the household the same-group rule works on, and
     it defaults to the surname because the older tests were written before the two were separated.
     Pass `group=""` for somebody in no group at all. `email` is optional: plenty of relatives still
-    get their link handed to them in person.
+    get their link handed to them in person. `draw_id` is omitted by the older tests, which is fine
+    while one draw exists — that is exactly the contract they are written against.
     """
     response = client.post(
         "/api/admin/participants",
         headers=ADMIN,
+        params={"draw_id": draw_id} if draw_id is not None else None,
         json={
             "name": name,
             "role": role,
@@ -78,7 +80,8 @@ def add(client, name, role, family_group, wishlist="", group=None, email=""):
     return response.json()["participant"]
 
 
-def set_config(client, **values):
-    response = client.put("/api/admin/config", headers=ADMIN, json=values)
+def set_config(client, draw_id=None, **values):
+    params = {"draw_id": draw_id} if draw_id is not None else None
+    response = client.put("/api/admin/config", headers=ADMIN, params=params, json=values)
     assert response.status_code == 200, response.text
     return response.json()["config"]

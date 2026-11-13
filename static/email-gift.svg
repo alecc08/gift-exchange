@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 300" width="520" height="300">
+  <!-- Hero art for the link email: the pairing is still in the box. The lid has popped, a pair of
+       eyes is looking up at it and two mittened hands are holding it open — the mail says the result
+       is inside this gift, and only the reader can open it. Static on purpose: email clients strip or
+       ignore animation, so the joke has to land in one still frame. Site palette, same shapes as the
+       interface's gift (#i-gift / the SPA's reveal scene). -->
+  <defs>
+    <linearGradient id="boxSheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity=".16"/>
+      <stop offset="45%" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#c79a3b" stop-opacity=".14"/>
+    </linearGradient>
+  </defs>
+
+  <!-- ground -->
+  <ellipse cx="260" cy="286" rx="104" ry="12" fill="#143c2e" opacity=".10"/>
+
+  <!-- box -->
+  <rect x="190" y="166" width="140" height="114" rx="10" fill="#143c2e"/>
+  <rect x="190" y="166" width="140" height="114" rx="10" fill="url(#boxSheen)"/>
+  <rect x="250" y="166" width="20" height="114" fill="#c79a3b"/>
+
+  <!-- the opening: dark inside, since the lid is off -->
+  <rect x="200" y="148" width="120" height="26" rx="9" fill="#0b241a"/>
+
+  <!-- somebody in there, looking up at the lid -->
+  <g fill="#faf7f2">
+    <circle cx="236" cy="160" r="8"/>
+    <circle cx="268" cy="160" r="8"/>
+  </g>
+  <g fill="#143c2e">
+    <circle cx="237" cy="157.5" r="3.4"/>
+    <circle cx="269" cy="157.5" r="3.4"/>
+  </g>
+
+  <!-- the lid, popped off and tilted -->
+  <g transform="rotate(-8 260 116)">
+    <rect x="176" y="104" width="168" height="34" rx="9" fill="#1f5340"/>
+    <rect x="250" y="104" width="20" height="34" fill="#c79a3b"/>
+    <!-- bow, tilted with the lid, tails flying -->
+    <g fill="#d4af62" stroke="#c79a3b" stroke-width="1.4">
+      <path d="M258 100 C 234 102 228 80 246 78 C 260 77 262 92 258 100 Z"/>
+      <path d="M262 100 C 286 102 292 80 274 78 C 260 77 258 92 262 100 Z"/>
+      <circle cx="260" cy="99" r="7"/>
+    </g>
+    <g fill="none" stroke="#d4af62" stroke-width="6" stroke-linecap="round">
+      <path d="M266 104 C 280 116 296 118 308 112"/>
+      <path d="M254 104 C 240 118 226 122 214 118"/>
+    </g>
+    <!-- mittened hands, drawn after the lid and in the lid's own tilt, so the fingers read as
+         gripping its lower edge rather than sitting behind it -->
+    <g fill="#e6c98a" stroke="#c79a3b" stroke-width="1.6">
+      <rect x="200" y="126" width="27" height="17" rx="8.5"/>
+      <rect x="292" y="126" width="27" height="17" rx="8.5"/>
+    </g>
+    <g fill="none" stroke="#c79a3b" stroke-width="1.4" stroke-linecap="round" opacity=".8">
+      <path d="M206 130 v9 M214 129 v10 M222 130 v9"/>
+      <path d="M298 130 v9 M306 129 v10 M314 130 v9"/>
+    </g>
+  </g>
+
+  <!-- the shake: two arcs each side of the lid, the way a cartoon says "it's moving" -->
+  <g fill="none" stroke="#7aa894" stroke-width="2.6" stroke-linecap="round" opacity=".9">
+    <path d="M162 96 q-12 10 -7 26"/>
+    <path d="M148 104 q-9 8 -5 18"/>
+    <path d="M358 96 q12 10 7 26"/>
+    <path d="M372 104 q9 8 5 18"/>
+  </g>
+
+  <!-- what has already got out: sparkles and two small flakes -->
+  <g fill="#d4af62">
+    <path d="M338 74 l3 9 9 3 -9 3 -3 9 -3 -9 -9 -3 9 -3 z"/>
+    <path d="M192 62 l2.2 6.6 6.6 2.2 -6.6 2.2 -2.2 6.6 -2.2 -6.6 -6.6 -2.2 6.6 -2.2 z"/>
+    <path d="M368 150 l1.8 5.4 5.4 1.8 -5.4 1.8 -1.8 5.4 -1.8 -5.4 -5.4 -1.8 5.4 -1.8 z"/>
+  </g>
+  <g fill="none" stroke="#7aa894" stroke-width="1.8" stroke-linecap="round" opacity=".85">
+    <path d="M152 168 h14 M159 161 v14 M154 163 l10 10 M164 163 l-10 10"/>
+    <path d="M376 196 h11 M381.5 190.5 v11"/>
+  </g>
+
+  <!-- holly at the foot of the box, same sprig as the interface -->
+  <g transform="translate(196 252)">
+    <ellipse cx="8" cy="9" rx="8.4" ry="5" fill="#2f6b52" transform="rotate(-26 8 9)"/>
+    <ellipse cx="21" cy="12" rx="8.4" ry="5" fill="#1f5340" transform="rotate(20 21 12)"/>
+    <circle cx="15" cy="17.5" r="3.1" fill="#c0392f"/>
+    <circle cx="21.4" cy="20.4" r="2.6" fill="#a52a20"/>
+    <circle cx="10.6" cy="20.4" r="2.4" fill="#c0392f"/>
+  </g>
+  <g fill="none" stroke="#d4af62" stroke-width="3" stroke-linecap="round" opacity=".9">
+    <path d="M300 268 h34"/>
+  </g>
+</svg>

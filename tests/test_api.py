@@ -205,7 +205,7 @@ def test_reset_clears_assignments_and_viewed_markers(client, db):
     conn = db()
     assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM participants WHERE viewed_at IS NOT NULL").fetchone()[0] == 0
-    assert conn.execute("SELECT is_locked FROM config WHERE id = 1").fetchone()[0] == 0
+    assert conn.execute("SELECT is_locked FROM draws WHERE id = 1").fetchone()[0] == 0
     conn.close()
 
     # roster survives the reset and can be edited again
@@ -225,7 +225,7 @@ def test_draw_guard_rails(client, db):
         "gifts to give than there are people allowed to receive them."
     )
     conn = db()
-    assert conn.execute("SELECT is_locked FROM config WHERE id = 1").fetchone()[0] == 0
+    assert conn.execute("SELECT is_locked FROM draws WHERE id = 1").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == 0
     conn.close()
 

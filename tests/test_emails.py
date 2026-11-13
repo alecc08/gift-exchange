@@ -13,6 +13,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -107,7 +108,7 @@ def test_old_database_gains_the_email_columns_with_safe_defaults(tmp_path, monke
     conn.row_factory = sqlite3.Row
     person = conn.execute("SELECT email, email_sent_at FROM participants WHERE id = 1").fetchone()
     config = conn.execute(
-        "SELECT email_language, auto_email_on_draw FROM config WHERE id = 1").fetchone()
+        "SELECT email_language, auto_email_on_draw FROM draws WHERE id = 1").fetchone()
     conn.close()
     assert person["email"] == "" and person["email_sent_at"] is None
     assert config["email_language"] == "fr" and config["auto_email_on_draw"] == 0
@@ -465,15 +466,51 @@ def test_template_carries_the_site_art_over_absolute_urls():
                                assets_base="https://tirage-noel.alserv.org")
     assert 'src="https://tirage-noel.alserv.org/static/email-flake.svg"' in content["html"]
     assert 'src="https://tirage-noel.alserv.org/static/email-gift-strip.svg"' in content["html"]
+    assert 'src="https://tirage-noel.alserv.org/static/email-gift.svg"' in content["html"]
     # inline <svg> is stripped by Gmail; the art is always <img>-referenced, never inline
     assert "<svg" not in content["html"]
     bare = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True)
     assert "<img" not in bare["html"], "no absolute base means no art, not a broken relative src"
 
 
+def test_the_email_has_no_animation_to_lose():
+    """The gift is drawn mid-joke (lid off, somebody pushing), which is a still-frame joke.
+
+    Keyframes would be the cute thing to add and the wrong one: Outlook ignores them, Gmail strips
+    them, and half the family reading a mail whose art silently froze is worse than a mail that was
+    never animated.
+    """
+    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
+                               assets_base="https://tirage-noel.alserv.org")
+    for forbidden in ("<style", "@keyframes", "animation"):
+        assert forbidden not in content["html"], forbidden
+    # `text-transform: uppercase` is a real style in this mail; `transform:` on its own is the
+    # animation's lever, and that is the one that must not appear.
+    assert not re.search(r"(?<!text-)\btransform\s*:", content["html"]), "a transform was added"
+    art_path = main.STATIC_DIR / "email-gift.svg"
+    art = art_path.read_text(encoding="utf-8")
+    # Checked on the parsed tree, not the raw text: the art's own comment says the word "animation"
+    # out loud to explain why there is none, and a text match would flag the warning as the bug.
+    root = ET.fromstring(art)
+    tags = {element.tag.rpartition("}")[2] for element in root.iter()}
+    attributes = {name for element in root.iter() for name in element.attrib}
+    assert not (tags & {"style", "animate", "animateTransform", "animateMotion", "script"}), tags
+    assert not any(name.startswith("animation") or name == "transform-origin" for name in attributes)
+
+
+def test_the_hero_gift_is_described_in_the_language_of_the_mail():
+    """A screen reader gets the joke or gets nothing; either way it must not get a raw alt='<'."""
+    french = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
+                              assets_base="https://x.test")["html"]
+    english = main.build_email("Aline", "Noël", "https://x.test/draw/t", "en", True,
+                               assets_base="https://x.test")["html"]
+    assert 'alt="Un cadeau bien fermé' in french
+    assert 'alt="A tightly closed gift' in english
+    assert 'alt=""' not in french.split("email-gift.svg")[1][:120], "the hero has no description"
+
+
 def test_email_art_assets_exist_and_are_valid_svg():
-    import xml.etree.ElementTree as ET
-    for name in ("email-flake.svg", "email-gift-strip.svg"):
+    for name in ("email-flake.svg", "email-gift-strip.svg", "email-gift.svg"):
         path = main.STATIC_DIR / name
         assert path.exists(), name
         root = ET.fromstring(path.read_text(encoding="utf-8"))

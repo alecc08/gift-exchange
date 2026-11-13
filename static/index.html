@@ -146,6 +146,60 @@
                              transition-duration: .01ms !important; }
     #snow { display: none; }
   }
+
+  /* ---- responsive ----
+     There were no breakpoints here at all: at phone width the roster's seven columns simply
+     overflowed their scroll container and the status chips (« Pas encore ouvert », « Lien envoyé
+     il y a 2 h ») ran into the next cell. Below 900 px the roster stops being a table and becomes
+     one card per person, with the column names rendered inside each cell; below 640 px the controls
+     get thumb-sized and the mail preview stops pretending to be a desktop window. */
+
+  /* A chip is a fact, not a fixed width: it has to survive « Pas encore ouvert » in French and
+     « Unopened » in English in the same column without stacking on top of its neighbour. */
+  .chip { max-width: 100%; flex-wrap: wrap; row-gap: .15rem; }
+  .chip > span { overflow-wrap: anywhere; }
+
+  @media (max-width: 1024px) {
+    header { flex-wrap: wrap; }
+  }
+
+  @media (max-width: 900px) {
+    /* roster: rows become cards */
+    #roster-table thead { display: none; }
+    #roster-table, #roster-table tbody, #roster-table tr, #roster-table td { display: block; width: auto; }
+    #roster-table tr.part {
+      border: 1px solid rgba(20,60,46,.12); border-radius: 1rem; padding: .9rem 1rem;
+      margin-bottom: .7rem; background: #fff;
+    }
+    #roster-table tr.part + tr.part { margin-top: 0; }
+    #roster-table td { padding: .3rem 0; text-align: left; }
+    #roster-table td[data-label]::before {
+      content: attr(data-label); display: block; margin-bottom: .2rem;
+      font-size: .6875rem; letter-spacing: .12em; text-transform: uppercase;
+      color: #6b7a72; font-weight: 600;
+    }
+    #roster-table .field { width: 100%; }
+    #roster-table .part-actions { white-space: normal; text-align: left; }
+    #roster-table .part-actions .btn { margin-left: 0; margin-top: .4rem; }
+    /* a truncated wishlist is unreadable at this width; wrapping is cheaper than a tooltip */
+    #roster-table .truncate { white-space: normal; max-width: none; }
+  }
+
+  @media (max-width: 640px) {
+    /* thumb-sized targets, and no iOS zoom-on-focus (below 16px, Mobile Safari zooms the page) */
+    .btn { min-height: 40px; }
+    input.field, select.field, textarea.field { font-size: 16px; }
+    #quota-table th, #quota-table td { padding: .5rem .5rem; }
+    #quota-table input.field { width: 4.25rem; }
+    #toasts { left: 1rem; right: 1rem; align-items: stretch; }
+    #preview-frame { min-height: 55vh; }
+  }
+
+  @media (max-width: 480px) {
+    /* The chip keeps the fact (« Lien envoyé »); the when moves to the tooltip it already carries.
+       Same information, one line, no overlap with the cell next to it. */
+    .chip-time { display: none; }
+  }
 </style>
 </head>
 <body class="font-sans text-pine-800 min-h-screen grain" x-data="giftExchange()" x-init="boot()">
@@ -273,6 +327,111 @@
 
       <div x-show="authed" x-cloak class="max-w-5xl mx-auto px-5 pt-8 pb-28 space-y-6">
 
+        <!-- Sits above both screens on purpose: a refused action on the draw list (deleting a draw
+             that is still locked) has to say so somewhere, and the list has no panel of its own. -->
+        <div x-show="adminError" x-cloak class="rounded-2xl bg-holly-100 ring-1 ring-holly-500/25 px-5 py-4 flex items-start gap-3 fade-up">
+          <svg class="w-5 h-5 text-holly-600 shrink-0 mt-0.5"><use href="#i-alert"/></svg>
+          <div>
+            <p class="text-sm font-semibold text-holly-700" x-text="adminErrorTitle"></p>
+            <p class="text-sm text-holly-700/85 mt-0.5" x-text="adminError"></p>
+          </div>
+          <button @click="adminError=''" class="ml-auto text-holly-700/60 hover:text-holly-700 text-lg leading-none">&times;</button>
+        </div>
+
+        <!-- ============ Panel 0 — the draws ============
+             One server can hold several exchanges (the Réveillon, the office, the cousins'). This
+             is the screen that keeps them apart: one card per draw, its status and its counts, and
+             nothing about who draws whom. -->
+        <div x-show="activeDraw === null" x-cloak class="space-y-6">
+          <section class="bg-white rounded-3xl ring-1 ring-black/5 shadow-card p-5 sm:p-8">
+            <div class="flex items-start justify-between gap-4">
+              <div>
+                <p class="label" x-text="t('draws.kicker')"></p>
+                <h2 class="font-display text-2xl text-pine-800" x-text="t('draws.title')"></h2>
+                <p class="text-sm text-pine-600/80 mt-1.5" x-text="t('draws.sub')"></p>
+              </div>
+              <svg class="w-7 h-7 text-gold-500 shrink-0"><use href="#i-gift"/></svg>
+            </div>
+
+            <p x-show="draws.length === 0" x-cloak class="mt-6 rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3 text-sm text-pine-700"
+               x-text="t('draws.empty')"></p>
+
+            <div id="draw-cards" class="mt-6 grid gap-3 sm:grid-cols-2">
+              <template x-for="entry in draws" :key="entry.id">
+                <article class="rounded-2xl ring-1 ring-black/8 p-4 flex flex-col gap-3 transition hover:ring-gold-500/40">
+                  <div class="flex items-start justify-between gap-3">
+                    <h3 class="font-display text-lg text-pine-800 leading-snug min-w-0"
+                        x-text="entry.event_title"></h3>
+                    <span class="chip shrink-0"
+                          :class="entry.is_locked ? 'bg-gold-100 text-gold-600' : 'bg-pine-50 text-pine-600'"
+                          x-text="drawStatus(entry)"></span>
+                  </div>
+                  <p class="text-xs text-pine-600/75" x-text="drawCounts(entry)"></p>
+                  <p x-show="entry.created_at" x-cloak class="text-[11px] text-pine-600/55"
+                     x-text="t('draws.opened_on', { at: formatDate(entry.created_at) })"></p>
+                  <div class="flex flex-wrap items-center gap-2 mt-auto">
+                    <button @click="openDraw(entry.id)" class="btn btn-primary px-4 py-2 text-xs">
+                      <svg class="w-3.5 h-3.5"><use href="#i-gift"/></svg>
+                      <span x-text="t('draws.open')"></span>
+                    </button>
+                    <button @click="deleteDraw(entry)" :disabled="busy" class="btn btn-danger px-3 py-2 text-xs"
+                            :title="entry.is_locked ? t('draws.deleteLockedHelp') : ''"
+                            x-text="t('draws.delete')"></button>
+                  </div>
+                </article>
+              </template>
+            </div>
+          </section>
+
+          <!-- New draw. Rules and roster live inside it once it exists; here the only required
+               thing is the name, because that is what the cards above are read by. -->
+          <section class="bg-white rounded-3xl ring-1 ring-black/5 shadow-card p-5 sm:p-8">
+            <p class="label" x-text="t('draws.new')"></p>
+            <h2 class="font-display text-xl text-pine-800 mt-0.5" x-text="t('draws.newTitle')"></h2>
+            <form @submit.prevent="createDraw()" class="mt-5 grid gap-3 sm:grid-cols-2">
+              <div>
+                <label class="label" for="d-title" x-text="t('draws.nameField')"></label>
+                <input id="d-title" class="field mt-1.5" x-model.trim="drawDraft.event_title"
+                       :placeholder="t('draws.namePlaceholder')" :maxlength="limits.event_title" autocomplete="off">
+              </div>
+              <div>
+                <label class="label" for="d-budget" x-text="t('draws.budgetField')"></label>
+                <input id="d-budget" class="field mt-1.5" x-model.trim="drawDraft.budget_note"
+                       :placeholder="t('rules.budgetPlaceholder')" :maxlength="limits.budget_note" autocomplete="off">
+              </div>
+              <div>
+                <label class="label" for="d-copy" x-text="t('draws.copyField')"></label>
+                <select id="d-copy" class="field mt-1.5" x-model="drawDraft.copy_from">
+                  <option value="" x-text="t('draws.copyNone')"></option>
+                  <template x-for="entry in draws" :key="entry.id">
+                    <option :value="entry.id"
+                            x-text="entry.event_title + ' · ' + entry.participants"></option>
+                  </template>
+                </select>
+                <p class="text-[11px] text-pine-600/60 mt-1" x-text="t('draws.copyHelp')"></p>
+              </div>
+              <div class="flex items-end">
+                <button type="submit" class="btn btn-primary w-full sm:w-auto px-5 py-2.5 text-sm"
+                        :disabled="busy || !drawDraft.event_title.trim()">
+                  <svg class="w-3.5 h-3.5"><use href="#i-flake"/></svg>
+                  <span x-text="t('draws.create')"></span>
+                </button>
+              </div>
+            </form>
+          </section>
+        </div>
+
+        <!-- ============ one draw: the console ============ -->
+        <div x-show="activeDraw !== null" x-cloak class="space-y-6">
+
+          <div class="flex flex-wrap items-center gap-3">
+            <button @click="backToDraws()" class="btn btn-quiet px-3 py-2 text-xs">
+              <svg class="w-3.5 h-3.5 rotate-180"><use href="#i-link"/></svg>
+              <span x-text="t('draws.back')"></span>
+            </button>
+            <p class="text-sm text-pine-700 min-w-0" x-text="cfg.event_title"></p>
+          </div>
+
         <div class="flex flex-wrap items-center justify-between gap-3 bg-white/85 backdrop-blur rounded-2xl ring-1 ring-black/5 px-5 py-4 shadow-card">
           <div class="flex items-center gap-2.5 flex-wrap">
             <span class="chip" :class="locked ? 'bg-gold-100 text-gold-600' : 'bg-pine-50 text-pine-600'">
@@ -317,15 +476,6 @@
           </template>
         </div>
 
-        <div x-show="adminError" x-cloak class="rounded-2xl bg-holly-100 ring-1 ring-holly-500/25 px-5 py-4 flex items-start gap-3 fade-up">
-          <svg class="w-5 h-5 text-holly-600 shrink-0 mt-0.5"><use href="#i-alert"/></svg>
-          <div>
-            <p class="text-sm font-semibold text-holly-700" x-text="adminErrorTitle"></p>
-            <p class="text-sm text-holly-700/85 mt-0.5" x-text="adminError"></p>
-          </div>
-          <button @click="adminError=''" class="ml-auto text-holly-700/60 hover:text-holly-700 text-lg leading-none">&times;</button>
-        </div>
-
         <!-- Panel 1 — rules & quotas -->
         <section class="bg-white rounded-3xl ring-1 ring-black/5 shadow-card p-6 md:p-8">
           <div class="flex items-start justify-between gap-4">
@@ -356,7 +506,7 @@
           <div class="mt-7">
             <p class="label mb-2" x-text="t('rules.quotas')"></p>
             <div class="rounded-2xl ring-1 ring-black/8 overflow-hidden">
-              <table class="w-full text-sm">
+              <table id="quota-table" class="w-full text-sm">
                 <thead>
                   <tr class="bg-pine-50/80 text-pine-700">
                     <th class="p-3 text-left font-semibold" x-text="t('rules.whoDraws')"></th>
@@ -553,26 +703,26 @@
                   <td colspan="7" class="py-8 text-center text-pine-600/70" x-text="t('roster.empty')"></td>
                 </tr>
                 <template x-for="p in visibleParticipants" :key="p.id">
-                  <tr class="hover:bg-pine-50/40 transition">
-                    <td class="py-3 pr-3 align-top">
+                  <tr class="part hover:bg-pine-50/40 transition">
+                    <td :data-label="t('roster.name')">
                       <p class="font-semibold text-pine-800" x-text="p.name"></p>
                       <p x-show="p.wishlist" x-cloak class="text-xs text-pine-600/75 mt-0.5 max-w-[22rem] truncate"
                          :title="p.wishlist" x-text="t('roster.wishlistIs') + ' ' + p.wishlist"></p>
                     </td>
-                    <td class="py-3 px-3 align-top">
+                    <td :data-label="t('roster.role')">
                       <span class="chip" :class="p.role === 'ADULT' ? 'bg-pine-50 text-pine-600' : 'bg-gold-100 text-gold-600'"
                             x-text="t('role.' + p.role)"></span>
                       <p class="text-[11px] text-pine-600/65 mt-1"
                          x-text="drawsOf(p) ? t('roster.giftsN', { n: drawsOf(p) }) : t('roster.noGiftsNote')"></p>
                     </td>
-                    <td class="py-3 px-3 align-top text-pine-700" x-text="p.family_group"></td>
-                    <td class="py-3 px-3 align-top">
+                    <td :data-label="t('roster.family')" class="text-pine-700" x-text="p.family_group"></td>
+                    <td :data-label="t('roster.group')">
                       <span x-show="p.group_key" x-cloak class="chip bg-pine-50 text-pine-700"
                             :title="t('roster.groupHelp')" x-text="p.group_key"></span>
                       <span x-show="!p.group_key" class="chip bg-black/5 text-pine-600/60"
                             x-text="t('roster.noGroup')"></span>
                     </td>
-                    <td class="py-3 px-3 align-top">
+                    <td :data-label="t('roster.email')">
                       <!-- Free text on purpose (the organizer asked): a typo is flagged here, refused
                            only at send time by the server. -->
                       <input type="text" class="field text-xs py-1.5 px-2 w-44"
@@ -588,19 +738,19 @@
                         <span class="chip bg-pine-100 text-pine-700" :title="formatDate(p.email_sent_at)">
                           <svg class="w-3 h-3"><use href="#i-mail"/></svg>
                           <span x-text="t('roster.mailed')"></span>
-                          <span class="font-normal opacity-75" x-text="relative(p.email_sent_at)"></span>
+                          <span class="chip-time font-normal opacity-75" x-text="relative(p.email_sent_at)"></span>
                         </span>
                       </p>
                     </td>
-                    <td class="py-3 px-3 align-top">
+                    <td :data-label="t('roster.status')">
                       <span x-show="p.viewed_at" x-cloak class="chip bg-pine-100 text-pine-700" :title="formatDate(p.viewed_at)">
                         <svg class="w-3 h-3"><use href="#i-check"/></svg>
                         <span x-text="t('roster.viewed')"></span>
-                        <span class="font-normal opacity-75" x-text="relative(p.viewed_at)"></span>
+                        <span class="chip-time font-normal opacity-75" x-text="relative(p.viewed_at)"></span>
                       </span>
                       <span x-show="!p.viewed_at" class="chip bg-black/5 text-pine-600/70" x-text="t('roster.unopened')"></span>
                     </td>
-                    <td class="py-3 pl-3 align-top text-right whitespace-nowrap">
+                    <td class="part-actions" :data-label="t('roster.actions')">
                       <button @click="copyLink(p)" :disabled="!p.token" class="btn btn-quiet px-3 py-1.5 text-xs">
                         <svg class="w-3 h-3"><use href="#i-link"/></svg>
                         <span x-text="copiedId === p.id ? t('roster.copied') : t('roster.copy')"></span>
@@ -682,6 +832,8 @@
           </div>
         </section>
 
+        </div><!-- /one draw: the console -->
+
         <!-- Email preview modal: srcdoc iframe so the mail's inline styles cannot fight the
              console's Tailwind, and nothing from the template runs in this document. -->
         <div x-show="previewOpen" x-cloak x-on:keydown.escape.window="previewOpen = false"
@@ -697,7 +849,7 @@
               <button @click="previewOpen = false" class="btn btn-quiet px-3 py-1.5 text-xs" x-text="t('mail.close')"></button>
             </div>
             <iframe x-show="previewBody" x-cloak :srcdoc="previewBody ? previewBody.html : ''" frameborder="0"
-                    class="w-full grow min-h-[420px]" :title="t('mail.preview_title')"></iframe>
+                    id="preview-frame" class="w-full grow min-h-[420px]" :title="t('mail.preview_title')"></iframe>
           </div>
         </div>
       </div>
@@ -905,6 +1057,34 @@ const I18N = {
     'state.locked': 'Tirage verrouillé',
     'state.open': 'Tirage ouvert',
 
+    'draws.kicker': 'Tirages',
+    'draws.title': 'Choisis un tirage',
+    'draws.sub': 'Chaque tirage a ses participants, ses règles et ses liens à lui.',
+    'draws.empty': 'Aucun tirage sur ce serveur pour l’instant. Crée-en un un peu plus bas.',
+    'draws.open': 'Ouvrir',
+    'draws.delete': 'Supprimer',
+    'draws.deleteLockedHelp': 'Un tirage verrouillé se supprime après l’avoir recommencé.',
+    'draws.new': 'Nouveau tirage',
+    'draws.newTitle': 'Ouvrir un autre échange',
+    'draws.nameField': 'Nom du tirage',
+    'draws.namePlaceholder': 'Ex. Réveillon chez Gaétan',
+    'draws.budgetField': 'Note de budget (facultatif)',
+    'draws.copyField': 'Copier les participants de…',
+    'draws.copyNone': 'Personne (roster vide)',
+    'draws.copyHelp': 'Les personnes et leurs adresses viennent avec; pas les liens, pas les résultats.',
+    'draws.create': 'Créer le tirage',
+    'draws.back': 'Tous les tirages',
+    'draws.opened_on': 'Ouvert le {at}',
+    'draws.status_open': 'Pas encore tiré',
+    'draws.status_locked': 'Tiré',
+    'draws.status_drawn': 'Tiré le {at}',
+    'draws.counts': '{people} personne(s) · {mailed} lien(s) envoyé(s) · {opened} ouvert(s)',
+    'draws.created': 'Tirage « {title} » créé.',
+    'draws.deleted': 'Tirage « {title} » supprimé.',
+    'draws.confirmDelete': 'Supprimer le tirage « {title} » et ses {n} participant(s)? Leurs liens ne fonctionneront plus.',
+    'err.drawGone': 'Ce tirage n’existe plus.',
+    'err.pickDraw': 'Choisis un tirage dans la liste.',
+
     'warn.title': 'Ça ne marchera pas',
     'warn.adultsNeed': 'Chaque adulte doit piger {need} adulte(s), mais il n’y en a que {available} en tout dans la liste.',
     'warn.childrenNeed': 'Chaque adulte doit piger {need} enfant(s), mais il n’y en a que {available} en tout dans la liste.',
@@ -1079,6 +1259,34 @@ const I18N = {
     'state.locked': 'Draw locked',
     'state.open': 'Draw open',
 
+    'draws.kicker': 'Draws',
+    'draws.title': 'Pick a draw',
+    'draws.sub': 'Each draw has its own participants, rules and links.',
+    'draws.empty': 'No draws on this server yet. Create one below.',
+    'draws.open': 'Open',
+    'draws.delete': 'Delete',
+    'draws.deleteLockedHelp': 'A locked draw can be deleted after resetting it.',
+    'draws.new': 'New draw',
+    'draws.newTitle': 'Start another exchange',
+    'draws.nameField': 'Draw name',
+    'draws.namePlaceholder': 'e.g. New Year at Gaétan’s',
+    'draws.budgetField': 'Budget note (optional)',
+    'draws.copyField': 'Copy the participants from…',
+    'draws.copyNone': 'Nobody (empty roster)',
+    'draws.copyHelp': 'People and addresses come along; links and results do not.',
+    'draws.create': 'Create the draw',
+    'draws.back': 'All draws',
+    'draws.opened_on': 'Created {at}',
+    'draws.status_open': 'Not drawn yet',
+    'draws.status_locked': 'Drawn',
+    'draws.status_drawn': 'Drawn {at}',
+    'draws.counts': '{people} people · {mailed} link(s) sent · {opened} opened',
+    'draws.created': 'Draw “{title}” created.',
+    'draws.deleted': 'Draw “{title}” deleted.',
+    'draws.confirmDelete': 'Delete the draw “{title}” and its {n} participant(s)? Their links will stop working.',
+    'err.drawGone': 'That draw no longer exists.',
+    'err.pickDraw': 'Pick a draw from the list.',
+
     'warn.title': 'The draw is likely to fail',
     'warn.adultsNeed': 'Each adult must draw {need} adult(s), but there are only {available} adults in the roster.',
     'warn.childrenNeed': 'Each adult must draw {need} child(ren), but there are only {available} children in the roster.',
@@ -1153,7 +1361,7 @@ const I18N = {
     'roster.unopened': 'Unopened',
     'roster.copy': 'Copy link',
     'roster.copied': 'Copied!',
-    'roster.delete': 'Delete',
+    'roster.delete': 'Remove',
     'roster.confirmDelete': 'Remove {name} from the roster?',
     'roster.noGiftsNote': 'draws no gifts',
     'roster.giftsN': '{n} gift(s) to buy',
@@ -1256,6 +1464,10 @@ function giftExchange() {
 
     authed: false, busy: false, loginError: '', pwDraft: '',
     adminError: '', adminErrorTitle: '', securityNotice: '',
+    /* Draws (one server, several events). `activeDraw` is the console's subject: null means the
+       list screen is showing. It lives in the URL (?draw=7) so a reload or a shared bookmark
+       lands on the same event instead of dumping the organizer back on the list. */
+    draws: [], activeDraw: null, drawDraft: { event_title: '', budget_note: '', copy_from: '' },
     cfg: { event_title: '', budget_note: '', adult_draws_adult: 1, adult_draws_child: 2, child_draws_adult: 0, child_draws_child: 0, avoid_same_group: true, email_language: 'fr', auto_email_on_draw: false },
     savedCfg: null,
     participants: [], locked: false, groupFilter: '',
@@ -1277,6 +1489,9 @@ function giftExchange() {
     },
     get pageTitle() {
       if (this.mode === 'participant') return this.data.event_title || this.t('brand');
+      // The list screen is not about one draw, so it must not borrow a title from the last one
+      // the organizer had open.
+      if (this.activeDraw === null) return this.t('draws.title');
       return this.cfg.event_title || this.t('admin.title');
     },
     get adults() { return this.participants.filter(p => p.role === 'ADULT'); },
@@ -1458,7 +1673,18 @@ function giftExchange() {
         await this.loadDraw();
       } else if (sessionStorage.getItem('ge_admin_token') || sessionStorage.getItem('admin_pw')) {
         this.authed = true;
-        await this.loadState();
+        await this.enterAdmin(params);
+      }
+    },
+
+    /* Where an organizer lands: the draw in the URL if it still exists, otherwise the list. A
+       bookmarked console link is worth keeping across a reload, but a deleted draw must not leave
+       the screen pointing at nothing. */
+    async enterAdmin(params) {
+      await this.loadDraws();
+      const wanted = parseInt(params.get('draw'), 10);
+      if (Number.isInteger(wanted) && this.draws.some(entry => entry.id === wanted)) {
+        await this.openDraw(wanted);
       }
     },
 
@@ -1536,6 +1762,10 @@ function giftExchange() {
       if (detail.includes('refused the send')) return this.t('err.sendFailed');
       if (detail.includes('locked')) return this.t('err.locked');
       if (detail.includes('no participants')) return this.t('err.noParticipants');
+      // Multi-draw: a stale bookmark or a deleted draw. Both mean "this screen is pointing at
+      // nothing", and the fix is the same — go back to the list and pick one.
+      if (detail.includes('draw does not exist')) return this.t('err.drawGone');
+      if (detail.includes('No draw selected') || detail.includes('no draw yet')) return this.t('err.pickDraw');
       return detail || this.t(fallbackKey || 'err.unknown');
     },
     showAdminError(response, fallbackKey) {
@@ -1544,6 +1774,73 @@ function giftExchange() {
       this.adminError = this.errorText(response, fallbackKey);
     },
     clearAdminError() { this.adminError = ''; this.adminErrorTitle = ''; },
+
+    /* ---------- draws (the list screen) ---------- */
+    drawPath(path) {
+      /* Every admin call except the draw list and the login pair is about one draw. The server
+         refuses to guess once a second draw exists, so the id travels on every request. */
+      if (this.activeDraw === null) return path;
+      return path + (path.includes('?') ? '&' : '?') + 'draw_id=' + encodeURIComponent(this.activeDraw);
+    },
+
+    async loadDraws() {
+      const response = await this.api('/api/admin/draws', { method: 'GET' }, true);
+      if (!response.ok) { this.showAdminError(response); return; }
+      this.draws = response.body.draws || [];
+      this.emailEnabled = !!response.body.email_enabled;
+    },
+
+    async openDraw(id) {
+      this.activeDraw = id;
+      this.clearAdminError();
+      window.history.replaceState({}, '', '/?draw=' + encodeURIComponent(id));
+      await this.loadState();
+    },
+
+    backToDraws() {
+      this.activeDraw = null;
+      this.previewOpen = false;
+      this.groupFilter = '';
+      window.history.replaceState({}, '', '/');
+      // The tab stops naming one event as soon as the organizer is back among several.
+      document.title = this.t('brand');
+      this.loadDraws();
+    },
+
+    async createDraw() {
+      if (!this.drawDraft.event_title.trim()) return;
+      this.busy = true;
+      this.clearAdminError();
+      const body = { event_title: this.drawDraft.event_title, budget_note: this.drawDraft.budget_note };
+      if (this.drawDraft.copy_from) body.copy_participants_from = Number(this.drawDraft.copy_from);
+      const response = await this.api('/api/admin/draws', { method: 'POST', body: JSON.stringify(body) }, true);
+      this.busy = false;
+      if (!response.ok) { this.showAdminError(response); return; }
+      this.drawDraft = { event_title: '', budget_note: '', copy_from: '' };
+      this.toast(this.t('draws.created', { title: response.body.draw.event_title }));
+      await this.openDraw(response.body.draw.id);
+    },
+
+    async deleteDraw(entry) {
+      if (!window.confirm(this.t('draws.confirmDelete', { title: entry.event_title, n: entry.participants }))) return;
+      this.busy = true;
+      const response = await this.api(`/api/admin/draws/${entry.id}`, { method: 'DELETE' }, true);
+      this.busy = false;
+      if (!response.ok) { this.showAdminError(response); return; }
+      this.toast(this.t('draws.deleted', { title: entry.event_title }));
+      await this.loadDraws();
+    },
+
+    /* One status line per draw, in the words the console already uses for locked/open. A draw
+       locked before this version has no drawn_at, so it says "verrouillé" without inventing a date. */
+    drawStatus(entry) {
+      if (!entry.is_locked) return this.t('draws.status_open');
+      return entry.drawn_at ? this.t('draws.status_drawn', { at: this.formatDate(entry.drawn_at) })
+                            : this.t('draws.status_locked');
+    },
+    drawCounts(entry) {
+      return this.t('draws.counts', { people: entry.participants, mailed: entry.mailed, opened: entry.opened });
+    },
 
     /* ---------- admin ---------- */
     async login() {
@@ -1559,7 +1856,7 @@ function giftExchange() {
       sessionStorage.setItem('ge_admin_token', response.body.token);
       this.pwDraft = '';
       this.authed = true;
-      await this.loadState();
+      await this.enterAdmin(new URLSearchParams(window.location.search));
     },
     async lock() {
       await this.api('/api/admin/logout', { method: 'POST', body: '{}' }, true);
@@ -1567,11 +1864,14 @@ function giftExchange() {
       sessionStorage.removeItem('admin_pw');
       this.authed = false;
       this.participants = [];
+      this.draws = [];
+      this.activeDraw = null;
+      window.history.replaceState({}, '', '/');
       this.clearAdminError();
       this.securityNotice = '';
     },
     async loadState() {
-      const response = await this.api('/api/admin/state', { method: 'GET' }, true);
+      const response = await this.api(this.drawPath('/api/admin/state'), { method: 'GET' }, true);
       if (!response.ok) return;
       this.cfg = asAdminConfig(response.body.config);
       this.savedCfg = { ...this.cfg };
@@ -1589,7 +1889,7 @@ function giftExchange() {
       body.avoid_same_group = !!this.cfg.avoid_same_group;
       body.email_language = this.cfg.email_language === 'en' ? 'en' : 'fr';
       body.auto_email_on_draw = !!this.cfg.auto_email_on_draw;
-      const response = await this.api('/api/admin/config', { method: 'PUT', body: JSON.stringify(body) }, true);
+      const response = await this.api(this.drawPath('/api/admin/config'), { method: 'PUT', body: JSON.stringify(body) }, true);
       this.busy = false;
       if (response.ok) this.toast(this.t('rules.saved'));
       else this.showAdminError(response);
@@ -1599,7 +1899,7 @@ function giftExchange() {
       if (!this.draftReady) return;
       this.busy = true;
       this.clearAdminError();
-      const response = await this.api('/api/admin/participants', { method: 'POST', body: JSON.stringify(this.draft) }, true);
+      const response = await this.api(this.drawPath('/api/admin/participants'), { method: 'POST', body: JSON.stringify(this.draft) }, true);
       this.busy = false;
       if (!response.ok) { this.showAdminError(response); return; }
       this.draft = { name: '', role: this.draft.role, family_group: this.draft.family_group,
@@ -1611,7 +1911,7 @@ function giftExchange() {
     async removeParticipant(person) {
       if (!window.confirm(this.t('roster.confirmDelete', { name: person.name }))) return;
       this.busy = true;
-      const response = await this.api(`/api/admin/participants/${person.id}`, { method: 'DELETE' }, true);
+      const response = await this.api(this.drawPath(`/api/admin/participants/${person.id}`), { method: 'DELETE' }, true);
       this.busy = false;
       if (!response.ok) this.showAdminError(response);
       else await this.loadState();
@@ -1659,7 +1959,7 @@ function giftExchange() {
     async saveEmail(person) {
       // Fires on change (blur/Enter), not per keystroke: free text in, normalized by the server.
       this.clearAdminError();
-      const response = await this.api(`/api/admin/participants/${person.id}`,
+      const response = await this.api(this.drawPath(`/api/admin/participants/${person.id}`),
         { method: 'PUT', body: JSON.stringify({ email: person.email || '' }) }, true);
       if (!response.ok) this.showAdminError(response);
       else this.toast(this.t('roster.email_saved', { name: person.name }));
@@ -1668,7 +1968,7 @@ function giftExchange() {
     async sendEmail(person) {
       this.emailBusyId = person.id;
       this.clearAdminError();
-      const response = await this.api(`/api/admin/participants/${person.id}/email`,
+      const response = await this.api(this.drawPath(`/api/admin/participants/${person.id}/email`),
         { method: 'POST', body: '{}' }, true);
       this.emailBusyId = null;
       if (!response.ok) { this.showAdminError(response); await this.loadState(); return; }
@@ -1679,7 +1979,7 @@ function giftExchange() {
       if (!window.confirm(this.t('roster.send_all_help'))) return;
       this.sendingAll = true;
       this.clearAdminError();
-      const response = await this.api('/api/admin/emails', { method: 'POST', body: '{}' }, true);
+      const response = await this.api(this.drawPath('/api/admin/emails'), { method: 'POST', body: '{}' }, true);
       this.sendingAll = false;
       if (!response.ok) { this.showAdminError(response); return; }
       this.toast(this.t('roster.bulk_done', { sent: response.body.sent }));
@@ -1689,7 +1989,7 @@ function giftExchange() {
     },
     async previewEmail() {
       this.clearAdminError();
-      const response = await this.api('/api/admin/emails/preview', {
+      const response = await this.api(this.drawPath('/api/admin/emails/preview'), {
         method: 'POST',
         body: JSON.stringify({ language: this.cfg.email_language,
                                state: this.locked ? 'ready' : 'pending' }),
@@ -1703,7 +2003,7 @@ function giftExchange() {
       if (!window.confirm(this.t('draw.confirmGenerate', { gifts: this.totals.gifts }))) return;
       this.busy = true;
       this.clearAdminError();
-      const response = await this.api('/api/admin/draw', { method: 'POST', body: '{}' }, true);
+      const response = await this.api(this.drawPath('/api/admin/draw'), { method: 'POST', body: '{}' }, true);
       this.busy = false;
       if (!response.ok) {
         this.showAdminError(response);
@@ -1727,7 +2027,7 @@ function giftExchange() {
       if (!window.confirm(this.t('draw.confirmReset'))) return;
       this.busy = true;
       this.clearAdminError();
-      const response = await this.api('/api/admin/reset', { method: 'POST', body: '{}' }, true);
+      const response = await this.api(this.drawPath('/api/admin/reset'), { method: 'POST', body: '{}' }, true);
       this.busy = false;
       if (!response.ok) { this.showAdminError(response); return; }
       this.toast(this.t('draw.resetDone'));
