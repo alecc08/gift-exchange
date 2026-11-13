@@ -879,3 +879,71 @@ refused locked delete → delete → **390 px and 360 px with no element outside
 horizontal scroll**, and passes clean: no console errors, no page errors, no raw i18n keys. Overflow
 probed by measurement (1440/1024/900/768/430/390/360 on the list, the console and the participant
 reveal), email art checked at 620 px and 390 px.
+
+## One email per mailbox (addendum, 2026-11-13)
+
+**The ask.** "At most one email per email address is sent… in a family where 3 are linked to the
+same email, let's simply have the 3 links clearly identified in the email, as well as the email
+title along with the draw's name: *Pige Adultes, Alec, Gabrielle voici vos liens*. Maybe this should
+be its own template since it might be hard to adapt the single-recipient wording." Both halves of
+that sentence turned out to be the right call, and for the same reason: singular copy bent into a
+plural shape reads like a bug, and a family that gets three near-identical mails in one minute reads
+it as abuse — the receiver's spam filter and the tired parent both.
+
+**Grouping lives in exactly one place.** `_group_by_address()` bundles participants by the address
+they gave, in first-seen roster order, and *every* send path (bulk, per-row, auto-on-draw) goes
+through it. That is the whole design: a rule remembered separately by three callers is a rule that
+drifts. A blank or unsendable address stays a group of one, so the report can still name the uncle
+who was skipped instead of hiding him inside a neighbour's row.
+
+Two older pieces were deleted rather than kept as insurance:
+
+- `_interleave_by_address()` — the previous mitigation (spread the repeats out). Grouping makes the
+  repeat impossible, so a scheduler is now dead weight.
+- `deliver_link_email()` — one person, one mail. `deliver_household_email()` replaces it and stamps
+  `email_sent_at` on the whole group: two relatives "mailed" and a third showing « Jamais envoyé »
+  is the failure mode this had to avoid. `ready` (drawn yet?) is passed in as an argument instead of
+  being re-read from a settings row, because with several draws on one server there is no single row
+  to read.
+
+**A second template, on the same shell.** `build_email()` (one link) and `build_links_email()`
+(household) both render `_email_shell()` + `_email_assets()`, so the palette, the art and the footer
+cannot drift. The wording is a separate set of strings — `hello_many`, `title_many_*`, `body_many_*`,
+`links_note`, `link_label`, `link_button`, `privacy_many`, `subject_many(_pending)`, `and`,
+`and_more` — because « ton lien » in a mail holding three links is simply untrue, and conditional
+`{% if n > 1 %}` sprinkles would have made the template unreadable. Each link is labelled
+(« Voir le lien de Alec ») so nobody has to guess which button is theirs, and the mail still never
+contains a pairing or an outsider's name.
+
+**Subject.** The ingredients the user asked for — the people, the words « vos liens », the draw name
+— in the order the singular subject already used in production: `Alec, Gabrielle et Hugo — vos liens
+· Pige Adultes`. Kept consistent rather than reordered, because a family that already saw
+« Ghislaine — ton lien secret · Réveillon chez Gaétan » should recognize the pattern, and the event
+title last is the part Gmail truncates. Past `MAX_SUBJECT_NAMES` (3) the list becomes
+« A, B, C et 2 autre(s) » so « vos liens » never scrolls off a phone's list view — which is the whole
+reason the subject names people.
+
+**The console has to say it before the click.** A chip next to « Envoyer les liens par courriel »
+counts « 3 personne(s) · 1 boîte(s) · 1 courriel(s) »; each row's « Envoyer » tooltip explains that
+the address already receives N links; and a row's send now sends the *household* (otherwise three
+clicks on three relatives is three mails anyway). The report answers per person — so a skipped
+address is still named — plus `messages`, the number of mails that really left, and `with: [names]`
+on a single send. The rate limit counts sends, not people: twelve relatives at five mailboxes cost
+five provider calls.
+
+**Transport detail found on the way.** Cloudflare in front of Resend answers `403 / error code: 1010`
+to Python's default `Python-urllib/3.12` agent — measured against the live API: `Python-urllib`
+→ 403 (blocked at the edge, the key never inspected), a browser UA → `401 API key is invalid`
+(Resend itself answering), the old app-string UA → also 401. The default `User-Agent` is now an
+ordinary browser string, still overridable with `RESEND_USER_AGENT`.
+
+**Verification.** 175 tests. `tests/test_emails.py` gained: one mail per mailbox carrying every link
+and no outsider's link, the single-row send grouping the household, two sends to one mailbox staying
+spaced, household names escaped, the same art in both templates with no animation, the subject
+joining names as a sentence and cutting at 3, the household mail in **both** languages, the preview
+`links` parameter (and its 422), and auto-send-on-draw obeying the grouping (3 people at one
+address → `messages == 2`, all three stamped). `tests/test_frontend.py` guards that the rule is
+visible in the UI: the row tooltip, the mailbox counter, the multi-link preview button, and a bulk
+report that still says how many mails left. `tools/check_organizer_ui.py` passes clean on the new
+build, and the live send from production is checked against a real inbox: one mail, three labelled
+links, the names in the subject.

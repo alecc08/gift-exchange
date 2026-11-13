@@ -330,9 +330,21 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   check (`EMAIL_RE`) refuses to spend an API call on it. Fixing an address after the draw is the
   one roster edit allowed *while locked*: `PUT /api/admin/participants/{id}` accepts `email` only,
   and editing it clears `email_sent_at` because the old mail went somewhere else.
-* **What a mail contains:** the event name, the participant's own name, and their own link —
-  never a pairing, never anyone else's name. Names are escaped before they touch the HTML.
-  `X-Entity-Ref-ID` is the participant id, so repeats thread into one conversation.
+* **One email per mailbox.** `_group_by_address()` bundles participants by the address they gave,
+  and every send path (bulk, per-row, auto-on-draw) goes through it, so the rule cannot be forgotten
+  in one place while obeyed in another. Twelve cousins at five addresses is five provider calls, and
+  a mail to a family of three carries **three labelled links** — « Voir le lien de Alec », and so on
+  — never anyone else's. `deliver_household_email()` stamps `email_sent_at` on the whole group, so
+  the roster cannot show two people "mailed" and a third forgotten. Blank and unsendable addresses
+  stay a group of one: the report still names the uncle who was skipped.
+* **Two templates, one shell.** `build_email()` (one link) and `build_links_email()` (a household)
+  share `_email_shell()`/`_email_assets()`, so the art and the palette cannot drift apart. The
+  household copy is its own set of strings (`hello_many`, `body_many_*`, `privacy_many`,
+  `link_label`, …) rather than the singular wording stretched: « ton lien » in a mail that holds
+  three links is a lie, and a template full of `s` conditionals reads worse than a second template.
+* **What a mail contains:** the event name, the participants' names, and their own links — never a
+  pairing, never an outsider's name. Names are escaped before they touch the HTML.
+  `X-Entity-Ref-ID` is the participant id(s) joined, so repeats thread into one conversation.
 * **The link is `/?t=<uuid>`, built by `participant_link()` and nobody else.** That is the URL the
   SPA reads and the one the console's « Copier le lien » hands out. The first real send built it
   from the API's path shape instead (`/draw/<uuid>`), and twelve inboxes got
@@ -340,9 +352,12 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   `GET /draw/<uuid>` now 302s to `/?t=<uuid>` (UUID-shaped only, rate-limited, logged as
   `/draw/<token>`), because emails cannot be unsent; the test that would have caught the original
   follows the link out of the mail body and demands `200 text/html`.
-* **The subject leads with the person:** `Ghislaine — ton lien secret · Réveillon chez Gaétan`.
-  A family shares one inbox, so six mails from one sender with one subject are impossible to tell
-  apart in a phone's list view — and the event title, being last, is the part Gmail truncates.
+* **The subject leads with the people:** `Ghislaine — ton lien secret · Réveillon chez Gaétan` for
+  one person, `Alec, Gabrielle et Hugo — vos liens · Pige Adultes` for a household. A family shares
+  one inbox, so mails from one sender with one subject are impossible to tell apart in a phone's
+  list view — and the event title, being last, is the part Gmail truncates. Past
+  `MAX_SUBJECT_NAMES` (3) the list becomes « A, B, C et 2 autre(s) » rather than pushing the words
+  « vos liens » off the screen.
 * **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake, the big gift
   and the gift strip served from `/static` as `<img>` — Gmail strips inline `<svg>` markup but
   renders SVG files through its image proxy. Without an absolute base URL the art is simply omitted.
@@ -352,29 +367,43 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   (Outlook ignores `@keyframes`, Gmail strips them), and art that silently freezes in half the
   family's inboxes is worse than no animation. The `<img>` carries a localized `alt`, because for a
   screen reader that picture *is* the pitch.
-* **Triggers:** « Envoyer » per row, « Envoyer les liens par courriel » for everyone with an
-  address (per-row report, skipped addresses listed not hidden), and an opt-in
-  `auto_email_on_draw` config switch that mails *after* the draw commits — a dead Resend can
-  never leave a half-drawn event.
+* **Triggers:** « Envoyer » per row (which sends that row's whole *household*, and answers with
+  `with: [names]` so the console can say what really left), « Envoyer les liens par courriel » for
+  everyone with an address (per-person report, skipped addresses listed not hidden, plus
+  `messages` = how many mails actually left), and an opt-in `auto_email_on_draw` config switch that
+  mails *after* the draw commits — a dead Resend can never leave a half-drawn event.
 * **Throttling:** sends are paced by one process-wide gate — a global spacing
   (`EMAIL_SEND_INTERVAL_MS`, default 1200 ms, since Resend's free tier 429s above ~1 req/s) and
-  a longer per-address spacing (`EMAIL_SAME_ADDRESS_GAP_S`, default 4 s). The per-address layer
-  exists for how families actually work: the kids' links all land at one parent, and four mails
-  in one inbox within two seconds reads like abuse to the receiver's spam filter even when the
-  sender is authenticated. Bulk send order interleaves addresses so lanes share the wait, and a
-  429 from the provider gets exactly one retry after `EMAIL_RETRY_AFTER_S` (default 3 s) — never
-  a retry loop.
-* **Preview:** `POST /api/admin/emails/preview` renders the template with a sample name and a
-  sample all-zeros link, so the modal is screenshot-able and cannot leak the roster.
+  a longer per-address spacing (`EMAIL_SAME_ADDRESS_GAP_S`, default 4 s). Since one mailbox gets one
+  mail, the per-address gap now covers the case that is left: the organizer clicking « Envoyer » on
+  a relative in the middle of a bulk run, or re-sending after fixing an address. The rate limit
+  counts *sends*, not people — billing twelve relatives at five mailboxes as twelve would throttle
+  the wrong thing. A 429 from the provider gets exactly one retry after `EMAIL_RETRY_AFTER_S`
+  (default 3 s) — never a retry loop.
+* **Preview:** `POST /api/admin/emails/preview` renders the template with sample names (`Aline`,
+  `Gabrielle`, `Hugo`) and a sample all-zeros link, so the modal is screenshot-able and cannot leak
+  the roster. `links: 1..3` chooses which template to show; the console has two buttons, « Aperçu du
+  courriel » and « Aperçu à plusieurs liens », because a family mail is only believable once you
+  have seen it.
 * **Transport:** stdlib `urllib`, one POST to `api.resend.com/emails`. The `User-Agent` header is
   load-bearing: Cloudflare in front of Resend answers `403 / error code 1010` to Python's default
-  agent. The key is never logged — participant id + Resend message id is the audit trail.
+  `Python-urllib/3.x` agent (measured — a browser UA gets a normal `401 API key is invalid` from
+  Resend itself). The app sends an ordinary browser UA; `RESEND_USER_AGENT` overrides it. The key is
+  never logged — participant ids + Resend message id is the audit trail.
 * **Deliverability:** verified for `alserv.org` — Resend's DKIM (`resend._domainkey`), aligned SPF
   (`send.alserv.org`), and now a DMARC record (`v=DMARC1; p=none`). If your domain has no DMARC,
   expect Gmail to spam a first send; add the TXT record before blaming the template.
   Resend also offers SMTP (`smtp.resend.com`, user `resend`, password = your API key); this app
   uses the API instead: structured errors per send, a message id per participant, and a
   `RESEND_BASE_URL` test hook that SMTP has no equivalent of.
+
+**The send contract**, because the console has to explain what left:
+
+| Endpoint | Behaviour |
+| --- | --- |
+| `POST /api/admin/emails` | Mails everyone with an address in this draw. Answers per person (`results`, so a skipped address is named, not hidden) plus `messages` — twelve people at five addresses answers `sent: 12, messages: 5`. |
+| `POST /api/admin/participants/{id}/email` | Sends that person's **mailbox**: one mail holding every link at that address in this draw, and `with: [names]` says who else was in it. Clicking it three times on three relatives is three mails (each already complete), not nine links' worth of spam. |
+| `POST /api/admin/emails/preview` | `{language?, state?, links?}`. Sample names only, so it can be screenshotted; `links: 3` shows the household template. |
 
 ## The participant view
 
@@ -456,7 +485,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 139 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
+bash run_tests.sh          # 175 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
 #                  security, previews, email delivery
 ```
 
@@ -480,7 +509,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 165 tests
+├── tests/                        # 175 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution

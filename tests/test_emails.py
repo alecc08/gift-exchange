@@ -264,38 +264,66 @@ def test_bulk_send_reports_row_by_row(client, monkeypatch):
 # --------------------------------------------------------------------------- #
 
 
-def test_bulk_never_sends_to_the_same_mailbox_twice_in_a_row(client, monkeypatch):
-    """The kids' links share the parent's address: interleaving spreads them out for free."""
+def test_bulk_sends_one_email_per_mailbox_carrying_every_link(client, monkeypatch):
+    """Three kids at their parent's address cost one mail with three links, not three mails.
+
+    The old behaviour was "interleave so the repeats are spaced out"; this is the stronger promise —
+    there is no repeat at all. A burst of near-identical mails in one inbox reads as abuse both to a
+    spam filter and to a tired parent.
+    """
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    for name in ("Enfant Un", "Enfant Deux", "Enfant Trois"):
+        add(client, name, "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Oncle", "ADULT", "Roy", email="oncle@exemple.ca")
+
+    report = client.post("/api/admin/emails", headers=ADMIN).json()
+    assert [m["to"] for m in stub.sent] == ["parent@exemple.ca", "oncle@exemple.ca"]
+    assert (report["sent"], report["messages"]) == (4, 2), "four people, two mailboxes, two sends"
+
+    family_mail = next(m for m in stub.sent if m["to"] == "parent@exemple.ca")
+    for name in ("Enfant Un", "Enfant Deux", "Enfant Trois"):
+        assert name in family_mail["subject"], f"{name} missing from the subject"
+        assert name in family_mail["html"], f"{name}'s link missing from the mail"
+    assert "Oncle" not in family_mail["html"], "a household mail leaked an outsider's link"
+    outsider = next(m for m in stub.sent if m["to"] == "oncle@exemple.ca")
+    assert "Enfant Un" not in outsider["html"], "the single person at another address got the family"
+
+
+def test_a_single_row_send_still_groups_the_household(client, monkeypatch):
+    """« Envoyer » on one row sends the household, so clicking it per relative cannot stack mails."""
     configure_emails(monkeypatch)
     stub = StubTransport()
     monkeypatch.setattr(main, "send_email", stub)
     add(client, "Enfant Un", "CHILD", "Bernier", email="parent@exemple.ca")
     add(client, "Enfant Deux", "CHILD", "Bernier", email="parent@exemple.ca")
-    add(client, "Enfant Trois", "CHILD", "Bernier", email="parent@exemple.ca")
-    add(client, "Oncle", "ADULT", "Roy", email="oncle@exemple.ca")
+    ids = [person["id"] for person in client.get("/api/admin/state", headers=ADMIN).json()["participants"]]
 
-    client.post("/api/admin/emails", headers=ADMIN)
-    order = [m["to"] for m in stub.sent]
-    # One address holds three links and the other one link: after the interleaving runs out of
-    # lanes, repeats are unavoidable — the per-address time gap (tested next) is what makes the
-    # repeat arrive politely. What must hold here is that the other lane is inserted as early
-    # as possible.
-    assert order == ["parent@exemple.ca", "oncle@exemple.ca",
-                     "parent@exemple.ca", "parent@exemple.ca"]
+    first = client.post(f"/api/admin/participants/{ids[0]}/email", headers=ADMIN).json()
+    assert first["messages"] == 1 and first["with"] == ["Enfant Deux"]
+    second = client.post(f"/api/admin/participants/{ids[1]}/email", headers=ADMIN).json()
+    assert second["with"] == ["Enfant Un"]
+    assert len(stub.sent) == 2, "two clicks, two mails — but each one already held both links"
+    assert all("Enfant Un" in mail["html"] and "Enfant Deux" in mail["html"] for mail in stub.sent)
 
 
 def test_same_address_sends_keep_their_distance(client, monkeypatch):
+    """Two sends to one mailbox (two clicks, or a bulk run right after a single send) stay spaced."""
     configure_emails(monkeypatch)
     monkeypatch.setenv("EMAIL_SAME_ADDRESS_GAP_S", "1")
+    monkeypatch.setenv("EMAIL_SEND_INTERVAL_MS", "0")
     stub = StubTransport()
     monkeypatch.setattr(main, "send_email", stub)
-    for name in ("Enfant Un", "Enfant Deux", "Enfant Trois"):
-        add(client, name, "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Enfant Un", "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Enfant Deux", "CHILD", "Roy", email="roy@exemple.ca")
+    ids = [person["id"] for person in client.get("/api/admin/state", headers=ADMIN).json()["participants"]]
 
-    client.post("/api/admin/emails", headers=ADMIN)
-    gaps = [b["at"] - a["at"] for a, b in zip(stub.sent, stub.sent[1:])]
-    assert len(gaps) == 2
-    assert all(g >= 0.95 for g in gaps), gaps
+    client.post(f"/api/admin/participants/{ids[0]}/email", headers=ADMIN)
+    client.post("/api/admin/emails", headers=ADMIN)   # the bulk run re-mails that same mailbox
+    assert [m["to"] for m in stub.sent] == ["parent@exemple.ca", "parent@exemple.ca", "roy@exemple.ca"]
+    gap = stub.sent[1]["at"] - stub.sent[0]["at"]
+    assert gap >= 0.95, f"two mails to one inbox {gap:.2f}s apart"
 
 
 def test_global_spacing_holds_across_different_addresses(client, monkeypatch):
@@ -675,3 +703,116 @@ def test_base_url_hook_redirects_the_send(monkeypatch):
     with pytest.raises(main.EmailSendError):
         main.send_email(to="g@exemple.ca", subject="s", html_body="h", text_body="t", ref_id="r")
     assert seen["url"] == "http://127.0.0.1:9/stub/emails"
+
+
+# --------------------------------------------------------------------------- #
+# One email per mailbox: the household template
+# --------------------------------------------------------------------------- #
+
+
+def household(**kwargs):
+    return main.build_links_email(
+        [{"name": name, "link": f"https://x.test/?t={token}"} for name, token in
+         (("Alec", "aaaa"), ("Gabrielle", "bbbb"), ("Hugo", "cccc"))][:kwargs.pop("count", 3)],
+        "Pige Adultes", kwargs.get("language", "fr"), kwargs.get("ready", True),
+        assets_base="https://tirage-noel.alserv.org")
+
+
+def test_names_join_as_a_sentence_and_the_subject_stays_scannable():
+    copy = main.EMAIL_STRINGS["fr"]
+    assert main._join_names(["Alec"], copy) == "Alec"
+    assert main._join_names(["Alec", "Gabrielle"], copy) == "Alec et Gabrielle"
+    assert main._join_names(["Alec", "Gabrielle", "Hugo"], copy) == "Alec, Gabrielle et Hugo"
+    long_join = main._join_names(["A", "B", "C", "D", "E"], copy)
+    assert long_join.startswith("A, B, C") and "2 autre(s)" in long_join
+    english = main.EMAIL_STRINGS["en"]
+    assert main._join_names(["Alec", "Gabrielle"], english) == "Alec and Gabrielle"
+
+
+def test_the_household_mail_names_every_person_and_carries_every_link():
+    content = household()
+    assert content["subject"].startswith("Alec, Gabrielle et Hugo")
+    assert "Pige Adultes" in content["subject"]
+    for name, token in (("Alec", "aaaa"), ("Gabrielle", "bbbb"), ("Hugo", "cccc")):
+        assert f"?t={token}" in content["html"]
+        assert name in content["text"]
+    assert "Vous êtes 3 à recevoir ce courriel" in content["html"]
+    # the singular promise must not survive into a plural mail
+    assert "ton lien secret" not in content["html"]
+    assert "Gardez ces liens dans la famille" in content["html"]
+
+
+def test_one_person_at_an_address_still_gets_the_singular_letter():
+    content = main.build_links_email([{"name": "Alec", "link": "https://x.test/?t=aaaa"}],
+                                     "Pige Adultes", "fr", True)
+    assert "Salut Alec," in content["text"]
+    assert "ton lien" in content["subject"]
+    assert "Vous êtes 1 à recevoir" not in content["html"]
+
+
+def test_household_names_are_escaped_like_every_other_field():
+    people = [{"name": "A<script>x</script>", "link": "https://x.test/?t=a"},
+              {"name": "B", "link": "https://x.test/?t=b"}]
+    content = main.build_links_email(people, "Noël", "fr", True)
+    assert "<script>" not in content["html"]
+    assert "&lt;script&gt;" in content["html"]
+
+
+def test_the_household_mail_carries_the_same_art_without_animation():
+    content = household()
+    for asset in ("email-flake.svg", "email-gift.svg", "email-gift-strip.svg"):
+        assert f"/static/{asset}" in content["html"], asset
+    for forbidden in ("<style", "@keyframes", "animation"):
+        assert forbidden not in content["html"], forbidden
+
+
+def test_the_household_mail_works_in_english_too():
+    """Both languages are shipped and the family forwards the mail, so the plural copy is tested
+    in both — an English mail that still says 'your link' (singular) is the same bug in another
+    language."""
+    content = main.build_links_email(
+        [{"name": "Alec", "link": "https://x.test/?t=a"}, {"name": "Gaby", "link": "https://x.test/?t=b"}],
+        "Office swap", "en", True, assets_base="https://tirage-noel.alserv.org")
+    assert content["subject"].startswith("Alec and Gaby")
+    assert "Office swap" in content["subject"]
+    assert "your link ·" not in content["subject"], "the singular subject was reused for two people"
+    assert "Hi Alec and Gaby," in content["text"]
+    assert "Your secret links are ready" in content["html"]
+    assert "There are 2 of you at this address" in content["html"]
+    assert "Open Alec’s link" in content["html"] and "Open Gaby’s link" in content["html"]
+
+
+def test_the_preview_can_show_the_household_template(client):
+    single = client.post("/api/admin/emails/preview", headers=ADMIN,
+                         json={"state": "ready", "language": "fr"}).json()
+    assert single["links"] == 1 and "Salut Aline," in single["text"]
+    many = client.post("/api/admin/emails/preview", headers=ADMIN,
+                       json={"state": "pending", "language": "fr", "links": 3}).json()
+    assert many["links"] == 3
+    assert "Aline, Gabrielle et Hugo" in many["subject"]
+    assert "Le tirage n’a pas encore été fait" in many["text"]
+    # sample links only: the preview must never be able to name a real participant
+    assert many["html"].count("00000000-0000-0000-0000-000000000000") >= 3
+    assert client.post("/api/admin/emails/preview", headers=ADMIN,
+                       json={"links": 99}).status_code == 422
+
+
+def test_auto_email_on_draw_also_sends_once_per_mailbox(client, monkeypatch):
+    """The rule lives in one place, so the automatic send after a draw obeys it too."""
+    stub = StubTransport()
+    configure_emails(monkeypatch)
+    monkeypatch.setattr(main, "send_email", stub)
+    add(client, "Enfant Un", "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Enfant Deux", "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Maman", "ADULT", "Bernier", email="parent@exemple.ca")
+    add(client, "Oncle", "ADULT", "Roy", email="oncle@exemple.ca")
+    set_config(client, **FESTIVE, auto_email_on_draw=True)
+
+    answer = client.post("/api/admin/draw", headers=ADMIN).json()
+    assert answer["emails"]["messages"] == 2, "four people, two mailboxes, two sends"
+    assert answer["emails"]["sent"] == 4
+    assert [m["to"] for m in stub.sent] == ["parent@exemple.ca", "oncle@exemple.ca"]
+    assert len(stub.sent[0]["html"]) > len(stub.sent[1]["html"]), "the household mail carries 3 links"
+    stamps = [person["email_sent_at"] for person in
+              client.get("/api/admin/state", headers=ADMIN).json()["participants"]]
+    assert all(stamps), "everyone in a grouped mail is stamped, not just the first"
