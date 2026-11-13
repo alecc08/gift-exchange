@@ -208,36 +208,100 @@ def _throttle_before_send(address: str) -> None:
         _email_gate_at["by_address"][address] = sent_at
 
 
-def _interleave_by_address(people: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Round-robin across addresses so the same mailbox never receives two consecutive sends.
-    Ordering alone buys the per-address spacing real time to elapse: six kids at one address,
-    interleaved between two other parents, need no extra sleep at all."""
-    queues: dict[str, list[dict[str, Any]]] = {}
-    for person in people:
-        queues.setdefault((person.get("email") or "").strip().lower(), []).append(person)
-    out: list[dict[str, Any]] = []
-    lanes = list(queues.values())
-    while lanes:
-        nxt: list[list[dict[str, Any]]] = []
-        for lane in lanes:
-            out.append(lane[0])
-            if lane[1:]:
-                nxt.append(lane[1:])
-        lanes = nxt
-    return out
-
 # Resend sits behind Cloudflare, and that edge answers `403 / error code: 1010` to Python's
-# default `Python-urllib` agent — measured, not folklore. A real User-Agent is not cosmetic:
-# without it every send fails.
+# default `Python-urllib/3.x` agent — measured, not folklore. The fix is the boring one: send the
+# same ordinary agent string any browser sends. Still overridable with `RESEND_USER_AGENT` in case
+# a future edge decides a browser UA is itself suspicious.
 EMAIL_USER_AGENT = os.environ.get(
-    "RESEND_USER_AGENT", "gift-exchange/1.0 (family gift exchange; tirage-noel.alserv.org)")
+    "RESEND_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                         "(KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36")
+
+
+def _group_by_address(people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Participants bundled by the address they gave, in first-seen roster order.
+
+    One mailbox, one email. At a family event the kids' links all go to one parent, and four
+    near-identical mails landing in one inbox inside a minute read as abuse — to the receiver's spam
+    filter and to the parent. Bundling lives here, in one place, so that *every* send path (bulk,
+    per-row, auto-on-draw) obeys the same rule instead of each remembering to.
+
+    A blank or unsendable address stays a group of one: the report still has to name the person who
+    was skipped, and a skipped uncle must not be hidden inside his neighbour's row.
+    """
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for person in people:
+        address = (person.get("email") or "").strip()
+        key = address.lower() if address and _sendable_email(address) else f"@skip:{person['id']}"
+        if key not in groups:
+            groups[key] = {"address": address, "people": []}
+            order.append(key)
+        groups[key]["people"].append(person)
+    return [groups[key] for key in order]
+
+
+def _skip_rows(people: list[dict[str, Any]], reason: str) -> list[dict[str, Any]]:
+    """One report row per skipped person — never one error that hides who was skipped."""
+    return [{"id": person["id"], "name": person["name"], "ok": False, "reason": reason,
+             "message_id": None, "shared_with": []} for person in people]
+
+
+def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], event_title: str,
+                            language: str, base_url: str, ready: bool) -> list[dict[str, Any]]:
+    """Send one email covering everyone at one address, and stamp every one of them.
+
+    Returns a row per participant, because that is how the roster is read; each row carries
+    `shared_with` so the console can say "one mail, three people" instead of implying three sends.
+
+    `ready` (has this draw been drawn?) is an argument, not a re-read of a settings row: with
+    several draws on one server there is no single row to read, and the caller knows which draw it
+    is mailing.
+
+    Never raises: a batch of twelve must not die on the fourth address.
+    """
+    people = group["people"]
+    address = group["address"]
+    if not email_enabled():
+        return _skip_rows(people, EMAIL_NOT_CONFIGURED)
+    if not address or not _sendable_email(address):
+        return _skip_rows(people, EMAIL_NO_ADDRESS)
+
+    # Spacing happens right before the wire: the organizer may fire a single "Envoyer" in the
+    # middle of a bulk run, and one shared process gate keeps both honest.
+    _throttle_before_send(address.lower())
+    links = [{"name": person["name"], "link": participant_link(base_url, person["token"])}
+             for person in people]
+    content = build_links_email(links, event_title, language, ready, assets_base=base_url)
+    ids = [person["id"] for person in people]
+    try:
+        message_id = send_email(to=address, subject=content["subject"], html_body=content["html"],
+                                text_body=content["text"],
+                                ref_id="+".join(f"gift-exchange-{person_id}" for person_id in ids))
+    except EmailSendError as error:
+        audit("email_send_failed", participant_ids=",".join(map(str, ids)), status=error.status,
+              error=error.message[:120])
+        return _skip_rows(people, EMAIL_SEND_FAILED)
+
+    stamp = utc_now()
+    for person in people:
+        conn.execute("UPDATE participants SET email_sent_at = ? WHERE id = ?", (stamp, person["id"]))
+    # The address itself stays out of the log: participant ids + the provider's message id are
+    # enough to trace a send through Resend's own event feed.
+    audit("email_sent", participant_ids=",".join(map(str, ids)), people=len(people),
+          message_id=message_id or None)
+    names_by_id = {person["id"]: person["name"] for person in people}
+    return [{"id": person["id"], "name": person["name"], "ok": True, "reason": None,
+             "message_id": message_id or None,
+             "shared_with": [name for other_id, name in names_by_id.items()
+                             if other_id != person["id"]]}
+            for person in people]
 
 
 def _clean_email_value(value: str) -> str:
     """Normalize one address: trim, lowercase, cap the length. Blank stays blank — the field is
     opt-out. No format rejection: the organizer asked for free-text, a weird address is not a
     reason to 422 a parent mid-typing. It stays weird in the cell and the UI flags it softly;
-    deliver_link_email only refuses to spend an API call on it at send time.
+    deliver_household_email only refuses to spend an API call on it at send time.
     (Lowercasing is still worth it: no provider people actually use honors case, and
     "same person, two spellings" is how a relative gets two invites.)"""
     return value.strip().lower()[:MAX_EMAIL]
@@ -1113,9 +1177,32 @@ EMAIL_STRINGS = {
         "button": "Ouvrir mon lien",
         "link_note": "Si le bouton ne s’affiche pas, copie ce lien dans ton navigateur :",
         "privacy": "Garde ton lien pour toi : celui qui le tient voit ton tirage.",
+        # Grammar pieces, so a list of names reads as a sentence instead of a comma pile.
+        "and": "et",
+        "and_more": "et {n} autre(s)",
         "footer": "❄ Échange de cadeaux · tirage automatique, jamais dans la même famille",
         "subject_ready": "{name} — ton lien secret · {event}",
         "subject_pending": "{name} — ton lien pour l’échange de cadeaux · {event}",
+        # One mail per mailbox, not per person: at a family event the kids’ links all go to one
+        # parent, and six near-identical mails arriving in one inbox reads like abuse. So the plural
+        # set exists — the singular copy (“Salut X”, “ton lien”) cannot be stretched to three people
+        # without reading like a bug.
+        "hello_many": "Salut {names},",
+        "title_many_ready": "Vos liens secrets sont prêts",
+        "title_many_pending": "Vos liens pour le tirage de Noël",
+        "body_many_ready": ("Vous êtes {n} à recevoir ce courriel, et chacun a son propre lien. "
+                            "Chaque lien ne montre que le tirage de la personne qu’il nomme — "
+                            "personne d’autre ne peut le voir, pas même l’organisateur."),
+        "body_many_pending": ("Le tirage n’a pas encore été fait. Chacun ici a déjà son lien : "
+                              "ajoutez vos listes d’idées, et vous verrez qui vous gâtez dès que "
+                              "le tirage sera lancé."),
+        "links_note": "Un lien par personne — chaque bouton ouvre celle qui est écrite dessus :",
+        "link_button": "Voir le lien de {name}",
+        "link_label": "Lien de {name} :",
+        "privacy_many": "Gardez ces liens dans la famille : celui qui les tient voit les tirages "
+                        "des personnes qu’ils nomment.",
+        "subject_many": "{names} — vos liens · {event}",
+        "subject_many_pending": "{names} — vos liens pour l’échange de cadeaux · {event}",
         # The hero art is not decoration for a screen reader: it is the whole idea of the mail
         # (le résultat est dans la boîte, et toi seul peux l’ouvrir), so it gets described.
         "gift_alt": "Un cadeau bien fermé : le couvercle a sauté et quelqu’un à l’intérieur "
@@ -1134,9 +1221,27 @@ EMAIL_STRINGS = {
         "button": "Open my link",
         "link_note": "If the button does not show up, copy this link into your browser:",
         "privacy": "Keep your link to yourself: whoever holds it sees your draw.",
+        "and": "and",
+        "and_more": "and {n} other(s)",
         "footer": "❄ Gift exchange · automatic draw, never within the same household",
         "subject_ready": "{name} — your secret link · {event}",
         "subject_pending": "{name} — your link for the gift exchange · {event}",
+        "hello_many": "Hi {names},",
+        "title_many_ready": "Your secret links are ready",
+        "title_many_pending": "Your links for the gift exchange",
+        "body_many_ready": ("There are {n} of you at this address, and each person has their own "
+                            "link. Each link shows only the draw of the person named on it — "
+                            "nobody else can see it, not even the organizer."),
+        "body_many_pending": ("The draw has not happened yet. Everyone here already has their own "
+                              "link: add your wishlists, and you will see who you are shopping for "
+                              "as soon as the organizer runs the draw."),
+        "links_note": "One link per person — each button opens the person written on it:",
+        "link_button": "Open {name}’s link",
+        "link_label": "{name}’s link:",
+        "privacy_many": "Keep these links inside the family: whoever holds them sees the draws of "
+                        "the people named on them.",
+        "subject_many": "{names} — your links · {event}",
+        "subject_many_pending": "{names} — your links for the gift exchange · {event}",
         "gift_alt": "A tightly closed gift: the lid has popped off and somebody inside is "
                     "pushing to get out.",
     },
@@ -1145,56 +1250,77 @@ EMAIL_STRINGS = {
 # Site palette, repeated here because inline email styles cannot read the SPA's Tailwind config.
 _PINE_DARK, _PINE, _PINE_SOFT, _GOLD, _GOLD_SOFT, _IVORY = (
     "#143c2e", "#2f6b52", "#b3d0c2", "#d4af62", "#e6c98a", "#faf7f2")
+# Sample names for the preview: never a real participant, and enough of them to show the household
+# template with its links labelled.
+PREVIEW_NAMES = ("Aline", "Gabrielle", "Hugo")
+
 _EMAIL_SANS = "Inter,'Segoe UI',Helvetica,Arial,sans-serif"
 _EMAIL_SERIF = "Fraunces,Georgia,'Times New Roman',serif"
+# One button style, because the singular and the household template must not drift apart — a mail
+# whose second link looks disabled is read as "this one is broken".
+_BUTTON = (f"display:inline-block;background:{_PINE_DARK};color:#ffffff;text-decoration:none;"
+           "padding:12px 22px;border-radius:999px;font-weight:600;font-size:15px")
+
+# Names a subject line is allowed to carry before it stops doing its job: a phone's list view cuts
+# around 70 characters, and the point of the subject is to be scanned, not read.
+MAX_SUBJECT_NAMES = 3
 
 
-def build_email(name: str, event_title: str, link: str, language: str, ready: bool,
-                assets_base: str = "") -> dict[str, str]:
-    """Render one link email. Returns {"subject", "html", "text"}.
+def _email_copy(language: str) -> dict[str, str]:
+    """The FR/EN string table, French for anything unrecognized."""
+    return EMAIL_STRINGS.get((language or "fr").strip().lower(), EMAIL_STRINGS["fr"])
 
-    Every interpolated value is escaped before it touches the HTML: names are free text the
-    organizer typed, and a name containing markup would otherwise style — or script — the mail.
-    The email never contains a pairing: only the participant's own link.
 
-    The Christmas art is <img>-referenced from the site's own /static (the flake, the big gift and
-    the gift strip, same shapes as the interface), never inline <svg>: Gmail strips inline SVG
-    markup but renders SVG files through its image proxy. Without an absolute `assets_base` there is
-    no art at all — a relative src in an email is just a broken image with extra steps. The art is
-    deliberately static: email clients disagree about CSS animation (Outlook ignores keyframes,
-    Gmail strips them), so art that only works in half the inboxes is worse than a still frame.
+def _join_names(names: list[str], copy: dict[str, str]) -> str:
+    """"Alec, Gabrielle et Hugo" — and a cut for a big household, because the subject is what a
+    family scans on a phone and an unbounded list pushes the words « vos liens » off the screen."""
+    if len(names) == 1:
+        return names[0]
+    if len(names) > MAX_SUBJECT_NAMES:
+        rest = len(names) - MAX_SUBJECT_NAMES
+        return ", ".join(names[:MAX_SUBJECT_NAMES]) + " " + copy["and_more"].format(n=rest)
+    return ", ".join(names[:-1]) + f" {copy['and']} " + names[-1]
+
+
+def _email_assets(assets_base: str, copy: dict[str, str]) -> dict[str, str]:
+    """The three `<img>` references, or three empty strings when there is no absolute base.
+
+    Inline `<svg>` is stripped by Gmail; the art is `<img>`-referenced from the site's own /static,
+    which its image proxy does render. A relative src in an email is a broken image with extra
+    steps, so no base means no art. Static on purpose: Outlook ignores `@keyframes` and Gmail
+    strips them, so art that freezes in half the family's inboxes is worse than no art.
     """
-    copy = EMAIL_STRINGS.get((language or "fr").strip().lower(), EMAIL_STRINGS["fr"])
-    title = event_title or (copy["kicker"])
-    # The name comes first, deliberately: a family shares one inbox, and six mails from the same
-    # sender with the same subject are impossible to tell apart in a phone's list view — which is
-    # where the truncation happens anyway. Subject order is the only thing the mailbox sorts by.
-    subject = copy["subject_ready" if ready else "subject_pending"].format(event=title, name=name)
-    hello = copy["hello"].format(name=name)
-    body = copy["body_ready" if ready else "body_pending"]
-    link_note = copy["link_note"]
-    safe_link = html.escape(link, quote=True)
+    base = assets_base.rstrip("/")
+    if not base:
+        return {"flake": "", "gift": "", "strip": ""}
+    flake_url = html.escape(f"{base}/static/email-flake.svg", quote=True)
+    gift_url = html.escape(f"{base}/static/email-gift.svg", quote=True)
+    strip_url = html.escape(f"{base}/static/email-gift-strip.svg", quote=True)
+    alt = html.escape(copy["gift_alt"], quote=True)
+    gift = (f'<div style="padding:26px 28px 2px;text-align:center"><img src="{gift_url}" width="330" '
+            f'height="190" alt="{alt}" style="display:block;width:100%;max-width:330px;margin:0 auto">'
+            f'</div>')
+    strip = (f'<div style="padding:4px 28px 20px"><img src="{strip_url}" width="504" alt="" '
+             f'style="display:block;width:100%;max-width:504px"></div>')
+    flake = f'<img src="{flake_url}" width="56" height="56" alt="" style="display:block">'
+    return {"flake": flake, "gift": gift, "strip": strip}
 
-    art = assets_base.rstrip("/")
-    flake = f'<img src="{html.escape(art + "/static/email-flake.svg", quote=True)}" width="56" ' \
-            'height="56" alt="" style="display:block">' if art else ""
-    # The hero: the gift is shut, the lid has jumped, and somebody inside is pushing. That is the
-    # app's whole promise in one picture — the result is already in the box, and only the reader can
-    # open it. Static art in an <img>, no CSS animation: Outlook ignores keyframes and Gmail strips
-    # them, and a joke that only lands in half the inboxes is worse than no joke.
-    gift = f'<div style="padding:26px 28px 2px;text-align:center">\
-<img src="{html.escape(art + "/static/email-gift.svg", quote=True)}" width="330" alt="\
-{html.escape(copy['gift_alt'], quote=True)}" style="display:block;width:100%;max-width:330px;\
-margin:0 auto" height="190"></div>' if art else ""
-    strip = f'<div style="padding:4px 28px 20px"><img src="\
-{html.escape(art + "/static/email-gift-strip.svg", quote=True)}" width="504" alt="" \
-style="display:block;width:100%;max-width:504px"></div>' if art else ""
 
+def _email_shell(*, copy: dict[str, str], title: str, heading: str, subject: str,
+                 assets_base: str, privacy: str, content_html: str,
+                 text_lines: list[str]) -> dict[str, str]:
+    """The chrome both email templates share: pine header, hero gift, ivory card, strip, footer.
+
+    Shared so that a change to the art, the header or the privacy line lands in both the single-link
+    and the household mail at once — two templates that drift are two templates where one of them
+    quietly stops saying "your link is secret".
+    """
+    art = _email_assets(assets_base, copy)
     header_text = f"""\
 <div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:{_GOLD}">\
 {html.escape(copy['kicker'])}</div>
       <div style="font-family:{_EMAIL_SERIF};font-size:26px;line-height:1.25;margin-top:8px">\
-{html.escape(copy['title_ready' if ready else 'title_pending'])}</div>
+{html.escape(heading)}</div>
       <div style="font-size:13px;color:{_PINE_SOFT};margin-top:6px">{html.escape(title)}</div>"""
 
     html_body = f"""\
@@ -1205,76 +1331,109 @@ border-radius:20px;overflow:hidden">
 style="background:{_PINE_DARK}">
       <tr>
         <td style="padding:24px 12px 24px 28px;color:#ffffff">{header_text}</td>
-        <td width="84" align="right" valign="top" style="padding:20px 22px 0 0">{flake}</td>
+        <td width="84" align="right" valign="top" style="padding:20px 22px 0 0">{art['flake']}</td>
       </tr>
     </table>
-    {gift}
+    {art['gift']}
     <div style="padding:28px;color:#1f5340;font-size:15px;line-height:1.65">
-      <p style="margin:0 0 14px">{html.escape(hello)}</p>
-      <p style="margin:0 0 24px">{html.escape(body)}</p>
-      <p style="margin:0 0 24px">
-        <a href="{safe_link}" style="display:inline-block;background:{_PINE_DARK};color:#ffffff;\
-text-decoration:none;padding:13px 24px;border-radius:999px;font-weight:600;font-size:15px">\
-{html.escape(copy['button'])}</a>
-      </p>
-      <p style="margin:0 0 6px;color:{_PINE};font-size:13px">{html.escape(link_note)}</p>
-      <p style="margin:0;font-size:13px;word-break:break-all;color:{_PINE}">\
-<a href="{safe_link}" style="color:{_PINE}">{html.escape(link)}</a></p>
+{content_html}
     </div>
-    {strip}
+    {art['strip']}
     <div style="padding:16px 28px;border-top:1px solid {_GOLD_SOFT};color:{_PINE};\
-font-size:12px;line-height:1.7">{html.escape(copy['privacy'])}<br>{html.escape(copy['footer'])}</div>
+font-size:12px;line-height:1.7">{html.escape(privacy)}<br>{html.escape(copy['footer'])}</div>
   </div>
 </div>"""
 
-    text_body = (
-        f"{copy['kicker']}\n\n{copy['title_ready' if ready else 'title_pending']}\n{title}\n\n"
-        f"{hello}\n\n{body}\n\n{copy['button']}: {link}\n\n{link_note}\n{link}\n\n"
-        f"{copy['privacy']}\n{copy['footer']}\n"
-    )
+    text_body = (f"{copy['kicker']}\n\n{heading}\n{title}\n\n"
+                 + "\n\n".join(text_lines)
+                 + f"\n\n{privacy}\n{copy['footer']}\n")
     return {"subject": subject, "html": html_body, "text": text_body}
 
 
-def deliver_link_email(conn: sqlite3.Connection, participant: dict[str, Any], event_title: str,
-                       language: str, base_url: str, ready: bool) -> dict[str, Any]:
-    """Send one participant their link, and stamp email_sent_at when Resend accepted it.
+def build_email(name: str, event_title: str, link: str, language: str, ready: bool,
+                assets_base: str = "") -> dict[str, str]:
+    """Render the single-link email: one person, one link, one "ton lien".
 
-    `ready` (has this draw been drawn?) arrives as an argument instead of being re-read from a
-    settings row: with several draws on one server there is no longer one row to read, and the
-    caller already knows which draw it is mailing.
+    The household case (several participants sharing one mailbox) is `build_links_email`, and it has
+    its own copy on purpose: "Salut Alec," and "ton lien" cannot be stretched over three people
+    without reading like a bug.
+    """
+    copy = _email_copy(language)
+    title = event_title or copy["kicker"]
+    # The name comes first, deliberately: a family shares one inbox, and six mails from the same
+    # sender with one subject are impossible to tell apart in a phone's list view — which is where
+    # the truncation happens anyway. Subject order is the only thing the mailbox sorts by.
+    subject = copy["subject_ready" if ready else "subject_pending"].format(event=title, name=name)
+    heading = copy["title_ready" if ready else "title_pending"]
+    hello = copy["hello"].format(name=name)
+    body = copy["body_ready" if ready else "body_pending"]
+    link_note = copy["link_note"]
+    safe_link = html.escape(link, quote=True)
 
-    Never raises: the caller gets a per-participant result row. A batch of twelve must not die on
-    the fourth address, and the organizer console needs to see exactly which ones failed."""
-    if not email_enabled():
-        return {"id": participant["id"], "name": participant["name"], "ok": False,
-                "reason": EMAIL_NOT_CONFIGURED, "message_id": None}
-    address = (participant.get("email") or "").strip()
-    if not address or not _sendable_email(address):
-        return {"id": participant["id"], "name": participant["name"], "ok": False,
-                "reason": EMAIL_NO_ADDRESS, "message_id": None}
+    content = f"""\
+      <p style="margin:0 0 14px">{html.escape(hello)}</p>
+      <p style="margin:0 0 24px">{html.escape(body)}</p>
+      <p style="margin:0 0 24px">
+        <a href="{safe_link}" style="{_BUTTON}">{html.escape(copy['button'])}</a>
+      </p>
+      <p style="margin:0 0 6px;color:{_PINE};font-size:13px">{html.escape(link_note)}</p>
+      <p style="margin:0;font-size:13px;word-break:break-all;color:{_PINE}">\
+<a href="{safe_link}" style="color:{_PINE}">{html.escape(link)}</a></p>"""
+    return _email_shell(copy=copy, title=title, heading=heading, subject=subject,
+                        assets_base=assets_base, privacy=copy["privacy"], content_html=content,
+                        text_lines=[hello, body, f"{copy['button']}: {link}",
+                                    f"{link_note}\n{link}"])
 
-    # Spacing happens right before the wire: the organizer may fire a single "Envoyer" in the
-    # middle of a bulk run, and one shared process gate keeps both honest.
-    _throttle_before_send(address.lower())
-    link = participant_link(base_url, participant["token"])
-    content = build_email(participant["name"], event_title, link, language, ready,
-                          assets_base=base_url)
-    try:
-        message_id = send_email(to=address, subject=content["subject"], html_body=content["html"],
-                                text_body=content["text"], ref_id=f"gift-exchange-{participant['id']}")
-    except EmailSendError as error:
-        audit("email_send_failed", participant_id=participant["id"], status=error.status,
-              error=error.message[:120])
-        return {"id": participant["id"], "name": participant["name"], "ok": False,
-                "reason": EMAIL_SEND_FAILED, "message_id": None}
 
-    conn.execute("UPDATE participants SET email_sent_at = ? WHERE id = ?",
-                 (utc_now(), participant["id"]))
-    # The address itself stays out of the log: participant id + provider message id is enough
-    # to trace a send through Resend's own event feed.
-    audit("email_sent", participant_id=participant["id"], message_id=message_id or None)
-    return {"id": participant["id"], "name": participant["name"], "ok": True, "reason": None,
-            "message_id": message_id or None}
+def build_links_email(people: list[dict[str, str]], event_title: str, language: str, ready: bool,
+                      assets_base: str = "") -> dict[str, str]:
+    """One email covering several people at one address: each person's link, each one labelled.
+
+    `people` is `[{"name": …, "link": …}, …]` in roster order, so a parent reading it aloud can tell
+    which link belongs to which child. One mail instead of N matters twice: the family's mailbox is
+    one inbox, and a burst of near-identical mails from one sender is what a spam filter — and a
+    tired parent — reads as abuse.
+
+    With a single person this defers to `build_email`, so the address that happens to hold one
+    participant still gets the singular, friendlier copy.
+    """
+    if len(people) == 1:
+        only = people[0]
+        return build_email(only["name"], event_title, only["link"], language, ready, assets_base)
+
+    copy = _email_copy(language)
+    title = event_title or copy["kicker"]
+    names = [person["name"] for person in people]
+    joined = _join_names(names, copy)
+    subject = copy["subject_many" if ready else "subject_many_pending"].format(event=title,
+                                                                              names=joined)
+    heading = copy["title_many_ready" if ready else "title_many_pending"]
+    hello = copy["hello_many"].format(names=joined)
+    body = copy["body_many_ready" if ready else "body_many_pending"].format(n=len(people))
+
+    blocks, text_lines = [], [hello, body, copy["links_note"]]
+    for person in people:
+        safe_link = html.escape(person["link"], quote=True)
+        blocks.append(f"""\
+      <div style="margin:0 0 18px">
+        <p style="margin:0 0 6px;font-size:14px;font-weight:600;color:{_PINE_DARK}">\
+{html.escape(person['name'])}</p>
+        <p style="margin:0 0 6px">
+          <a href="{safe_link}" style="{_BUTTON}">\
+{html.escape(copy['link_button'].format(name=person['name']))}</a>
+        </p>
+        <p style="margin:0;font-size:12px;word-break:break-all;color:{_PINE}">\
+<a href="{safe_link}" style="color:{_PINE}">{html.escape(person['link'])}</a></p>
+      </div>""")
+        text_lines.append(f"{copy['link_label'].format(name=person['name'])}\n{person['link']}")
+
+    content = (f'      <p style="margin:0 0 14px">{html.escape(hello)}</p>\n'
+               f'      <p style="margin:0 0 22px">{html.escape(body)}</p>\n'
+               f'      <p style="margin:0 0 16px;color:{_PINE};font-size:13px">'
+               f'{html.escape(copy["links_note"])}</p>\n' + "\n".join(blocks))
+    return _email_shell(copy=copy, title=title, heading=heading, subject=subject,
+                        assets_base=assets_base, privacy=copy["privacy_many"],
+                        content_html=content, text_lines=text_lines)
 
 
 def _all_participants(conn: sqlite3.Connection, draw_id: int | None = None) -> list[dict[str, Any]]:
@@ -1290,17 +1449,25 @@ def _all_participants(conn: sqlite3.Connection, draw_id: int | None = None) -> l
 
 def send_link_emails(conn: sqlite3.Connection, participants: list[dict[str, Any]],
                      config_row: sqlite3.Row, base_url: str) -> dict[str, Any]:
-    """Send a set of participants their links. One entry per participant in the report — including
-    the ones with no address, so the console can show who was skipped instead of silently omitting
-    an uncle. Interleaved by address first: consecutive mails to the same mailbox are the one
-    pattern the per-address gap exists to prevent, and good ordering makes it wait less."""
-    results = [deliver_link_email(conn, person, config_row["event_title"],
-                                  config_row["email_language"], base_url,
-                                  ready=bool(config_row["is_locked"]))
-               for person in _interleave_by_address(participants)]
+    """Mail a set of participants: at most one email per address, all links inside it.
+
+    The report stays one row per participant — that is how the roster is read, including the people
+    with no address, so the console can show who was skipped instead of silently omitting an uncle —
+    and it adds `messages`, the number of sends that actually went out. Twelve people at five
+    mailboxes is five sends, and the console should say so rather than imply twelve.
+    """
+    results, messages = [], 0
+    for group in _group_by_address(participants):
+        rows = deliver_household_email(conn, group, config_row["event_title"],
+                                       config_row["email_language"], base_url,
+                                       ready=bool(config_row["is_locked"]))
+        if any(row["ok"] for row in rows):
+            messages += 1
+        results += rows
     return {
-        "sent": sum(1 for r in results if r["ok"]),
-        "failed": sum(1 for r in results if not r["ok"]),
+        "sent": sum(1 for row in results if row["ok"]),
+        "failed": sum(1 for row in results if not row["ok"]),
+        "messages": messages,
         "results": results,
     }
 
@@ -1425,9 +1592,11 @@ class WishlistUpdate(BaseModel):
 
 class EmailPreviewRequest(BaseModel):
     """Sample-render the template. There is deliberately no participant field: the preview is
-    meant to be screenshot-able, and real names should not end up in one."""
+    meant to be screenshot-able, and real names should not end up in one. `links` picks the
+    template — one link, or the household mail that carries several people's links in one mail."""
     language: Optional[Literal["fr", "en"]] = None
     state: Literal["pending", "ready"] = "ready"
+    links: int = Field(default=1, ge=1, le=len(PREVIEW_NAMES))
 
 
 class LimitsOut(BaseModel):
@@ -2051,7 +2220,9 @@ def _email_rate_check(request: Request, attempts: int) -> None:
 
 def _send_rows_or_422(request: Request, conn: sqlite3.Connection, people: list[dict[str, Any]],
                       config_row: sqlite3.Row) -> dict[str, Any]:
-    _email_rate_check(request, max(1, sum(1 for p in people if p["email"])))
+    # The limit counts *sends*, not people: twelve relatives at five mailboxes cost five provider
+    # calls, and billing the organizer for twelve would throttle the wrong thing.
+    _email_rate_check(request, max(1, len(_group_by_address(people))))
     if not people:
         raise HTTPException(status_code=422, detail=EMAIL_NO_ADDRESS)
     if not email_enabled():
@@ -2067,17 +2238,30 @@ def email_participant_link(
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Send one participant their link. Works locked or unlocked: before the draw the mail says
-    "the draw has not happened yet, here is your link to add ideas" — the token is already
-    theirs to keep."""
+    """Send this person's link — as one mail per mailbox, like every other send.
+
+    Clicking « Envoyer » on one row of a family of three at one address used to mean three mails in
+    one inbox, and clicking it three times meant six. So the row sends the *household*: one mail
+    carrying every link at that address in this draw, and the response names the others so the
+    console can say what actually went out.
+
+    Works locked or unlocked: before the draw the mail says "the draw has not happened yet, here is
+    your link to add ideas" — the token is already theirs to keep.
+    """
     target = select_draw_id(conn, draw_id)
     row = _participant_row(conn, participant_id, target)
-    result = _send_rows_or_422(request, conn, [_participant_dict(row)], _load_config(conn, target))
-    outcome = result["results"][0]
+    address = (row["email"] or "").strip().lower()
+    if not address:
+        raise HTTPException(status_code=422, detail=EMAIL_NO_ADDRESS)
+    household = [person for person in _all_participants(conn, target)
+                 if (person["email"] or "").strip().lower() == address]
+    report = _send_rows_or_422(request, conn, household, _load_config(conn, target))
+    outcome = next(item for item in report["results"] if item["id"] == participant_id)
     if not outcome["ok"]:
         code = 503 if outcome["reason"] == EMAIL_NOT_CONFIGURED else 422
         raise HTTPException(status_code=code, detail=outcome["reason"])
-    return {"status": "OK", "sent": outcome}
+    return {"status": "OK", "sent": outcome, "messages": report["messages"],
+            "with": [person["name"] for person in household if person["id"] != participant_id]}
 
 
 @app.post("/api/admin/emails", dependencies=[Depends(enforce_api_limit)])
@@ -2108,17 +2292,22 @@ def email_preview(
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Render the template with a sample name and a sample link. No participant data goes into
-    the response, so the preview is safe to screenshot and cannot leak a roster."""
+    """Render the template with sample names and sample links. No participant data goes into the
+    response, so the preview is safe to screenshot and cannot leak a roster. `links` chooses which
+    of the two templates to show: one link, or the household mail that carries several.
+    """
     config_row = _load_config(conn, draw_id)
     language = payload.language or config_row["email_language"]
     base_url = public_base_url(request) or "https://tirage-noel.alserv.org"
-    link = participant_link(base_url, "00000000-0000-0000-0000-000000000000")
-    content = build_email("Aline", config_row["event_title"], link, language,
-                          ready=payload.state == "ready", assets_base=base_url)
-    audit("email_previewed", ip=client_ip(request), language=language, state=payload.state)
+    sample = "00000000-0000-0000-0000-000000000000"
+    people = [{"name": name, "link": participant_link(base_url, sample)}
+              for name in PREVIEW_NAMES[:max(1, payload.links)]]
+    content = build_links_email(people, config_row["event_title"], language,
+                                ready=payload.state == "ready", assets_base=base_url)
+    audit("email_previewed", ip=client_ip(request), language=language, state=payload.state,
+          links=len(people))
     return {"status": "OK", "language": language, "state": payload.state,
-            "email_enabled": email_enabled(), **content}
+            "links": len(people), "email_enabled": email_enabled(), **content}
 
 
 # --------------------------------------------------------------------------- #

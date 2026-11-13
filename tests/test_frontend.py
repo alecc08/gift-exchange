@@ -69,6 +69,21 @@ def test_every_draw_scoped_admin_call_carries_the_draw():
     assert scoped >= 10, f"only {scoped} scoped calls — the draw plumbing looks half-finished"
 
 
+def test_the_one_mail_per_mailbox_rule_is_visible_before_the_click():
+    """The console has to say « un courriel par boîte » in three places, or the rule looks broken.
+
+    A twelve-person roster with five addresses produces five sends. If the only place that says so is
+    the README, an organizer who clicks « Envoyer » on each relative thinks the app forgot people. So
+    the row hint, the bulk counter and the report all have to be wired, and a multi-link preview has
+    to exist to show what a shared mail looks like.
+    """
+    markup = main.INDEX_HTML
+    assert "sendHelpFor(p)" in markup, "the row's send button explains the static help again"
+    assert 'x-text="t(\'roster.mailboxes\'' in markup, "the people/mailboxes counter is gone"
+    assert "previewEmail(3)" in markup, "no way to preview the household template"
+    assert "response.body.messages" in markup, "the bulk report stopped saying how many mails left"
+
+
 def test_a_refused_action_has_a_place_to_say_so():
     """The draw list has no panel of its own, so the error strip has to sit above both screens.
 

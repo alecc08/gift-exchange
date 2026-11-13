@@ -579,6 +579,10 @@
                   <svg class="w-3.5 h-3.5"><use href="#i-mail"/></svg>
                   <span x-text="t('rules.preview')"></span>
                 </button>
+                <button @click="previewEmail(3)" :disabled="busy" class="btn btn-quiet px-3 py-1.5 text-xs">
+                  <svg class="w-3.5 h-3.5"><use href="#i-mail"/></svg>
+                  <span x-text="t('rules.preview_many')"></span>
+                </button>
               </div>
               <label class="flex items-start gap-3 cursor-pointer">
                 <input type="checkbox" class="mt-0.5 w-4 h-4 accent-pine-700 shrink-0"
@@ -756,7 +760,7 @@
                         <span x-text="copiedId === p.id ? t('roster.copied') : t('roster.copy')"></span>
                       </button>
                       <button @click="sendEmail(p)" :disabled="busy || !p.email" class="btn btn-quiet px-3 py-1.5 text-xs ml-2"
-                              :title="p.email ? t('roster.sendHelp') : t('roster.sendNeedsEmail')">
+                              :title="p.email ? sendHelpFor(p) : t('roster.sendNeedsEmail')">
                         <svg class="w-3 h-3"><use href="#i-mail"/></svg>
                         <span x-text="emailBusyId === p.id ? t('roster.sending') : t('roster.send')"></span>
                       </button>
@@ -818,6 +822,8 @@
               <button @click="previewEmail()" :disabled="busy" class="btn btn-quiet px-3 py-1.5 text-xs"
                       x-text="t('rules.preview')"></button>
               <span class="text-xs text-pine-600/75" x-text="t('roster.send_all_help')"></span>
+              <span x-show="mailboxCount" x-cloak class="chip bg-pine-100 text-pine-700"
+                    x-text="t('roster.mailboxes', { people: emailReadyCount, mailboxes: mailboxCount })"></span>
               <span class="chip" :class="mailedCount ? 'bg-pine-100 text-pine-700' : 'bg-black/5 text-pine-600/70'"
                     x-text="t('roster.mailed') + ' · ' + mailedCount + '/' + emailReadyCount"></span>
             </div>
@@ -1144,12 +1150,16 @@ const I18N = {
     'roster.send': 'Envoyer',
     'roster.sending': 'Envoi…',
     'roster.sent': 'Lien envoyé à {name}.',
+    'roster.sent_with': 'Un seul courriel pour {name} et {n} autre(s) à la même adresse.',
+    'roster.sendSharedHelp': 'Cette adresse reçoit déjà {n} lien(s) : un seul courriel partira, avec tous les liens.',
     'roster.sendHelp': 'Envoyer le lien secret par courriel',
     'roster.sendNeedsEmail': 'Pas d’adresse courriel pour cette personne',
     'roster.mailed': 'Lien envoyé',
     'roster.send_all': 'Envoyer les liens par courriel',
-    'roster.send_all_help': 'Une personne par courriel : personne ne voit le lien d’un autre.',
-    'roster.bulk_done': '{sent} courriel(s) envoyé(s).',
+    'roster.send_all_help': 'Un courriel par boîte : douze cousins à cinq adresses, ça fait cinq courriels. Chaque lien reste privé — les personnes d’une même boîte reçoivent leurs liens à eux, réunis dans un seul message.',
+    'roster.bulk_done': '{sent} personne(s) par mail, en {messages} courriel(s).',
+    'roster.mailboxes': '{people} personne(s) · {mailboxes} boîte(s) · {mailboxes} courriel(s)',
+    'rules.preview_many': 'Aperçu à plusieurs liens',
     'roster.bulk_failed': 'Pas envoyé à : {names}',
     'roster.add': 'Ajouter',
     'roster.status': 'Statut',
@@ -1346,12 +1356,16 @@ const I18N = {
     'roster.send': 'Send',
     'roster.sending': 'Sending…',
     'roster.sent': 'Link emailed to {name}.',
+    'roster.sent_with': 'One email for {name} and {n} other(s) at the same address.',
+    'roster.sendSharedHelp': 'This address already receives {n} link(s): one email goes out with all of them.',
     'roster.sendHelp': 'Email the secret link',
     'roster.sendNeedsEmail': 'No email address for this person',
     'roster.mailed': 'Link emailed',
     'roster.send_all': 'Email the links',
-    'roster.send_all_help': 'One email per person: nobody sees anyone else’s link.',
-    'roster.bulk_done': '{sent} email(s) sent.',
+    'roster.send_all_help': 'One email per mailbox: twelve cousins at five addresses is five emails. Each link stays private — people sharing a mailbox get their own links together in one message.',
+    'roster.bulk_done': '{sent} person(s) emailed, in {messages} email(s).',
+    'roster.mailboxes': '{people} people · {mailboxes} mailbox(es) · {mailboxes} email(s)',
+    'rules.preview_many': 'Multi-link preview',
     'roster.bulk_failed': 'Not sent to: {names}',
     'roster.add': 'Add',
     'roster.status': 'Status',
@@ -1541,6 +1555,15 @@ function giftExchange() {
        actually pass the server's send-time check — the "12/12" you want before clicking. */
     get mailedCount() { return this.participants.filter(p => p.email_sent_at).length; },
     get emailReadyCount() { return this.participants.filter(p => this.looksLikeEmail(p.email)).length; },
+    /* Distinct mailboxes among the people with an address: the number of emails that will actually
+       leave. Twelve cousins at five addresses is five sends, and saying so here is what makes the
+       « Envoyer » click predictable instead of a guess. */
+    get mailboxCount() {
+      const seen = new Set(this.participants
+        .filter(p => this.looksLikeEmail(p.email))
+        .map(p => p.email.trim().toLowerCase()));
+      return seen.size;
+    },
     looksLikeEmail(value) {
       // Mirrors the server's EMAIL_RE intent: something @ something.tld, no spaces. Deliberately
       // only used for the soft warning — the server, not this regex, is the authority.
@@ -1972,7 +1995,11 @@ function giftExchange() {
         { method: 'POST', body: '{}' }, true);
       this.emailBusyId = null;
       if (!response.ok) { this.showAdminError(response); await this.loadState(); return; }
-      this.toast(this.t('roster.sent', { name: person.name }));
+      // The server sends the mailbox, not the row: say what left, or an organizer who sees one
+      // toast for three relatives thinks two of them were forgotten.
+      const others = (response.body.with || []).length;
+      this.toast(others ? this.t('roster.sent_with', { name: person.name, n: others })
+                        : this.t('roster.sent', { name: person.name }));
       await this.loadState();
     },
     async sendAllEmails() {
@@ -1982,17 +2009,30 @@ function giftExchange() {
       const response = await this.api(this.drawPath('/api/admin/emails'), { method: 'POST', body: '{}' }, true);
       this.sendingAll = false;
       if (!response.ok) { this.showAdminError(response); return; }
-      this.toast(this.t('roster.bulk_done', { sent: response.body.sent }));
+      this.toast(this.t('roster.bulk_done', { sent: response.body.sent,
+                                              messages: response.body.messages }));
       const failed = (response.body.results || []).filter(r => !r.ok).map(r => r.name);
       if (failed.length) this.toast(this.t('roster.bulk_failed', { names: failed.join(', ') }), 'warn');
       await this.loadState();
     },
-    async previewEmail() {
+    /* Who else shares this person's address, in this draw. That is the household the one-mail rule
+       sends to, and the console should say so before the click, not after the surprise. */
+    emailHousehold(person) {
+      const address = (person.email || '').trim().toLowerCase();
+      if (!address) return [];
+      return this.participants.filter(other => (other.email || '').trim().toLowerCase() === address);
+    },
+    sendHelpFor(person) {
+      const shared = this.emailHousehold(person).length;
+      return shared > 1 ? this.t('roster.sendSharedHelp', { n: shared }) : this.t('roster.sendHelp');
+    },
+    async previewEmail(links = 1) {
       this.clearAdminError();
       const response = await this.api(this.drawPath('/api/admin/emails/preview'), {
         method: 'POST',
         body: JSON.stringify({ language: this.cfg.email_language,
-                               state: this.locked ? 'ready' : 'pending' }),
+                               state: this.locked ? 'ready' : 'pending',
+                               links: links }),
       }, true);
       if (!response.ok) { this.showAdminError(response); return; }
       this.previewBody = response.body;
