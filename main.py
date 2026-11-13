@@ -270,6 +270,23 @@ def audit(event: str, **fields: Any) -> None:
     LOGGER.info("%s %s", event, details)
 
 
+# A participant's URL is the only credential they have: whoever holds it holds the draw.
+TOKEN_SEGMENT = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def redacted_path(request: Request) -> str:
+    """Path for the audit trail, with any participant token replaced by `<token>`.
+
+    `GET /api/draw/<uuid>` is the one route whose *path* is a secret. Logging it verbatim wrote
+    every family member's private link into the container log — which on a real host means the
+    journal, next to the same permissions that can already read the database. Redacting keeps the
+    useful part (which route, which status, how slow) and drops the credential.
+    """
+    return "/".join("<token>" if TOKEN_SEGMENT.match(part) else part
+                    for part in request.url.path.split("/"))
+
+
 def client_ip(request: Request) -> str:
     """Client address. X-Forwarded-For is only honoured behind a trusted proxy."""
     if trust_proxy():
@@ -880,7 +897,7 @@ async def access_log_middleware(request: Request, call_next):
             "request",
             ip=client_ip(request),
             method=request.method,
-            path=request.url.path,
+            path=redacted_path(request),
             status=response.status_code,
             ms=round((time.perf_counter() - started) * 1000, 1),
         )
@@ -889,7 +906,7 @@ async def access_log_middleware(request: Request, call_next):
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
-    audit("server_error", ip=client_ip(request), path=request.url.path, error=type(exc).__name__)
+    audit("server_error", ip=client_ip(request), path=redacted_path(request), error=type(exc).__name__)
     return json_error({"detail": "Internal server error"}, 500)
 
 

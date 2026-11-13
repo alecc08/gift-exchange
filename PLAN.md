@@ -655,5 +655,75 @@ i18n audit                               -> 131 fr / 131 en keys, symmetric, pla
 docs gallery                             -> re-shot: 17 stills + 2 GIFs (05-family-filter →
                                             05-group-filter; new 16-group-note, 17-draw-relaxed),
                                             built from seed_demo's roster, which the capture tool
-                                            now re-seeds so the gallery is reproducible from /
+                                            now re-seeds so the gallery is reproducible from a
+                                            bare database
 ```
+
+## Security review of the public deployment (addendum, 2026-11-13)
+
+The question asked was "can someone attack us through this site", so everything below is a
+measurement of the live deployment, not a restatement of the threat table.
+
+### What the internet can actually reach
+
+`74.57.226.127` probed with TCP connects from `check-host.net` nodes (US/DE/NL and, for 443, 55
+countries):
+
+| Port | Result | Why |
+|---|---|---|
+| 443 | **open**, answers as `tirage-noel.alserv.org` only | the single OPNsense port forward → traefik `external` (:4443) |
+| 4443 | closed/filtered | the forward targets the container's :4443 mapping, not the host's |
+| 80, 22, 445, 3000, 8081, 8443, 9898 … | closed/filtered | OPNsense default deny on WAN; nothing else is forwarded |
+
+On the `external` entrypoint exactly **one** router exists (`grep entrypoints=external` over the
+stack: gift-exchange alone), and traefik answers `404 page not found` to any other `Host` — so the
+other ~25 services on this host are not merely unlinked, they are unroutable from outside.
+TLS: Let's Encrypt `CN=*.alserv.org`, valid to 2026-12-31.
+
+### The client IP survives the edge (this is what makes the limits real)
+
+A request from off-network appears in the container log as `request ip=136.124.33.3 …` — the
+visitor's real address, not the firewall's. So the login limiter (5/min), the lockout, the
+participant-link budget and the shared API budget are all **per visitor**, and a credential spray
+from the internet gets 5 guesses a minute, not 5 per attacker. Traefik overwrites `X-Forwarded-For`
+(measured earlier: a forged XFF is logged as the real peer), so the bucket cannot be widened by
+spoofing a header.
+
+That is also the reason **not** to add a traefik `rateLimit` middleware here yet: traefik's own
+view of the client is correct, but a second limiter in front of the app's would double-count and,
+because a family event is a burst of the same handful of links, would lock out grandmothers before
+it locked out an attacker.
+
+### One real defect found: the private links were in the log
+
+`access_log_middleware` logged `request.url.path`, and the participant route *is*
+`GET /api/draw/<uuid>`. Every link open therefore wrote that person's entire credential into the
+container log — which on a deployed host means journald, readable by more people (and possibly more
+shippers) than the directory holding the SQLite file:
+
+```
+INFO gift-exchange request ip=192.168.1.10 method=GET path=/api/draw/e3a1cdc7-… status=200 ms=3.0
+```
+
+Fixed by `redacted_path()`: UUID-shaped path segments become `<token>`, everything else is logged
+as before (`/api/admin/state` keeps its shape, so the log stays useful). Two tests in
+`test_security.py` — one drives the real routes and asserts the token string never appears in the
+log, one asserts the redactor only touches token-shaped segments. Removing the fix makes the first
+test fail, which is the point: `audit()`'s own docstring already promised "never logs passwords or
+tokens" and nothing was checking it.
+
+Not fixed, and worth knowing: journal lines written **before** the fix still contain the links that
+were opened then. `journalctl --vacuum-time=1s` (or rotating the participants) is the cleanup, and
+the links are only a credential to whoever can already read the host's logs.
+
+### What is still true about the risk, in plain terms
+
+* Cloudflare is DNS-only on this record: no WAF, no bot filtering, no DDoS scrubbing. The house IP
+  is the thing that answers. Accepted trade for one family event.
+* Anyone holding a link *is* that participant — no second factor. 122-bit UUIDv4 tokens, unknown
+  tokens are an indistinguishable `404`, and the link endpoint has its own per-IP budget.
+* The database is not encrypted at rest, and the organizer console is one password deep — which is
+  why the console shows a banner while the password is the default and refuses everything when it is
+  blank.
+* The limiter is in-process memory: a restart resets it. Fine for a season, not for a permanent
+  public service.

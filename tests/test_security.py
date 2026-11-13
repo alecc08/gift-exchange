@@ -216,3 +216,52 @@ def test_redraw_on_locked_event_changes_nothing(client, db):
                    for row in conn.execute("SELECT giver_id, receiver_id FROM assignments"))
     conn.close()
     assert before == after and len(before) == 2
+
+
+def test_participant_tokens_never_reach_the_log(client, monkeypatch):
+    """`GET /api/draw/<uuid>` is a route whose path *is* the credential.
+
+    The container log on a deployed host is the journal: readable by more people and sometimes by
+    more systems than the database directory. A line per page load that repeats the link would put
+    every family member's whole credential there.
+    """
+    from conftest import set_config
+
+    set_config(client, adult_draws_adult=1, adult_draws_child=0,
+               child_draws_adult=0, child_draws_child=0)
+    add(client, "Mario", "ADULT", "Tremblay")
+    add(client, "Lise", "ADULT", "Gagnon")
+    token = next(p["token"] for p in client.get("/api/admin/state", headers=ADMIN)
+                 .json()["participants"] if p["name"] == "Mario")
+
+    lines = []
+    monkeypatch.setattr(main.LOGGER, "info", lambda message, *args: lines.append(message % args))
+
+    assert client.get(f"/api/draw/{token}").status_code == 200
+    assert client.put(f"/api/draw/{token}/wishlist", json={"wishlist": "des chaussettes"}).status_code == 200
+    client.get("/api/admin/state", headers=ADMIN)
+
+    joined = "\n".join(lines)
+    assert token not in joined, "a participant link was written to the log"
+    assert "GET path=/api/draw/<token> status=200" in joined
+    assert "PUT path=/api/draw/<token>/wishlist status=200" in joined
+    # the routes worth debugging are still logged in full
+    assert "path=/api/admin/state" in joined
+
+
+def test_redaction_only_replaces_token_shaped_segments():
+    """A `<token>` placeholder everywhere would hide nothing but also tell you nothing."""
+    from fastapi import Request
+
+    def fake(path):
+        scope = {"type": "http", "path": path, "headers": [], "method": "GET",
+                 "query_string": b"", "root_path": "", "scheme": "http", "server": ("t", 80),
+                 "client": ("1.2.3.4", 1)}
+        return main.redacted_path(Request(scope))
+
+    assert fake("/api/draw/6f1d2c3a-0b0b-4c1a-9d2e-7f8a9b0c1d2e") == "/api/draw/<token>"
+    assert fake("/api/draw/6F1D2C3A-0B0B-4C1A-9D2E-7F8A9B0C1D2E/wishlist") == "/api/draw/<token>/wishlist"
+    assert fake("/api/admin/participants/12") == "/api/admin/participants/12"
+    assert fake("/api/health") == "/api/health"
+    # a name that happens to look partly like a uuid stays visible
+    assert fake("/api/draw/not-a-uuid") == "/api/draw/not-a-uuid"

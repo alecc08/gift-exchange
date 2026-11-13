@@ -179,7 +179,7 @@ delete and re-add the participant.
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
 | Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` (« already locked, reset first ») instead of silently invalidating links people already opened. |
 | Organizer blindness | No admin route ever reads the `assignments` table — the console physically cannot show pairings. |
-| Debug noise vs leaks | One line per request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency; error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
+| Debug noise vs leaks | One line per request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency. The path is **redacted**: `/api/draw/<uuid>` logs as `/api/draw/<token>`, because that path *is* a family member's credential and the log outlives the event. Error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
 
 ### Tuning knobs
 
@@ -355,7 +355,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 90 tests: engine invariants, grouping bounds, API contract, security, previews
+bash run_tests.sh          # 92 tests: engine invariants, grouping bounds, API contract, security, previews
 ```
 
 `run_tests.sh` creates its own virtualenv (`uv` if present) and adds `httpx` + `pytest` there only,
@@ -378,7 +378,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 90 tests
+├── tests/                        # 92 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution
