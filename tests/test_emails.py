@@ -17,7 +17,7 @@ import xml.etree.ElementTree as ET
 
 import pytest
 
-from conftest import ADMIN, add, set_config
+from conftest import ADMIN, add, png_size, set_config
 from test_i18n import BANNED_FR
 
 import main
@@ -492,13 +492,37 @@ def test_names_are_escaped_before_they_touch_the_html():
 def test_template_carries_the_site_art_over_absolute_urls():
     content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
                                assets_base="https://tirage-noel.alserv.org")
-    assert 'src="https://tirage-noel.alserv.org/static/email-flake.svg"' in content["html"]
-    assert 'src="https://tirage-noel.alserv.org/static/email-gift-strip.svg"' in content["html"]
-    assert 'src="https://tirage-noel.alserv.org/static/email-gift.svg"' in content["html"]
+    assert 'src="https://tirage-noel.alserv.org/static/email-flake.png"' in content["html"]
+    assert 'src="https://tirage-noel.alserv.org/static/email-gift-strip.png"' in content["html"]
+    assert 'src="https://tirage-noel.alserv.org/static/email-gift.png"' in content["html"]
     # inline <svg> is stripped by Gmail; the art is always <img>-referenced, never inline
     assert "<svg" not in content["html"]
     bare = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True)
     assert "<img" not in bare["html"], "no absolute base means no art, not a broken relative src"
+
+
+def test_the_mail_art_is_a_png_because_gmail_does_not_serve_svg():
+    """The art shipped as SVG, served `200 image/svg+xml`, and Gmail drew nothing.
+
+    Not a fetch failure — Google's image proxy simply refuses SVG (they have said so publicly, and
+    cani.email lists it as non-Google-only). So the mail loads rasters, and the SVGs stay the source
+    art for the site. This test is the difference between fixing that once and re-introducing it the
+    next time somebody "improves" the art by pointing at the vector file.
+    """
+    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
+                               assets_base="https://tirage-noel.alserv.org")
+    assert ".svg" not in content["html"], "the mail is pointing at vector art again"
+    for name in ("email-flake", "email-gift", "email-gift-strip"):
+        path = main.STATIC_DIR / f"{name}.png"
+        assert path.exists(), f"{name}.png missing — run tools/build_email_art.py"
+        assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n", f"{name}.png is not a PNG"
+
+    # Every <img> says how big it is, and the file really is that size (2x, so a phone is sharp):
+    # a mail client that has to guess resamples the art, and one that gets no size collapses the row.
+    for source, width, height in re.findall(r'<img src="[^"]*?/static/([\w.-]+)" width="(\d+)" '
+                                            r'height="(\d+)"', content["html"]):
+        pixels = png_size((main.STATIC_DIR / source).read_bytes())
+        assert pixels == (int(width) * 2, int(height) * 2), f"{source}: {pixels} vs {width}x{height}"
 
 
 def test_the_email_has_no_animation_to_lose():
@@ -534,7 +558,7 @@ def test_the_hero_gift_is_described_in_the_language_of_the_mail():
                                assets_base="https://x.test")["html"]
     assert 'alt="Un cadeau bien fermé' in french
     assert 'alt="A tightly closed gift' in english
-    assert 'alt=""' not in french.split("email-gift.svg")[1][:120], "the hero has no description"
+    assert 'alt=""' not in french.split("email-gift.png")[1][:120], "the hero has no description"
 
 
 def test_email_art_assets_exist_and_are_valid_svg():
@@ -760,7 +784,7 @@ def test_household_names_are_escaped_like_every_other_field():
 
 def test_the_household_mail_carries_the_same_art_without_animation():
     content = household()
-    for asset in ("email-flake.svg", "email-gift.svg", "email-gift-strip.svg"):
+    for asset in ("email-flake.png", "email-gift.png", "email-gift-strip.png"):
         assert f"/static/{asset}" in content["html"], asset
     for forbidden in ("<style", "@keyframes", "animation"):
         assert forbidden not in content["html"], forbidden

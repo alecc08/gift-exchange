@@ -189,6 +189,30 @@ def test_security_headers_present(client):
         assert "https://cdn.jsdelivr.net" in csp
 
 
+def test_static_assets_are_embeddable_by_another_origin(client):
+    """/static is loaded by other origins on purpose; everything else stays same-origin.
+
+    Two real consumers: an email client fetching the mail's art (Apple Mail and friends fetch it
+    straight from this host, and `Cross-Origin-Resource-Policy: same-origin` makes the browser
+    reject that with ERR_BLOCKED_BY_RESPONSE.NotSameOrigin — a broken-image icon in the mail), and
+    the social-image crawler reading og-image.png. Nothing personal is in /static: participant data
+    only ever leaves through the API, so sharing the art costs nothing while blocking it breaks the
+    product.
+    """
+    for path in ("/static/email-gift.png", "/static/og-image.png", "/static/favicon.svg"):
+        response = client.get(path)
+        assert response.status_code == 200, path
+        assert response.headers["cross-origin-resource-policy"] == "cross-origin", path
+        # the rest of the posture is unchanged for files too
+        assert response.headers["x-content-type-options"] == "nosniff"
+        assert response.headers["x-frame-options"] == "DENY"
+        # and no Cache-Control is added: StaticFiles' ETag/Last-Modified are the deliberate answer
+        # (test_share_metadata pins it), because a max-age pins stale art across a redeploy
+        assert "cache-control" not in response.headers, path
+    for path in ("/", "/api/health", "/api/draw/nope"):
+        assert client.get(path).headers["cross-origin-resource-policy"] == "same-origin", path
+
+
 def test_unauth_responses_do_not_leak_internals(client):
     response = client.get("/api/admin/state", headers={"X-Admin-Password": "wrong"})
     assert response.status_code == 401

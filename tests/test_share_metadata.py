@@ -2,21 +2,13 @@
 
 import re
 
-from conftest import add
-
-PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+from conftest import add, png_size
 
 
 def meta_block(body: str) -> str:
     """Just the injected <meta og:*/twitter:*> lines, so tests can assert on the crawlable part."""
     return "\n".join(line for line in body.splitlines()
                      if '<meta property="og:' in line or '<meta name="twitter:' in line)
-
-
-def png_size(payload: bytes) -> tuple[int, int]:
-    """IHDR width/height straight out of the bytes — no image library in the test suite."""
-    assert payload[:8] == PNG_MAGIC, "not a PNG"
-    return int.from_bytes(payload[16:20], "big"), int.from_bytes(payload[20:24], "big")
 
 
 def test_share_meta_is_injected_with_absolute_urls(client):

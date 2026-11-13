@@ -32,6 +32,12 @@ ADMIN = {"X-Admin-Password": "s3cret"}
 PASSWORD = "s3cret"
 
 
+def png_size(payload: bytes) -> tuple[int, int]:
+    """IHDR width/height straight out of the bytes — no image library in the test suite."""
+    assert payload[:8] == b"\x89PNG\r\n\x1a\n", "not a PNG"
+    return int.from_bytes(payload[16:20], "big"), int.from_bytes(payload[20:24], "big")
+
+
 @pytest.fixture
 def client(tmp_path, monkeypatch):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "exchange.db"))

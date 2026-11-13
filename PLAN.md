@@ -947,3 +947,40 @@ visible in the UI: the row tooltip, the mailbox counter, the multi-link preview 
 report that still says how many mails left. `tools/check_organizer_ui.py` passes clean on the new
 build, and the live send from production is checked against a real inbox: one mail, three labelled
 links, the names in the subject.
+
+## The mail's art is a PNG now (addendum, 2026-11-13)
+
+**The symptom.** The first household test mail arrived complete — right subject, three labelled links
+— and every picture in it was blank. So the art, not the copy, was the bug.
+
+**Measured, in this order:**
+
+| Check | Result |
+| --- | --- |
+| The three URLs the mail used | `200`, `image/svg+xml`, correct bytes, TLS fine |
+| What Gmail drew | nothing |
+| Why | Gmail serves every image through its own proxy, and that proxy **does not serve SVG**. Google has confirmed it has no plans to; cani.email lists SVG as "partially supported, non-Google only" |
+
+The README had claimed the opposite — "renders SVG files through its image proxy" — and that sentence
+was an assumption that was never tested. Replaced, and the rule now lives in a test rather than in
+prose: **art that has to appear in an email is a raster.**
+
+**The fix, and what stayed the same.** The SVGs are still the source of truth — they are the files
+that get edited, and the site's own vectors match them. `tools/build_email_art.py` (Chromium, like
+the other tools in that directory) rasterizes the three the mail loads at **2x the displayed size**,
+transparent background, and the mail references the `.png`. The `<img width height>` attributes are
+kept, so the intrinsic pixels are exactly 2x the box the mail declares — sharp on a phone, and no
+mail client resampling. All three together are 49 KiB, well under the threshold where Gmail starts
+dropping images.
+
+**One header that was quietly wrong too.** Every response carried
+`Cross-Origin-Resource-Policy: same-origin`. That is *not* what Gmail broke — it re-serves images
+from `googleusercontent.com`, so the origin's CORP never reaches the browser — but it does break the
+clients that fetch an email's art directly (Apple Mail and friends), and the browser answers
+`ERR_BLOCKED_BY_RESPONSE.NotSameOrigin`, which looks like a broken image and is a header. `/static/*`
+now sends `cross-origin`; everything else keeps `same-origin`, because a participant's data only ever
+leaves through the API and there is nothing personal in the art directory.
+
+**Guards.** No `.svg` may appear in the mail HTML; the three PNGs must exist, start with the PNG
+signature, and match 2x the `width`/`height` the template declares; `/static/*` must answer
+`cross-origin` while `/`, the API and an error page keep `same-origin`. 177 tests.
