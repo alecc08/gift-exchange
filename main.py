@@ -166,6 +166,62 @@ def resend_base_url() -> str:
 EMAIL_TIMEOUT = env_int("RESEND_TIMEOUT", 15)
 EMAIL_SEND_LIMIT = env_int("EMAIL_RATE_LIMIT", 60)   # sends / minute / organizer client
 
+
+def email_send_interval_ms() -> int:
+    """Spacing between ANY two sends. Resend's free tier answers 429 above ~1 req/s."""
+    return env_int("EMAIL_SEND_INTERVAL_MS", 1200)
+
+
+def email_same_address_gap_s() -> int:
+    """Minimum spacing between two sends to the SAME mailbox. A family shares addresses — four
+    kids' links land at one parent — and four emails in one inbox inside two seconds reads like
+    abuse to the receiver's spam filter even when the sender is fully authenticated."""
+    return env_int("EMAIL_SAME_ADDRESS_GAP_S", 4)
+
+
+def email_retry_after_s() -> int:
+    """Sleep after a Resend 429, then retry once."""
+    return env_int("EMAIL_RETRY_AFTER_S", 3)
+
+
+_email_gate = threading.Lock()          # one send at a time across the whole process
+_email_gate_at = {"global": 0.0, "by_address": {}}
+
+
+def _throttle_before_send(address: str) -> None:
+    """Block until this address is allowed to receive its next mail. Held across the lock so two
+    overlapping bulk actions cannot jointly outrun either spacing."""
+    with _email_gate:
+        now = time.monotonic()
+        wait = email_send_interval_ms() / 1000.0 - (now - _email_gate_at["global"])
+        last = _email_gate_at["by_address"].get(address)
+        if last is not None:
+            wait = max(wait, email_same_address_gap_s() - (now - last))
+        if wait > 0:
+            time.sleep(wait)
+        sent_at = time.monotonic()
+        _email_gate_at["global"] = sent_at
+        _email_gate_at["by_address"][address] = sent_at
+
+
+def _interleave_by_address(people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Round-robin across addresses so the same mailbox never receives two consecutive sends.
+    Ordering alone buys the per-address spacing real time to elapse: six kids at one address,
+    interleaved between two other parents, need no extra sleep at all."""
+    queues: dict[str, list[dict[str, Any]]] = {}
+    for person in people:
+        queues.setdefault((person.get("email") or "").strip().lower(), []).append(person)
+    out: list[dict[str, Any]] = []
+    lanes = list(queues.values())
+    while lanes:
+        nxt: list[list[dict[str, Any]]] = []
+        for lane in lanes:
+            out.append(lane[0])
+            if lane[1:]:
+                nxt.append(lane[1:])
+        lanes = nxt
+    return out
+
 # Resend sits behind Cloudflare, and that edge answers `403 / error code: 1010` to Python's
 # default `Python-urllib` agent — measured, not folklore. A real User-Agent is not cosmetic:
 # without it every send fails.
@@ -900,30 +956,41 @@ def send_email(*, to: str, subject: str, html_body: str, text_body: str, ref_id:
         # participant id, so a resend after a reset stays recognizably the same thread.
         "headers": {"X-Entity-Ref-ID": ref_id},
     }
-    request = urllib.request.Request(
-        resend_base_url() + "/emails",
-        data=json.dumps(payload).encode("utf-8"),
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Authorization": "Bearer " + key,
-            # See EMAIL_USER_AGENT: Cloudflare 403/1010s the default Python-urllib agent.
-            "User-Agent": EMAIL_USER_AGENT,
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=EMAIL_TIMEOUT) as response:
-            body = json.loads(response.read() or b"{}")
-    except urllib.error.HTTPError as error:
-        detail = error.read().decode("utf-8", "replace")[:400]
+    body: dict = {}
+    attempt = 0
+    while True:
+        attempt += 1
+        request = urllib.request.Request(
+            resend_base_url() + "/emails",
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + key,
+                # See EMAIL_USER_AGENT: Cloudflare 403/1010s the default Python-urllib agent.
+                "User-Agent": EMAIL_USER_AGENT,
+            },
+        )
         try:
-            detail = json.loads(detail).get("message") or detail
-        except (ValueError, AttributeError):
-            pass
-        raise EmailSendError(error.code, detail or error.reason) from None
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
-        reason = getattr(error, "reason", None) or error.__class__.__name__
-        raise EmailSendError(0, str(reason)) from None
+            with urllib.request.urlopen(request, timeout=EMAIL_TIMEOUT) as response:
+                body = json.loads(response.read() or b"{}")
+            break
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", "replace")[:400]
+            try:
+                detail = json.loads(detail).get("message") or detail
+            except (ValueError, AttributeError):
+                pass
+            # One polite retry on 429 — the bulk throttle should make this rare, but a manual
+            # "Envoyer" pressed twice can still brush the provider's ceiling.
+            if error.code == 429 and attempt == 1:
+                audit("email_provider_throttled", retry_in=email_retry_after_s())
+                time.sleep(email_retry_after_s())
+                continue
+            raise EmailSendError(error.code, detail or error.reason) from None
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            reason = getattr(error, "reason", None) or error.__class__.__name__
+            raise EmailSendError(0, str(reason)) from None
     return str(body.get("id") or "")
 
 
@@ -1057,10 +1124,13 @@ def deliver_link_email(conn: sqlite3.Connection, participant: dict[str, Any], ev
         return {"id": participant["id"], "name": participant["name"], "ok": False,
                 "reason": EMAIL_NOT_CONFIGURED, "message_id": None}
     address = (participant.get("email") or "").strip()
-    if not address or not EMAIL_RE.match(address):
+    if not address or not _sendable_email(address):
         return {"id": participant["id"], "name": participant["name"], "ok": False,
                 "reason": EMAIL_NO_ADDRESS, "message_id": None}
 
+    # Spacing happens right before the wire: the organizer may fire a single "Envoyer" in the
+    # middle of a bulk run, and one shared process gate keeps both honest.
+    _throttle_before_send(address.lower())
     ready = bool(conn.execute("SELECT is_locked FROM config WHERE id = 1").fetchone()["is_locked"])
     link = f"{base_url}/draw/{participant['token']}"
     content = build_email(participant["name"], event_title, link, language, ready,
@@ -1094,10 +1164,11 @@ def send_link_emails(conn: sqlite3.Connection, participants: list[dict[str, Any]
                      config_row: sqlite3.Row, base_url: str) -> dict[str, Any]:
     """Send a set of participants their links. One entry per participant in the report — including
     the ones with no address, so the console can show who was skipped instead of silently omitting
-    an uncle."""
+    an uncle. Interleaved by address first: consecutive mails to the same mailbox are the one
+    pattern the per-address gap exists to prevent, and good ordering makes it wait less."""
     results = [deliver_link_email(conn, person, config_row["event_title"],
                                   config_row["email_language"], base_url)
-               for person in participants]
+               for person in _interleave_by_address(participants)]
     return {
         "sent": sum(1 for r in results if r["ok"]),
         "failed": sum(1 for r in results if not r["ok"]),

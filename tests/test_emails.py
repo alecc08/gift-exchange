@@ -9,6 +9,7 @@ import io
 import json
 import re
 import sqlite3
+import time
 import urllib.error
 import urllib.request
 
@@ -57,14 +58,14 @@ FESTIVE = dict(adult_draws_adult=1, adult_draws_child=1, child_draws_adult=0, ch
 
 
 class StubTransport:
-    """Swap for main.send_email: records every send, always accepts."""
+    """Swap for main.send_email: records every send (with a timestamp), always accepts."""
 
     def __init__(self):
         self.sent = []
 
     def __call__(self, *, to, subject, html_body, text_body, ref_id):
         self.sent.append({"to": to, "subject": subject, "html": html_body, "text": text_body,
-                          "ref_id": ref_id})
+                          "ref_id": ref_id, "at": time.monotonic()})
         return "stub-message-id"
 
 
@@ -243,6 +244,110 @@ def test_bulk_send_reports_row_by_row(client, monkeypatch):
     results = {r["name"]: r for r in report["results"]}
     assert results["Sans-Adresse"]["reason"] == main.EMAIL_NO_ADDRESS
     assert {m["to"] for m in stub.sent} == {"g@exemple.ca", "r@exemple.ca"}
+
+
+# --------------------------------------------------------------------------- #
+# Throttling: providers have request ceilings, inboxes have patience
+# --------------------------------------------------------------------------- #
+
+
+def test_bulk_never_sends_to_the_same_mailbox_twice_in_a_row(client, monkeypatch):
+    """The kids' links share the parent's address: interleaving spreads them out for free."""
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    add(client, "Enfant Un", "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Enfant Deux", "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Enfant Trois", "CHILD", "Bernier", email="parent@exemple.ca")
+    add(client, "Oncle", "ADULT", "Roy", email="oncle@exemple.ca")
+
+    client.post("/api/admin/emails", headers=ADMIN)
+    order = [m["to"] for m in stub.sent]
+    # One address holds three links and the other one link: after the interleaving runs out of
+    # lanes, repeats are unavoidable — the per-address time gap (tested next) is what makes the
+    # repeat arrive politely. What must hold here is that the other lane is inserted as early
+    # as possible.
+    assert order == ["parent@exemple.ca", "oncle@exemple.ca",
+                     "parent@exemple.ca", "parent@exemple.ca"]
+
+
+def test_same_address_sends_keep_their_distance(client, monkeypatch):
+    configure_emails(monkeypatch)
+    monkeypatch.setenv("EMAIL_SAME_ADDRESS_GAP_S", "1")
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    for name in ("Enfant Un", "Enfant Deux", "Enfant Trois"):
+        add(client, name, "CHILD", "Bernier", email="parent@exemple.ca")
+
+    client.post("/api/admin/emails", headers=ADMIN)
+    gaps = [b["at"] - a["at"] for a, b in zip(stub.sent, stub.sent[1:])]
+    assert len(gaps) == 2
+    assert all(g >= 0.95 for g in gaps), gaps
+
+
+def test_global_spacing_holds_across_different_addresses(client, monkeypatch):
+    configure_emails(monkeypatch)
+    monkeypatch.setenv("EMAIL_SEND_INTERVAL_MS", "60")
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    for name, mail in (("A", "a@x.ca"), ("B", "b@x.ca"), ("C", "c@x.ca"), ("D", "d@x.ca")):
+        add(client, name, "ADULT", "Roy", email=mail)
+
+    client.post("/api/admin/emails", headers=ADMIN)
+    gaps = [b["at"] - a["at"] for a, b in zip(stub.sent, stub.sent[1:])]
+    assert len(gaps) == 3
+    assert all(g >= 0.05 for g in gaps), gaps
+
+
+def test_provider_429_gets_exactly_one_polite_retry(monkeypatch):
+    configure_emails(monkeypatch)
+    monkeypatch.setenv("EMAIL_RETRY_AFTER_S", "0")
+    calls = []
+
+    def flaky(request, timeout):
+        calls.append(1)
+        if len(calls) == 1:
+            raise urllib.error.HTTPError("https://api.resend.com/emails", 429,
+                                         "Too Many Requests", {},
+                                         io.BytesIO(b'{"message":"rate limited"}'))
+        return fake_response({"id": "second-time-lucky"})
+
+    monkeypatch.setattr(urllib.request, "urlopen", flaky)
+    assert main.send_email(to="g@exemple.ca", subject="s", html_body="h", text_body="t",
+                           ref_id="r") == "second-time-lucky"
+    assert len(calls) == 2
+
+
+def test_a_second_429_is_reported_not_retried_forever(monkeypatch):
+    configure_emails(monkeypatch)
+    monkeypatch.setenv("EMAIL_RETRY_AFTER_S", "0")
+    calls = []
+
+    def always_429(request, timeout):
+        calls.append(1)
+        raise urllib.error.HTTPError("https://api.resend.com/emails", 429, "Too Many Requests",
+                                     {}, io.BytesIO(b'{"message":"rate limited"}'))
+
+    monkeypatch.setattr(urllib.request, "urlopen", always_429)
+    with pytest.raises(main.EmailSendError) as caught:
+        main.send_email(to="g@exemple.ca", subject="s", html_body="h", text_body="t", ref_id="r")
+    assert caught.value.status == 429
+    assert len(calls) == 2
+
+
+def test_throttle_state_is_process_wide(client, monkeypatch):
+    """A manual single send fired right after a bulk run still respects the gate."""
+    configure_emails(monkeypatch)
+    monkeypatch.setenv("EMAIL_SEND_INTERVAL_MS", "80")
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    a = add(client, "A", "ADULT", "Roy", email="a@x.ca")
+    b = add(client, "B", "ADULT", "Roy", email="b@x.ca")
+
+    client.post("/api/admin/emails", headers=ADMIN)          # bulk: A and B
+    client.post(f"/api/admin/participants/{b['id']}/email", headers=ADMIN)  # manual follow-up
+    gaps = [y["at"] - x["at"] for x, y in zip(stub.sent, stub.sent[1:])]
+    assert len(gaps) == 2 and all(g >= 0.07 for g in gaps), gaps
 
 
 def test_provider_refusal_is_reported_and_leaves_no_stamp(client, monkeypatch):

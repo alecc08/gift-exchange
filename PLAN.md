@@ -764,3 +764,13 @@ locked-email-edit rule, per-row bulk report, stamp/clear lifecycle, auto-send or
 art URLs, transport headers incl. the User-Agent, key-never-logged). Headless console pass:
 13/13 steps, zero console errors — column, free-text flag, single send, preview modal
 (srcdoc iframe renders the themed HTML), bulk report, language persist, email editable while locked.
+
+### Throttle (added after the first live probe)
+
+Families share mailboxes — kids' links go to the parent — so the sending pace is a deliverability
+feature, not just provider politeness. One process-wide gate, two layers: a global
+`EMAIL_SEND_INTERVAL_MS` (1200 ms; Resend free tier 429s above ~1 req/s) and a per-address
+`EMAIL_SAME_ADDRESS_GAP_S` (4 s) so four links landing at one inbox never arrive as a burst.
+Bulk order interleaves addresses so the lanes share the wait instead of stacking sleeps, and a
+provider 429 gets exactly one retry after `EMAIL_RETRY_AFTER_S` (3 s). Measured on the live build:
+4 sends, 4 distinct addresses, elapsed 3.63 s = three 1200 ms spacings, zero failures.

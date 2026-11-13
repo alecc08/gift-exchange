@@ -20,6 +20,11 @@ os.environ["LOGIN_LOCKOUT_THRESHOLD"] = "0"
 # fail-closed behaviour is the default state under test, not an accident of the dev shell.
 os.environ.pop("RESEND_API_KEY", None)
 os.environ.pop("RESEND_FROM", None)
+# The throttle defaults pace sends for real mailboxes; the suite runs them at zero unless a
+# throttle test raises them on purpose.
+os.environ["EMAIL_SEND_INTERVAL_MS"] = "0"
+os.environ["EMAIL_SAME_ADDRESS_GAP_S"] = "0"
+os.environ["EMAIL_RETRY_AFTER_S"] = "0"
 
 import main  # noqa: E402
 

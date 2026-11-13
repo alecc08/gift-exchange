@@ -297,6 +297,14 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   address (per-row report, skipped addresses listed not hidden), and an opt-in
   `auto_email_on_draw` config switch that mails *after* the draw commits — a dead Resend can
   never leave a half-drawn event.
+* **Throttling:** sends are paced by one process-wide gate — a global spacing
+  (`EMAIL_SEND_INTERVAL_MS`, default 1200 ms, since Resend's free tier 429s above ~1 req/s) and
+  a longer per-address spacing (`EMAIL_SAME_ADDRESS_GAP_S`, default 4 s). The per-address layer
+  exists for how families actually work: the kids' links all land at one parent, and four mails
+  in one inbox within two seconds reads like abuse to the receiver's spam filter even when the
+  sender is authenticated. Bulk send order interleaves addresses so lanes share the wait, and a
+  429 from the provider gets exactly one retry after `EMAIL_RETRY_AFTER_S` (default 3 s) — never
+  a retry loop.
 * **Preview:** `POST /api/admin/emails/preview` renders the template with a sample name and a
   sample all-zeros link, so the modal is screenshot-able and cannot leak the roster.
 * **Transport:** stdlib `urllib`, one POST to `api.resend.com/emails`. The `User-Agent` header is
@@ -389,7 +397,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 128 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
+bash run_tests.sh          # 134 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
 #                  security, previews, email delivery
 ```
 
@@ -413,7 +421,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 128 tests
+├── tests/                        # 134 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution
