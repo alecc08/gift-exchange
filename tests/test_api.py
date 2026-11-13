@@ -80,7 +80,8 @@ def test_acceptance_no_assignments_leak_to_admin(client):
     # thing read out of the assignments table is this integer.
     crossings = payload.json()["config"]["same_group_crossings"]
     assert isinstance(crossings, int) and crossings >= 0
-    assert len(payload.json()) == 2 and set(payload.json()) == {"config", "participants"}
+    assert len(payload.json()) == 3 and set(payload.json()) == {"config", "participants",
+                                                                "email_enabled"}
 
     # re-drawing a locked event is refused instead of silently invalidating links
     again = client.post("/api/admin/draw", headers=ADMIN)

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 40" width="560" height="40">
+  <!-- Divider strip for emails: hairline rules interrupted by the site's gift,
+       a sprig of holly and two sparkles. Readable on the ivory card. -->
+  <g stroke="#e6c98a" stroke-width="1.4" stroke-linecap="round">
+    <path d="M16 20 H236"/>
+    <path d="M324 20 H544"/>
+  </g>
+
+  <!-- gift (the site's #i-gift paths, 24→28) -->
+  <g transform="translate(255 5) scale(1.166)" fill="none" stroke="#2f6b52"
+     stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M3 8m0 1a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1z"/>
+    <path d="M12 8l0 13"/>
+    <path d="M19 12v7a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-7"/>
+    <path d="M7.5 8a2.5 2.5 0 0 1 0 -5a4.8 8 0 0 1 4.5 5a4.8 8 0 0 1 4.5 -5a2.5 2.5 0 0 1 0 5"/>
+  </g>
+  <path d="M269 25 L269 38" stroke="#c79a3b" stroke-width="2" stroke-linecap="round"/>
+  <rect x="261.5" y="14.2" width="15" height="3.4" rx="1.7" fill="#c79a3b"/>
+
+  <!-- holly sprig, left of the gift -->
+  <g transform="translate(234 10)">
+    <ellipse cx="6" cy="7" rx="5.2" ry="3.1" fill="#2f6b52" transform="rotate(-28 6 7)"/>
+    <ellipse cx="12" cy="9" rx="5.2" ry="3.1" fill="#1f5340" transform="rotate(22 12 9)"/>
+    <circle cx="9.5" cy="12.6" r="1.7" fill="#c0392f"/>
+    <circle cx="12.6" cy="13.8" r="1.4" fill="#a52a20"/>
+    <circle cx="7" cy="13.6" r="1.3" fill="#c0392f"/>
+  </g>
+
+  <!-- sparkles and small flakes, right of the gift -->
+  <g fill="none" stroke="#c79a3b" stroke-width="1.8" stroke-linecap="round">
+    <path d="M338 20 m-6 0 h12 M338 14 v12" transform="rotate(0 338 20)"/>
+    <path d="M356 13 m-4 0 h8 M356 9 v8"/>
+  </g>
+  <g fill="none" stroke="#7aa894" stroke-width="1.6" stroke-linecap="round" opacity=".9">
+    <path d="M380 20 h14 M387 13 v14 M382.5 15.5 l9 9 M391.5 15.5 l-9 9"/>
+    <path d="M410 20 h9 M414.5 15.5 v9"/>
+  </g>
+  <circle cx="430" cy="20" r="1.6" fill="#c0392f" opacity=".9"/>
+  <circle cx="444" cy="20" r="1.6" fill="#c79a3b" opacity=".9"/>
+  <circle cx="458" cy="20" r="1.6" fill="#7aa894" opacity=".9"/>
+</svg>

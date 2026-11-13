@@ -16,6 +16,15 @@ os.environ["LOGIN_RATE_LIMIT"] = "100000"
 os.environ["API_RATE_LIMIT"] = "100000"
 os.environ["DRAW_RATE_LIMIT"] = "100000"
 os.environ["LOGIN_LOCKOUT_THRESHOLD"] = "0"
+# Email sending stays unconfigured for the whole suite unless a test sets the key itself:
+# fail-closed behaviour is the default state under test, not an accident of the dev shell.
+os.environ.pop("RESEND_API_KEY", None)
+os.environ.pop("RESEND_FROM", None)
+# The throttle defaults pace sends for real mailboxes; the suite runs them at zero unless a
+# throttle test raises them on purpose.
+os.environ["EMAIL_SEND_INTERVAL_MS"] = "0"
+os.environ["EMAIL_SAME_ADDRESS_GAP_S"] = "0"
+os.environ["EMAIL_RETRY_AFTER_S"] = "0"
 
 import main  # noqa: E402
 
@@ -45,12 +54,13 @@ def db(tmp_path):
     return open_db
 
 
-def add(client, name, role, family_group, wishlist="", group=None):
+def add(client, name, role, family_group, wishlist="", group=None, email=""):
     """Create a participant.
 
     `family_group` is the display surname; `group` is the household the same-group rule works on, and
     it defaults to the surname because the older tests were written before the two were separated.
-    Pass `group=""` for somebody in no group at all.
+    Pass `group=""` for somebody in no group at all. `email` is optional: plenty of relatives still
+    get their link handed to them in person.
     """
     response = client.post(
         "/api/admin/participants",
@@ -61,6 +71,7 @@ def add(client, name, role, family_group, wishlist="", group=None):
             "family_group": family_group,
             "group_key": family_group if group is None else group,
             "wishlist": wishlist,
+            "email": email,
         },
     )
     assert response.status_code == 201, response.text

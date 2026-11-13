@@ -727,3 +727,50 @@ the links are only a credential to whoever can already read the host's logs.
   blank.
 * The limiter is in-process memory: a restart resets it. Fine for a season, not for a permanent
   public service.
+
+## Link emails via Resend (addendum, 2026-11-13)
+
+**The ask.** Stop hand-copying links: give each participant an email field and mail them their own
+link, themed like the site. Token lives in `.env` only. Ship as an unmerged PR.
+
+**Decisions (organizer's answers + measured fallout).**
+- From: `Tirage de Noël <tirage-noel@alserv.org>`, whole string in `RESEND_FROM`.
+- One language per event (`config.email_language`, fr/en), not per participant.
+- Explicit send buttons **plus** an opt-in `auto_email_on_draw` checkbox, default off.
+- Free-text emails: no format rejection at save time; the send-time `EMAIL_RE` is the authority.
+  Rationale: a parent mid-typing must not hit a 422; a doomed address must not burn an API call.
+- Editing an email is the only roster edit allowed while locked, and it clears `email_sent_at`.
+- API over SMTP: structured per-send errors, a message id for the audit trail, `RESEND_BASE_URL`
+  stub hook. SMTP (`smtp.resend.com`) documented as the fallback in README only.
+
+**Transport facts measured, not assumed.**
+- Cloudflare in front of `api.resend.com` answers `403 / error code: 1010` to Python's default
+  `Python-urllib` agent; a real `User-Agent` is mandatory (comment in `send_email`).
+- The production key is a restricted **send-only** key: `GET /domains` → `401 restricted_api_key`.
+  Domain state can only be learned by sending. Stored in `/opt/.env` on LXC 101 (600), never in git.
+- Inline `<svg>` is stripped by Gmail; the themed art is `<img>`-referenced from `/static` (flake,
+  gift strip). CID attachments work too through Resend (`content_id`) — used for the first probe.
+
+**Deliverability, end to end.** First probe (pre-DMARC, plain template) → Gmail **spam**. Root
+cause measured: no DMARC on `alserv.org` at all. Added via the Cloudflare token:
+`_dmarc.alserv.org → v=DMARC1; p=none; sp=none` (relaxed alignment — Resend's MAIL FROM is the
+`send.alserv.org` subdomain, so strict `aspf` would have broken alignment). Second probe, same
+themed template, fresh Gmail account, DMARC live → **inbox**, confirmed by the organizer. Gmail
+does not cache verdicts, but per-account spam-click feedback persists: the first account needs a
+"Report not spam" + contact add.
+
+**Verification.** 128 tests (`tests/test_emails.py`: migration of an old DB, free-text save,
+locked-email-edit rule, per-row bulk report, stamp/clear lifecycle, auto-send ordering, escaping,
+art URLs, transport headers incl. the User-Agent, key-never-logged). Headless console pass:
+13/13 steps, zero console errors — column, free-text flag, single send, preview modal
+(srcdoc iframe renders the themed HTML), bulk report, language persist, email editable while locked.
+
+### Throttle (added after the first live probe)
+
+Families share mailboxes — kids' links go to the parent — so the sending pace is a deliverability
+feature, not just provider politeness. One process-wide gate, two layers: a global
+`EMAIL_SEND_INTERVAL_MS` (1200 ms; Resend free tier 429s above ~1 req/s) and a per-address
+`EMAIL_SAME_ADDRESS_GAP_S` (4 s) so four links landing at one inbox never arrive as a burst.
+Bulk order interleaves addresses so the lanes share the wait instead of stacking sleeps, and a
+provider 429 gets exactly one retry after `EMAIL_RETRY_AFTER_S` (3 s). Measured on the live build:
+4 sends, 4 distinct addresses, elapsed 3.63 s = three 1200 ms spacings, zero failures.
