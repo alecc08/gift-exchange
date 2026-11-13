@@ -355,7 +355,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 92 tests: engine invariants, grouping bounds, API contract, security, previews
+bash run_tests.sh          # 102 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract, security, previews
 ```
 
 `run_tests.sh` creates its own virtualenv (`uv` if present) and adds `httpx` + `pytest` there only,
@@ -378,7 +378,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 92 tests
+├── tests/                        # 102 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution

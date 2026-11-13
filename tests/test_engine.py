@@ -312,3 +312,75 @@ def test_min_crossings_bound_is_never_overstated():
         lower = main._min_crossings(people, quota, people, [], group_of, len(people), 0)
         _pairs, crossed = generate_draw(config(ada=1), people, seed=3)
         assert crossed >= lower, (people, lower, crossed)
+
+
+@pytest.mark.parametrize("seed", range(8))
+def test_every_child_is_picked_exactly_twice_in_a_three_household_event(seed):
+    """The shape people actually run: 3 households of 2 adults + 2 children, each adult drawing
+    1 adult + 2 children.
+
+    The even distribution is arithmetic, not luck: the receiver pool is built with
+    `divmod(12, 6)` before anybody is paired, so 12 child-gifts land as exactly 2 per child with
+    nothing left over. The group rule cannot tilt it, because the pool is fixed before the deal —
+    bending the rule (see the lopsided-roster cases below) costs crossings, never fairness.
+    """
+    people = roster(adults=6, children=6, families=3)
+    pairs, crossed = generate_draw(config(ada=1, adc=2), people, seed=seed)
+
+    assert len(pairs) == 18
+    received = Counter(receiver for _giver, receiver in pairs)
+    assert sorted(received[p["id"]] for p in people if p["role"] == "CHILD") == [2] * 6
+    assert sorted(received[p["id"]] for p in people if p["role"] == "ADULT") == [1] * 6
+
+    # four eligible children per adult, two needed: this roster never needs the rule to bend
+    assert crossed == 0
+    assert not crossings(pairs, people)
+
+    # and a child's two gifts never come from the same person
+    for giver in {g for g, _r in pairs}:
+        given = [r for g, r in pairs if g == giver]
+        assert len(given) == len(set(given)), (giver, given)
+    assert_valid(pairs, people)
+
+
+def test_when_the_totals_do_not_divide_the_spread_is_one_gift_not_three():
+    """Fairness has a floor, and it is worth stating exactly what it is.
+
+    6 adults each giving 2 child-gifts is 12 gifts over 7 children: `divmod(12, 7)` = 1 each with
+    5 left over, so five children receive 2 and two receive 1. That is the worst case the engine
+    can produce — it never hands one child 3 and another 1.
+    """
+    people = roster(adults=6, children=7, families=3)
+    counts = set()
+    for seed in range(6):
+        pairs, _crossed = generate_draw(config(ada=1, adc=2), people, seed=seed)
+        received = Counter(receiver for _giver, receiver in pairs)
+        child_counts = sorted(received[p["id"]] for p in people if p["role"] == "CHILD")
+        assert child_counts == [1, 1, 2, 2, 2, 2, 2], child_counts
+        counts.add(tuple(child_counts))
+        assert_valid(pairs, people)
+    assert max(c[-1] - c[0] for c in counts) == 1
+
+
+def test_a_household_big_enough_to_force_crossings_still_distributes_evenly():
+    """4 adults + 4 children in one household, 1 adult + 1 child in two others.
+
+    There the group rule cannot be honoured (6 gifts have to cross), which is exactly the case the
+    soft rule exists for — and the thing to check is that bending the rule does not bend the
+    distribution: every child still receives exactly 2, every adult exactly 1.
+    """
+    people, pid = [], 1
+    for group, adults, children in (("H1", 4, 4), ("H2", 1, 1), ("H3", 1, 1)):
+        for _ in range(adults):
+            people.append({"id": pid, "role": "ADULT", "family_group": group, "group_key": group}); pid += 1
+        for _ in range(children):
+            people.append({"id": pid, "role": "CHILD", "family_group": group, "group_key": group}); pid += 1
+
+    for seed in range(6):
+        pairs, crossed = generate_draw(config(ada=1, adc=2), people, seed=seed)
+        received = Counter(receiver for _giver, receiver in pairs)
+        assert sorted(received[p["id"]] for p in people if p["role"] == "CHILD") == [2] * 6
+        assert sorted(received[p["id"]] for p in people if p["role"] == "ADULT") == [1] * 6
+        assert crossed == len(crossings(pairs, people)) > 0
+        # the rule deliberately bent here, so assert_valid must not demand it held
+        assert_valid(pairs, people, respect_groups=False)
