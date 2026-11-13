@@ -24,7 +24,7 @@ def test_health_and_index(client):
     assert page.status_code == 200
     assert "text/html" in page.headers["content-type"]
     assert 'id="reveal-btn"' in page.text          # participant reveal control
-    assert "Révéler mes cadeaux" in page.text      # French is the default language
+    assert "Voir mes cadeaux" in page.text        # French is the default language
 
 
 def test_login_and_admin_auth(client):

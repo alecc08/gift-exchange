@@ -1,0 +1,17 @@
+{
+  "name": "Échange de cadeaux",
+  "short_name": "Échange",
+  "description": "Père Noël secret pour la famille : chacun reçoit son lien secret.",
+  "lang": "fr-CA",
+  "dir": "ltr",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a1f18",
+  "theme_color": "#0e2b21",
+  "icons": [
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/apple-touch-icon.png", "sizes": "180x180", "type": "image/png", "purpose": "any" }
+  ]
+}

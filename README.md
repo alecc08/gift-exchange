@@ -36,7 +36,7 @@ Then open **http://localhost:8085**, sign in, and:
 1. **Panel 1** — event title, budget note (« 25 $ par personne, taxes incluses »), who draws what.
 2. **Panel 2** — add the family (name, adult/child, family group). Same group ⇒ they never draw
    each other. Hit **Copier tous les liens** to put every private link on the clipboard.
-3. **Panel 3** — **Générer pis fretter le tirage**. Everyone gets their own link; nobody, not even
+3. **Panel 3** — **Lancer le tirage**. Everyone gets their own link; nobody, not even
    you, sees the pairings.
 4. Each person opens their link, unwraps the gift, and can edit their wishlist at any time —
    it saves itself.
@@ -247,15 +247,48 @@ ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py  # ends with: ACCEPTANCE:
 
 UX details worth knowing:
 
-* **The French is Québécois** (`fr-CA`): « Règles pis quotas », « Le monde que tu vas gâter »,
-  « Fretter le tirage », « Ouvre donc ça », dates like « il y a 5 minutes ». Amounts are CAD
-  (« 25 $ par personne, taxes incluses »); the EN switch says `$25 CAD`.
+* **The French is ordinary Quebec French** (`fr-CA`), not the caricature of it: « Règles et
+  quotas », « Les personnes que tu vas gâter », « Lancer le tirage », « Fermer la session »,
+  « Ouvre ton lien », dates like « il y a 5 minutes ». The words people actually use — *piger*,
+  *gâter*, *liste d’idées* — and no performed joual (no « pis », no « toé », no « frette »).
+  `tests/test_i18n.py` keeps the two languages on the same keys and the same `{placeholders}`,
+  refuses the caricature forms, and refuses two different controls that would share one label.
+  Amounts are CAD (« 25 $ par personne, taxes incluses »); the EN switch says `$25 CAD`.
 * **Nothing destructive without a confirm**, and failures keep their message on screen with a
   translated explanation (« Mot de passe pas correct. », « Trop de demandes. Réessa dans 300
   seconde(s). ») instead of a raw `detail` string.
 * **Field limits come from the server** (`GET /api/limits`) and are applied as `maxlength` with
   counters, so the frontend can never drift from the API's Pydantic caps.
 * **Reveal is sticky per link** (`sessionStorage`): a refresh does not replay the surprise.
+
+### Sharing the link: what the preview shows
+
+The organizer hands out links, so the link preview is the front door. Every page carries Open
+Graph + Twitter card tags — title « Échange de cadeaux · Père Noël secret », the description, and
+`static/og-image.png` (1200×630 PNG), plus `favicon.svg`, `apple-touch-icon.png`, `icon-512.png`
+and a `site.webmanifest` so "add to home screen" looks intentional on a phone.
+
+Three decisions in it are deliberate:
+
+* **The URL-dependent tags are injected by the server** (`share_meta()` in `main.py`). The same
+  image answers on a public domain, a LAN hostname, or `http://192.168.1.10:8085`, and a preview
+  has to name the host the browser was actually given. `X-Forwarded-Proto` is trusted only with
+  `TRUST_PROXY=1`, otherwise the card would advertise `http://` behind your own TLS proxy — and a
+  Host header that isn't a host loses the URL tags rather than echoing garbage.
+* **The card is identical for `/` and for a private `/?t=<uuid>`.** Crawlers read this markup, so
+  it carries the generic gift card and never a name, an event title, or a token. Asserted in
+  `tests/test_share_metadata.py`.
+* **The card is square-safe.** Facebook, WhatsApp and iMessage crop the wide image to the centre
+  square on phones, so the headline is laid out to live inside the middle 630 px — and
+  `tools/build_share_art.py` measures the rendered headline and **fails the build** when it
+  doesn't fit.
+
+Regenerate the art (Chromium renders the same HTML/SVG/fonts as the app, so the card matches the
+UI instead of drifting from it):
+
+```bash
+python3 tools/build_share_art.py   # static/og-image.png, icon-512.png, apple-touch-icon.png
+```
 
 ## Engine
 
@@ -268,7 +301,7 @@ short-circuit hopeless cases, so impossible rosters answer `422` immediately.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 49 tests: engine invariants, API contract, security
+bash run_tests.sh          # 66 tests: engine invariants, API contract, security, previews
 ```
 
 `run_tests.sh` creates its own virtualenv (`uv` if present) and adds `httpx` + `pytest` there only,
@@ -289,9 +322,10 @@ gift-exchange/
 ├── Dockerfile                    # python:3.12-slim + pinned fastapi/uvicorn
 ├── main.py                       # API + matching engine + SQLite schema
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
+│                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 49 tests
-├── tools/                        # seed_demo, verify_acceptance, capture/build docs media
+├── tests/                        # 66 tests
+├── tools/                        # seed_demo, verify_acceptance, docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution
 └── PLAN.md                       # specification, deviations, threat table, verification log
@@ -304,6 +338,7 @@ uv pip install playwright && playwright install chromium
 ADMIN_PASSWORD=<pw> python3 tools/seed_demo.py
 GE_BASE=http://127.0.0.1:8085 python3 tools/capture_docs_media.py
 python3 tools/build_docs_media.py
+python3 tools/build_share_art.py            # link-preview card + icons (also Chromium)
 ```
 
 ## Notes

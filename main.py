@@ -19,10 +19,13 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import html
 import json
 import logging
+import mimetypes
 import os
 import random
+import re
 import secrets
 import sqlite3
 import threading
@@ -34,7 +37,7 @@ from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -44,6 +47,12 @@ from pydantic import BaseModel, Field, field_validator
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+
+# Starlette picks content types from `mimetypes`, and the stdlib map does not know every
+# extension this app ships. A manifest served as application/octet-stream is a silently broken
+# "add to home screen" on Android, so both are pinned rather than guessed.
+mimetypes.add_type("application/manifest+json", ".webmanifest")
+mimetypes.add_type("image/svg+xml", ".svg")
 
 MAX_ATTEMPTS = 20000
 MAX_DRAW_QUOTA = 10
@@ -1133,10 +1142,86 @@ def update_wishlist(
 # Static frontend
 # --------------------------------------------------------------------------- #
 
+SHARE_TITLE = "Échange de cadeaux · Père Noël secret"
+SHARE_DESCRIPTION = ("Chacun reçoit son lien secret. Personne sait qui pige qui, même pas "
+                     "l’organisateur. Adultes et enfants, jamais dans la même famille.")
+SHARE_IMAGE = "/static/og-image.png"
+SHARE_IMAGE_ALT = "Un cadeau doré et un flocon sur fond de sapin"
+SHARE_META_MARKER = "<!--share-meta-->"
+
+# The Host header only has to be echoed into og:url and og:image, so accept what a hostname or an
+# address (with optional port) can look like and fall back to the parsed URL otherwise: a preview
+# pointing at the wrong host is cosmetic, a preview carrying injected quotes is not.
+_HOST_RE = re.compile(r"^[A-Za-z0-9.\-\[\]:]{1,253}$")
+
+INDEX_HTML = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+
+
+def public_base_url(request: Request) -> str:
+    """Absolute origin for the share tags, or "" when the request carries no usable one.
+
+    There is no clean fallback to fall back to: Starlette builds `request.url` from the same Host
+    header, so a hostile header is hostile in both places. When the host is not a host, the
+    URL-dependent tags are skipped — a preview that loses its image beats a preview that points a
+    crawler at a host the client chose.
+
+    Behind your own proxy (TRUST_PROXY=1) `X-Forwarded-Proto` is the only way to learn the visit
+    arrived over https; without it the tags would advertise `http://` and several crawlers quietly
+    drop the card.
+    """
+    host = request.headers.get("host", "")
+    if not _HOST_RE.match(host):
+        audit("share_meta_rejected_host", host=host[:40])
+        return ""
+    scheme = request.url.scheme
+    if trust_proxy():
+        forwarded = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+        if forwarded in ("http", "https"):
+            scheme = forwarded
+    return f"{scheme}://{host}"
+
+
+def share_meta(request: Request) -> str:
+    """Open Graph / Twitter tags so a shared link shows the gift card and the description.
+
+    Deliberately the same block for "/" and for a private "/?t=<uuid>": crawlers read this, so it
+    carries the generic card only — never a name, an event title, or a token.
+    """
+    pairs = [
+        ('property="og:type"', "website"),
+        ('property="og:site_name"', "Échange de cadeaux"),
+        ('property="og:title"', SHARE_TITLE),
+        ('property="og:description"', SHARE_DESCRIPTION),
+        ('property="og:locale"', "fr_CA"),
+        ('property="og:locale:alternate"', "en_US"),
+        ('name="twitter:card"', "summary_large_image"),
+        ('name="twitter:title"', SHARE_TITLE),
+        ('name="twitter:description"', SHARE_DESCRIPTION),
+    ]
+    base = public_base_url(request)
+    if base:
+        image = f"{base}{SHARE_IMAGE}"
+        pairs += [
+            ('property="og:url"', f"{base}/"),
+            ('property="og:image"', image),
+            ('property="og:image:width"', "1200"),
+            ('property="og:image:height"', "630"),
+            ('property="og:image:alt"', SHARE_IMAGE_ALT),
+            ('name="twitter:image"', image),
+        ]
+    return "\n".join(f'<meta {attr} content="{html.escape(value, quote=True)}">' for attr, value in pairs)
+
 
 @app.get("/")
-def index() -> FileResponse:
-    return FileResponse(STATIC_DIR / "index.html")
+def index(request: Request) -> HTMLResponse:
+    """The SPA shell.
+
+    Injected instead of served as a file because the share tags have to name the host the family
+    was actually given — the public domain, a LAN override, or an IP:port — and only the request
+    knows that. `no-cache` for the same reason: the document's head differs per host.
+    """
+    body = INDEX_HTML.replace(SHARE_META_MARKER, share_meta(request))
+    return HTMLResponse(body, headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

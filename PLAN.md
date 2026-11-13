@@ -336,18 +336,28 @@ untouched; everything below is additive and lives in `static/index.html` plus `G
 
 The FR table was rewritten in **Quebec French** (`fr-CA`), not metropolitan French, and all money
 is expressed in **Canadian dollars**. Keys are unchanged, and the FR/EN tables are audited to stay
-key-symmetric (118 keys each).
+key-symmetric (119 keys each) by `tests/test_i18n.py`.
+
+**Register, revised 2026-11-13.** The first pass leaned on spoken Québécois to prove it was
+Québécois, and it read as costume. The current rule is *ordinary Quebec French*: the words a
+Quebecer actually uses in an interface, without the phonetic spelling or the caricature markers.
+« pis » → « et », « toé/moé » → « toi/moi », « frette » → « verrouillé », « binômes » → « qui pige
+qui », « liste de souhaits » → « liste d'idées », « astheure » → « maintenant », « capoté » →
+« brisé / n'a pas fonctionné », « souhaite » → « idée », « pu » → « plus ». What stays Quebec and
+plain: *piger*, *gâter*, *tuque*, *mitaines*, *raquette*, « correct », the `tu` address, and the
+`fr-CA` date/currency formatting. The banned forms are a list in `tests/test_i18n.py`, because a
+style rule that lives only in a human's head comes back the first time someone adds one string.
 
 | Aspect | What changed |
 |---|---|
-| Register | Warm spoken Québécois for the friendly copy: « Règles pis quotas », « Le monde participant », « Le monde que tu vas gâter », « Ouvre donc ça », « même toé », « Garde-le pour toé », « Ça s'en vient, repasse tantôt ! ». |
-| Lock vocabulary | `state.locked` → « Tirage fretté », the header button → « Fretter », « Générer pis fretter le tirage ». (« fretté » is what a Quebecer says for a locked file/account.) |
-| Softened errors | « Le tirage a capoté », « Là, c'est pas faisable avec les familles pis les quotas d'astheure », « Mot de passe pas correct. », « Réessa dans {s} seconde(s). » |
-| Removed Gallicisms | « Liste d'envies » → « Liste de souhaits »; « pull bleu marine » → « tuque en laine / patins / jeu de société »; « groupe familial » → « Famille »; household example « Martin » → « Tremblay ». |
+| Register | Ordinary Quebec French, warm but not costumised (see the revision above): « Règles et quotas », « Les participants », « Les personnes que tu vas gâter », « Ouvre ton lien », « garde-le pour toi », « Ça s'en vient, repasse plus tard ! ». |
+| Lock vocabulary | `state.locked` → « Tirage verrouillé », the draw button → « Lancer le tirage », reset → « Recommencer le tirage ». The top-bar control is `admin.signout` → « Fermer la session » / "Sign out": it calls `POST /api/admin/logout`, and it was briefly labelled « Lancer le tirage » during the rename, which put two different actions under one label — the capture tool clicked the wrong one, which is how it was caught. `tests/test_i18n.py` now refuses duplicate labels except an allowlist. |
+| Softened errors | « Le tirage n'a pas fonctionné », « Ce n'est pas possible avec les familles et les quotas actuels », « Mot de passe pas correct. », « Réessaie dans {s} seconde(s). » |
+| Removed Gallicisms | « Liste d'envies » → « liste d'idées »; « pull bleu marine » → « tuque en laine / patins / jeu de société »; « groupe familial » → « Famille »; household example « Martin » → « Tremblay ». |
 | Locale | `locale()` returns `fr-CA` (and `en-CA`), so timestamps and the relative chip format as « il y a 5 minutes » with the 24-hour clock; `<html lang>` is `fr-CA`. |
 | Currency | No amount field exists in the schema — money only lives in the free-text `budget_note`. Every default, placeholder and demo value now uses CAD: « Ex. 25 $ par personne, taxes incluses », demo note « 25 $ par personne, taxes incluses — les cadeaux maison, c'est correct », EN placeholder « e.g. $25 CAD each, taxes included ». `€` no longer appears anywhere in the repo. |
 | Tooling | `tools/seed_demo.py` seeds a Quebec family (Tremblay / Gagnon / Bouchard / Roy, wishlists with tuques, mitaines, raquettes, chaussettes à orignaux); `tools/verify_acceptance.py` uses Quebec households (Tremblay, Gagnon, Bouchard, Roy, Ouellet) and a « 25 $ par personne » budget; `tests/test_api.py` fixtures use `25 $ maximum`. |
-| Deliberate limit | The technical/warning copy stays explicit (« mais y en a juste {available} en dehors de sa propre famille ») rather than full joual: an error message still has to be unambiguous, and no vulgarisms are used. |
+| Deliberate limit | Error copy stays explicit and unambiguous — « mais il y en a seulement {available} en dehors de sa famille » — with no phonetic spelling and no vulgarisms: an error message has to be readable by the person who is about to be locked out. |
 
 ## Verification log
 
@@ -518,3 +528,54 @@ Also measured on the way, and worth keeping straight for anyone wiring this behi
 configuration), so a monitoring probe has to fall back to `GET`; and with `TRUST_PROXY=1` the
 limiters key on the first `X-Forwarded-For` entry, which is why the app must never be reachable
 without the proxy in front.
+
+## Link previews (addendum, 2026-11-13)
+
+The organizer's deliverable is a URL, so the preview a shared URL produces is part of the product.
+Added: `static/og-image.png` (1200×630), `static/favicon.svg`, `static/apple-touch-icon.png`,
+`static/icon-512.png`, `static/site.webmanifest`, and an injected block of Open Graph + Twitter
+card tags in the shell (`share_meta()` / `public_base_url()` in `main.py`). The old `/` handler was
+a `FileResponse`; it is now an injected `HTMLResponse`, because only the request knows which host
+the family was given.
+
+Design decisions worth keeping:
+
+| Decision | Why |
+|---|---|
+| One generic card for `/` and for `/?t=<uuid>` | Crawlers read this markup and a participant link is what gets shared. Nothing about a real family may ever be personalised into it — no name, no event title, no token. Asserted per test. |
+| Absolute URLs built from the request | A relative `og:image` is the classic silently-blank preview, and the same image answers on a public domain, a LAN hostname, or an `ip:port`. |
+| `X-Forwarded-Proto` honoured only with `TRUST_PROXY=1` | Otherwise the card advertises `http://` behind your own TLS proxy, and several crawlers drop the card or the HSTS upgrade breaks the family's links. Same trust gate as the rate limiters, on purpose. |
+| A Host header that is not a host loses the URL tags | `public_base_url()` validates against `^[A-Za-z0-9.\-\[\]:]{1,253}$` and emits title/description only. There is no clean fallback: Starlette builds `request.url` from the same header, so the first draft "fell back" to the same hostile value and the test caught it. The values are also `html.escape`d, so the failure mode was a preview pointing at an attacker-chosen host — not attribute injection. |
+| Static assets keep ETag/Last-Modified, the shell is `no-cache` | The shell differs per host; the PNG never changes. No explicit `Cache-Control` was pinned on `/static`: a year of freshness would need a fingerprinted filename to be safe, and revalidation against a byte-identical file is already cheap (verified: `If-None-Match` → `304`). |
+| `mimetypes.add_type` for `.webmanifest` / `.svg` | A manifest served as `application/octet-stream` is a silently broken "add to home screen". |
+| The card is generated, not hand-drawn | `tools/share-card.html` + `tools/app-icon.html` are the sources, rendered by Chromium through the same palette, snowflake geometry and web fonts as the app, so the preview cannot drift from the UI. `build_share_art.py --check` measures the rendered headline. |
+| Square-safe layout is enforced | Facebook/WhatsApp/iMessage crop the wide card to the centre 630 px on phones. The build measures the ivory headline in the PNG (components grouped by row bands) and **fails** if a line leaves that band. |
+
+### Verification — 2026-11-13
+
+```
+.venv/bin/pytest -q                      -> 66 passed   (17 new: 11 share metadata + 6 i18n)
+python3 tools/build_share_art.py         -> og-image.png 1200x630 547 KB
+                                            crop-safe: 2 headline line(s); widest 381 px at
+                                            x=413..793 (mobile crops the middle 630 px: 285..915)
+                                            icon-512.png 512x512, apple-touch-icon.png 180x180
+GET /                                    -> '<meta property="og:image"
+                                            content="http://testserver/static/og-image.png">'
+GET / with Host: tirage-noel.alserv.org + X-Forwarded-Proto: https (TRUST_PROXY=1)
+                                         -> content="https://tirage-noel.alserv.org/static/og-image.png"
+GET / with Host: evil";x="1              -> og:image/og:url absent, og:title present, no "evil"
+GET /?t=<uuid> share block == share block of /       (and the token is not in it)
+GET /static/og-image.png                 -> 200 image/png, IHDR 1200x630, 547 KB < 1 MB
+GET /static/site.webmanifest             -> application/manifest+json
+GET /static/og-image.png If-None-Match   -> 304
+i18n audit                               -> 119 fr / 119 en keys, symmetric, placeholders match,
+                                            banned forms: none, duplicate labels: none
+                                            (allowlist: admin.title == login.title)
+docs gallery                             -> re-shot against the new copy (15 stills + 2 GIFs)
+```
+
+The rename that produced the duplicate-label test: `admin.lock` (top bar) calls
+`POST /api/admin/logout`; during the plain-French pass it was labelled « Lancer le tirage », the
+same text as the real draw button, and `tools/capture_docs_media.py` failed with a Playwright
+strict-mode violation naming both buttons. Fixed by `admin.signout` → « Fermer la session » /
+"Sign out", and `test_no_two_different_controls_share_a_label` now guards it.

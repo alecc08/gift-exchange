@@ -78,13 +78,13 @@ def capture_admin_page(page):
     page.wait_for_selector(".chip.bg-holly-100", state="hidden")
     time.sleep(0.4)
 
-    page.locator("h2", has_text="Le monde participant").scroll_into_view_if_needed()
+    page.locator("h2", has_text="Les participants").scroll_into_view_if_needed()
     time.sleep(0.6)
     shot(page, "04-roster.png")
     page.get_by_role("button", name=re.compile(r"^Tremblay")).first.click()
     time.sleep(0.6)
     shot(page, "05-family-filter.png")
-    page.get_by_role("button", name="Montre-moé le monde au complet").click()
+    page.get_by_role("button", name="Montre tout le monde").click()
     time.sleep(0.4)
 
     page.get_by_role("button", name="Copier tous les liens").click()
@@ -139,8 +139,8 @@ def main():
 
             page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
             page.once("dialog", lambda dialog: dialog.accept())
-            page.get_by_role("button", name=re.compile("Générer pis fretter")).click()
-            page.wait_for_selector("text=Tirage fretté")
+            page.get_by_role("button", name=re.compile("Lancer le tirage")).click()
+            page.wait_for_selector("text=Tirage verrouillé")
 
             # a few participants have already opened their link: the panel tracks that
             others = [p["token"] for p in snapshot["participants"] if p["name"] != hero][:3]

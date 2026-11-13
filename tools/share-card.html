@@ -1,0 +1,150 @@
+<!doctype html>
+<!--
+  Source for static/og-image.png — the card social apps show when a link is shared.
+  Rebuild:  python3 tools/build_share_art.py          (needs Chromium, not an app dependency)
+
+  Deliberately generic: no family name, no participant, no event title, no token. This file is
+  rendered by a crawler that anyone can point at the deployment, and the same card is served for
+  a bare https://…/ link and for a private https://…/?t=<uuid> link. Nothing here may ever be
+  personalised, or the preview becomes the leak.
+
+  Composition rule: keep everything that matters inside the middle 630×630 band. Facebook,
+  WhatsApp and iMessage crop the wide card to a square for mobile previews, and a card whose
+  title got cropped off is a card that leaks nothing but also says nothing.
+-->
+<html lang="fr-CA">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    /* the app's own palette, from static/index.html's tailwind config */
+    --pine-900: #0a1f18; --pine-800: #0e2b21; --pine-700: #143c2e; --pine-600: #1f5340;
+    --pine-500: #2f6b52; --pine-200: #b3d0c2; --pine-100: #d7e7de;
+    --holly-500: #c0392f; --gold-400: #d4af62; --gold-300: #e6c98a; --gold-500: #c79a3b;
+    --ivory: #faf7f2;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1200px; height: 630px; overflow: hidden; }
+  body {
+    position: relative;
+    font-family: Inter, system-ui, sans-serif;
+    color: var(--ivory);
+    background:
+      radial-gradient(620px 420px at 50% 34%, rgba(199,154,59,.22), rgba(199,154,59,0) 62%),
+      radial-gradient(900px 700px at 12% 108%, rgba(47,107,82,.55), rgba(47,107,82,0) 70%),
+      linear-gradient(135deg, var(--pine-900) 0%, var(--pine-800) 46%, var(--pine-600) 100%);
+    text-rendering: geometricPrecision;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ---- scenery: snow + flakes + a snowbank, all behind the type ---- */
+  .layer { position: absolute; inset: 0; }
+  .flakes { position: absolute; inset: 0; opacity: .30; }
+  .snowbank { position: absolute; left: 0; right: 0; bottom: -1px; }
+
+  /* ---- framed card, like the app's own panels ---- */
+  .frame {
+    position: absolute; inset: 26px;
+    border: 1px solid rgba(230,201,138,.34);
+    border-radius: 22px;
+    box-shadow: inset 0 0 0 1px rgba(250,247,242,.05), inset 0 0 90px rgba(10,31,24,.55);
+  }
+
+  .stack {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; padding: 0 96px;
+  }
+  .gift { width: 132px; height: 132px; margin-bottom: 4px; }
+  .gift .box { color: var(--gold-300); }
+  .gift .ribbon { color: var(--holly-500); }
+
+  .eyebrow {
+    font: 600 17px/1 Inter, sans-serif;
+    letter-spacing: .32em; text-transform: uppercase;
+    color: var(--gold-300);
+    margin-bottom: 16px;
+  }
+  /* Two lines, not one: mobile clients crop this wide card to a square around the middle 630 px,
+     and a single 19-character line at this size runs outside that band and gets sliced mid-word.
+     tools/build_share_art.py --check measures it. */
+  h1 {
+    font: 700 88px/1.04 Fraunces, Georgia, serif;
+    letter-spacing: -.015em;
+    margin-bottom: 18px;
+    text-shadow: 0 18px 44px rgba(10,31,24,.65);
+  }
+  h1 .of { font-weight: 400; font-style: italic; }
+  .lede {
+    font: 400 27px/1.5 Inter, sans-serif;
+    color: var(--pine-100);
+    max-width: 780px;
+  }
+  .lede b { color: var(--ivory); font-weight: 600; }
+  .foot {
+    margin-top: 26px;
+    font: 500 16px/1 Inter, sans-serif;
+    letter-spacing: .22em; text-transform: uppercase;
+    color: rgba(215,231,222,.72);
+  }
+  .foot span { color: var(--gold-300); }
+</style>
+</head>
+<body>
+<!-- the app's crystalline flake: six rotated arms, reused here at three sizes -->
+<svg class="layer" width="0" height="0" style="position:absolute">
+  <defs>
+    <g id="arm" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+      <path d="M50 50V14"/><path d="M50 26l-9-8"/><path d="M50 26l9-8"/><path d="M50 38l-12-10"/><path d="M50 38l12-10"/>
+    </g>
+    <g id="flake">
+      <use href="#arm"/><use href="#arm" transform="rotate(60 50 50)"/><use href="#arm" transform="rotate(120 50 50)"/>
+      <use href="#arm" transform="rotate(180 50 50)"/><use href="#arm" transform="rotate(240 50 50)"/><use href="#arm" transform="rotate(300 50 50)"/>
+      <circle cx="50" cy="50" r="3.4" fill="currentColor" stroke="none"/>
+    </g>
+    <!-- the app's gift icon (Tabler-derived), split in two so the ribbon can take the holly red:
+         `class` never reaches the shadow tree of a <use>, but `color`/currentColor inherits -->
+    <g id="gift-box" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 8m0 1a1 1 0 0 1 1 -1h16a1 1 0 0 1 1 1v2a1 1 0 0 1 -1 1h-16a1 1 0 0 1 -1 -1z"/>
+      <path d="M19 12v7a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-7"/>
+    </g>
+    <g id="gift-ribbon" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M12 8l0 13"/>
+      <path d="M7.5 8a2.5 2.5 0 0 1 0 -5a4.8 8 0 0 1 4.5 5a4.8 8 0 0 1 4.5 -5a2.5 2.5 0 0 1 0 5"/>
+    </g>
+  </defs>
+</svg>
+
+<svg class="flakes" viewBox="0 0 1200 630" aria-hidden="true">
+  <g color="#e6c98a"><use href="#flake" transform="translate(78 62) scale(1.15)" opacity=".85"/></g>
+  <g color="#faf7f2"><use href="#flake" transform="translate(1046 96) scale(.85)" opacity=".7"/></g>
+  <g color="#b3d0c2"><use href="#flake" transform="translate(152 470) scale(.62)" opacity=".55"/></g>
+  <g color="#faf7f2"><use href="#flake" transform="translate(986 452) scale(1.05)" opacity=".5"/></g>
+  <g color="#d7e7de" opacity=".5">
+    <circle cx="300" cy="120" r="3.4"/><circle cx="415" cy="64" r="2.4"/><circle cx="742" cy="88" r="3"/>
+    <circle cx="884" cy="176" r="2.2"/><circle cx="236" cy="238" r="2.6"/><circle cx="1010" cy="286" r="3.2"/>
+    <circle cx="352" cy="392" r="2.2"/><circle cx="858" cy="410" r="2.6"/><circle cx="540" cy="556" r="2.4"/>
+    <circle cx="690" cy="588" r="3"/><circle cx="1080" cy="530" r="2.2"/><circle cx="120" cy="352" r="2.8"/>
+  </g>
+</svg>
+
+<svg class="snowbank" viewBox="0 0 1200 120" aria-hidden="true">
+  <path d="M0 120 Q 150 44 330 78 T 690 60 T 1050 86 T 1200 58 L1200 120 Z" fill="rgba(250,247,242,.10)"/>
+  <path d="M0 120 Q 210 72 430 96 T 830 82 T 1200 100 L1200 120 Z" fill="rgba(250,247,242,.07)"/>
+</svg>
+
+<div class="frame"></div>
+
+<div class="stack">
+  <svg class="gift" viewBox="0 0 24 24" aria-hidden="true">
+    <use class="box" href="#gift-box"/>
+    <use class="ribbon" href="#gift-ribbon"/>
+  </svg>
+  <div class="eyebrow">Tirage de Noël · Père Noël secret</div>
+  <h1>Échange<br><span class="of">de</span> cadeaux</h1>
+  <p class="lede">Chacun reçoit son lien secret. <b>Personne sait qui pige qui</b>, même pas l’organisateur.</p>
+  <div class="foot">Pas dans la même famille <span>·</span> Adultes et enfants <span>·</span> Liste d’idées</div>
+</div>
+</body>
+</html>
