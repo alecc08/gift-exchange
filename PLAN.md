@@ -1034,3 +1034,41 @@ password not configured » before reading the detail, so the email feature's own
 configured on this server`, and now `public address`) were unreachable — a guard pins the order. And
 the i18n parity check reads one entry per line, so a wrapped entry was invisible to every test; a new
 guard counts the raw `'<key>':` starts against the parsed keys. 182 tests.
+
+## The gallery was two releases behind (addendum, 2026-11-13)
+
+`docs/screenshots/` stopped at 17 while the console had grown a draw list, a phone roster and a whole
+mail panel. `tools/capture_docs_media.py` was already shooting `18-draw-list.png` and
+`19-roster-phone.png` — those two JPEGs had simply never been committed. Rebuilding the gallery from
+a bare database surfaced six more things, all of them about the tool rather than the design:
+
+* **The run started from whatever the instance held**, so the stills described whatever roster
+  happened to be in the demo DB. `seed_demo.seed()` now runs at the start *and* at the end.
+* **The demo roster had no email addresses at all**, so the mail panel, the mailbox counter and the
+  roster's address column could not be shown. The seed carries one address per household now, on the
+  RFC 2606 reserved `example.com` — a demo left configured cannot mail a real person by accident.
+* **Signing in lands on the draw list** and two stages of the tool still waited for the console
+  right after Enter (`tools/check_organizer_ui.py` had been fixed for this, the capture had not).
+* **A second draw on screen turns every unqualified `/api/admin/*` call into `400 No draw
+  selected`** — the list still needs two draws to be worth looking at, so the tool creates one
+  *after* the snapshot stage, sets its quotas (the copy carries people, not rules — drawing a fresh
+  copy is refused), and removes it before the stages that mean "the only draw". `cleanup_extra_draws`
+  makes the run restartable after an interrupted one.
+* **`19-roster-phone.png` was a 14 000 px full-page strip** shipping at 660 KB, and its scroll was
+  taken before the resize, so it showed the rules panel instead of the cards. Viewport-sized, phone
+  width, scrolled to the first `td[data-label]` — the element that makes the cards cards.
+* **The mail preview modal only grows as far as its iframe** (`min-h`, not `h`), so the still cut off
+  under the gift art and the labelled links — the whole point of the household template — were not in
+  the frame.
+
+One real app bug surfaced on the way, and it was the same one as the addendum above, hiding in a
+different place: **the preview endpoint resolved its origin with `public_base_url(request)` while the
+send uses `mail_base_url(request)`**, so an organizer looking at the preview from inside the container
+saw `127.0.0.1` links while the mail itself would have carried the real host. A preview that shows
+one URL and sends another is not evidence — and that is exactly how the loopback bug was debugged in
+the first place. It now goes through `mail_base_url()` and a test pins the two together.
+
+**Guard:** `tests/test_docs.py` keeps the gallery honest in both directions — every image the README
+shows exists, every file in `docs/` is shown by a README row (that is how `18`/`19` went unnoticed:
+the README cannot reference what it does not know about), and no raw PNG capture is committed. The
+gallery is 21 stills + 2 GIFs. 186 tests.

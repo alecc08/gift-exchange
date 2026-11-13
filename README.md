@@ -226,24 +226,38 @@ ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py  # ends with: ACCEPTANCE:
 
 <table>
   <tr>
+    <td width="50%"><img src="docs/screenshots/01-login.jpg" alt="Organizer sign-in card on the festive background"><br><b>The door</b> — one password, rate limited and locked out after five failures; the whole organizer surface sits behind it.</td>
+    <td width="50%"><img src="docs/screenshots/18-draw-list.jpg" alt="Draw list: two draws, one not yet drawn and one locked, plus the form that opens another"><br><b>Sign in, choose a tirage</b> — the first screen is the list: one card per draw with its status, its people, how many links went out and how many were opened. Everything below is one draw at a time.</td>
+  </tr>
+  <tr>
     <td width="50%"><img src="docs/screenshots/02-admin-rules.jpg" alt="Rules and quotas panel with live totals and character counters"><br><b>Rules &amp; quotas</b> — live gift totals, character counters, and a warning while the admin password is still the default.</td>
     <td width="50%"><img src="docs/screenshots/03-warnings.jpg" alt="Warning that the draw cannot succeed with these quotas"><br><b>Feasibility warnings</b> — the quota arithmetic is checked while you type, so an impossible draw is explained instead of failing after a click.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/04-roster.jpg" alt="Roster with group chips, family name and group columns"><br><b>Roster</b> — per-person gift count, a column for the surname and one for the group, chips with counts, wishlist preview.</td>
-    <td><img src="docs/screenshots/06-toast-clipboard.jpg" alt="Toast confirming all links were copied"><br><b>Copy all links</b> — one click, one toast; each row keeps its own copy state.</td>
+    <td><img src="docs/screenshots/04-roster.jpg" alt="Roster table with surname, group, address, status and action columns"><br><b>Roster</b> — per-person gift count, a column for the surname, one for the household, one for the address the mail will go to, and its own « Envoyer ».</td>
+    <td><img src="docs/screenshots/05-group-filter.jpg" alt="Roster filtered to one household by its group chip"><br><b>Filter by household</b> — the group chips carry counts; one click narrows the roster to that table, which is how you check « chez Gaétan » without scanning the whole family.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/06-toast-clipboard.jpg" alt="Toast confirming all links were copied"><br><b>Copy all links</b> — one click, one toast; each row keeps its own copy state, for the families who would rather get their link in person.</td>
+    <td><img src="docs/screenshots/08-draw-locked.jpg" alt="Locked draw panel with opened link counter"><br><b>Locked draw</b> — counts how many links were opened; re-drawing a locked event is refused until you reset.</td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/16-group-note.jpg" alt="Console predicting that the draw will have to pick inside a group"><br><b>The console thinks ahead</b> — this roster cannot respect the group rule; the note says how many picks it will cost, and the draw button stays enabled.</td>
     <td><img src="docs/screenshots/17-draw-relaxed.jpg" alt="Locked draw reporting the same-group pick it had to make"><br><b>…and admits what it did</b> — the draw ran, with exactly the one crossing the arithmetic forced. A count, never a pairing.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/08-draw-locked.jpg" alt="Locked draw panel with opened link counter"><br><b>Locked draw</b> — counts how many links were opened; re-drawing a locked event is refused until you reset.</td>
-    <td><img src="docs/screenshots/09-admin-english.jpg" alt="Same console in English"><br><b>One-click FR ⇄ EN</b> — every string exists in both languages, remembered per browser.</td>
+    <td colspan="2"><img src="docs/screenshots/09-admin-english.jpg" alt="Same console in English"><br><b>One-click FR ⇄ EN</b> — every string exists in both languages, remembered per browser, and the parity of the two dictionaries is a test, not a hope.</td>
   </tr>
 </table>
 
 ### On a phone
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/19-roster-phone.jpg" alt="Roster at 390 px: each person is a card with every field labelled"><br><b>The roster, re-built</b> — below 900 px a person is a card, and each cell repeats its column name (« COURRIEL », « STATUT », « ACTIONS »), so nothing is silently dropped on the way to the small screen.</td>
+    <td width="50%"><img src="docs/screenshots/15-mobile-admin.jpg" alt="Organizer console on a phone with the draw summary and the first panel"><br><b>The console, not a shrunken console</b> — the draw summary, the panel headings and the buttons stay readable one-handed; 40 px targets below 640 px, and inputs at 16 px so Mobile Safari never zooms in and leaves you there.</td>
+  </tr>
+</table>
 
 There are real breakpoints now, instead of a desktop layout that simply hung off the edge of a
 narrow screen. Below **900 px** the roster stops being a seven-column table and becomes one card per
@@ -329,6 +343,13 @@ URLs into WhatsApp. Off by default at the *server* level: no `RESEND_API_KEY`, n
 buttons stay visible but disabled with a clear "not configured" note, and every send endpoint
 answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/20-email-panel.jpg" alt="Draw panel with the mail button, the household copy and the mailbox counter"><br><b>The send is counted in mailboxes</b> — the chip says « 8 personne(s) · 4 boîte(s) · 4 courriel(s) »: what you are about to pay for is addresses, not people, and the copy under the button says so in one sentence.</td>
+    <td width="50%"><img src="docs/screenshots/21-email-preview.jpg" alt="The household mail: art, intro, and three labelled buttons, one per person"><br><b>One mail, one household</b> — the subject carries their names, the gift art is a PNG served from <code>/static</code>, and there is one labelled button each (« Voir le lien de Aline », …). Nothing in the mail belongs to anybody outside that mailbox.</td>
+  </tr>
+</table>
+
 * **The field is free text.** `participants.email` is normalized (trim, lowercase) and never
   format-rejected at save time — a typo is flagged softly in the cell, and only the send-time
   check (`EMAIL_RE`) refuses to spend an API call on it. Fixing an address after the draw is the
@@ -387,10 +408,12 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   to open the server's own machine. That is exactly what happened to the first test sends on the real
   deployment: the copy, the subject and the links were perfect and **every URL in the mail was
   unreachable from outside**, which is why the images were blank and a click would have died. So:
-  set `PUBLIC_BASE_URL` to the address the family types (it wins outright, which also makes share
-  tags immune to a forged Host), and without it a loopback origin is **refused** — `503` naming the
-  variable, and in the auto-send report each person is listed as skipped with that reason. The draw
-  still commits: a mail that cannot be written correctly never rolls back a draw.
+  set `PUBLIC_BASE_URL` to the address the family types (it wins outright for everything that leaves
+  by mail), and without it a loopback origin is **refused** — `503` naming the variable, and in the
+  auto-send report each person is listed as skipped with that reason. The draw still commits: a mail
+  that cannot be written correctly never rolls back a draw. (Share tags deliberately keep following the
+  request's own `Host`: a crawler wants the host it visited, and those URLs are validated against
+  injection separately.)
 * **Triggers:** « Envoyer » per row (which sends that row's whole *household*, and answers with
   `with: [names]` so the console can say what really left), « Envoyer les liens par courriel » for
   everyone with an address (per-person report, skipped addresses listed not hidden, plus
@@ -408,7 +431,10 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   `Gabrielle`, `Hugo`) and a sample all-zeros link, so the modal is screenshot-able and cannot leak
   the roster. `links: 1..3` chooses which template to show; the console has two buttons, « Aperçu du
   courriel » and « Aperçu à plusieurs liens », because a family mail is only believable once you
-  have seen it.
+  have seen it. The preview resolves its origin through `mail_base_url()`, the same function the send
+  uses: it used to read the request's `Host`, so an organizer on the server itself saw `127.0.0.1`
+  links in the modal while the real mail would have carried the configured hostname — a preview that
+  disagrees with the send is worse than no preview, and that is how the loopback bug got debugged.
 * **Transport:** stdlib `urllib`, one POST to `api.resend.com/emails`. The `User-Agent` header is
   load-bearing: Cloudflare in front of Resend answers `403 / error code 1010` to Python's default
   `Python-urllib/3.x` agent (measured — a browser UA gets a normal `401 API key is invalid` from
@@ -434,7 +460,11 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/07-participant-pending.jpg" alt="Participant page before the draw"><br><b>Before the draw</b> — « pas encore réglé »; it polls, and offers a manual check.</td>
-    <td width="50%"><img src="docs/screenshots/12-revealed.jpg" alt="Revealed gifts with wishlists"><br><b>After the reveal</b> — who you buy for, with their wishlist, plus “copy my list”.</td>
+    <td width="50%"><img src="docs/screenshots/10-reveal-tease.jpg" alt="The closed gift and the button that opens it"><br><b>The box is shut</b> — the pairing is already there, and the page says so without saying what it is: « Ton tirage t’attend. »</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/11-reveal-mid.jpg" alt="Gift mid-reveal, lid off, snow falling"><br><b>…and something inside is trying to come out</b> — one click, the lid jumps, the snow falls, then the names. The reveal is a moment, not a page refresh.</td>
+    <td><img src="docs/screenshots/12-revealed.jpg" alt="Revealed gifts with wishlists"><br><b>After the reveal</b> — who you buy for, with their wishlist, plus “copy my list”.</td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/13-wishlist-autosave.jpg" alt="Wishlist autosaving"><br><b>Autosave</b> — saves 1.2 s after you stop typing; <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+<kbd>Enter</kbd> saves now.</td>
@@ -509,7 +539,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 182 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
+bash run_tests.sh          # 186 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
 #                  security, previews, email delivery
 ```
 
@@ -533,7 +563,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 182 tests
+├── tests/                        # 186 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution
@@ -544,8 +574,10 @@ Regenerate the gallery (needs Playwright, ffmpeg, Pillow — none of them are ap
 
 ```bash
 uv pip install playwright && playwright install chromium
-ADMIN_PASSWORD=<pw> python3 tools/seed_demo.py
-GE_BASE=http://127.0.0.1:8085 python3 tools/capture_docs_media.py
+ADMIN_PASSWORD=<pw> python3 tools/seed_demo.py      # optional: the capture re-seeds it itself
+# PUBLIC_BASE_URL matters here: it is what the mail preview builds its links and its art from, and
+# unset the preview still shows empty boxes where the gift should be.
+PUBLIC_BASE_URL=http://127.0.0.1:8085 GE_BASE=http://127.0.0.1:8085 python3 tools/capture_docs_media.py
 python3 tools/build_docs_media.py
 python3 tools/build_share_art.py            # link-preview card + icons (also Chromium)
 python3 tools/build_email_art.py            # the mail's PNG art, from the SVGs in static/
