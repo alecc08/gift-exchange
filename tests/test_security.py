@@ -261,6 +261,10 @@ def test_redaction_only_replaces_token_shaped_segments():
 
     assert fake("/api/draw/6f1d2c3a-0b0b-4c1a-9d2e-7f8a9b0c1d2e") == "/api/draw/<token>"
     assert fake("/api/draw/6F1D2C3A-0B0B-4C1A-9D2E-7F8A9B0C1D2E/wishlist") == "/api/draw/<token>/wishlist"
+    # the /draw/<uuid> bounce for the links already mailed: same credential, same redaction
+    assert fake("/draw/6f1d2c3a-0b0b-4c1a-9d2e-7f8a9b0c1d2e") == "/draw/<token>"
+    # the real participant URL keeps its token in the query string, which the audit trail never logs
+    assert fake("/") == "/"
     assert fake("/api/admin/participants/12") == "/api/admin/participants/12"
     assert fake("/api/health") == "/api/health"
     # a name that happens to look partly like a uuid stays visible

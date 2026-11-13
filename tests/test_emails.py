@@ -11,6 +11,7 @@ import re
 import sqlite3
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -209,7 +210,18 @@ def test_send_one_stamps_and_carries_only_that_participants_link(client, monkeyp
     assert len(stub.sent) == 1
     mail = stub.sent[0]
     assert mail["to"] == "ghislaine@exemple.ca"
-    assert f"/draw/{ghislaine['token']}" in mail["html"]
+    assert f"/?t={ghislaine['token']}" in mail["html"]
+    # A link in an email is only worth what it resolves to: follow it and demand the interface,
+    # not a JSON 404. This is the check that the first real send failed — the mail carried the
+    # API's path shape (`/draw/<uuid>`), a route the server never served.
+    href = re.search(r'href="(https?://[^"]*/\?t=[0-9a-f-]{36})"', mail["html"]).group(1)
+    where = urllib.parse.urlparse(href)
+    landing = client.get(f"{where.path}?{where.query}")
+    assert landing.status_code == 200, href
+    assert "landing" in landing.text or "giftExchange" in landing.text
+    assert "text/html" in landing.headers["content-type"]
+    assert ghislaine["token"] in landing.text or "?t=" in landing.text
+    assert ghislaine["name"] in mail["subject"], "the mailbox sorts by subject; the name must be in it"
     # the mail names its own recipient and nobody else — no roster leak, no pairing
     assert "Réjean" not in mail["html"] and "Florent" not in mail["html"]
     assert mail["ref_id"] == f"gift-exchange-{ghislaine['id']}"
@@ -479,6 +491,60 @@ def test_french_email_copy_follows_the_same_rule_as_the_interface():
     for key, value in main.EMAIL_STRINGS["fr"].items():
         for pattern, why in BANNED_FR:
             assert not re.search(pattern, value, re.IGNORECASE), f"{key}: {value!r} -> {why}"
+
+
+def test_both_email_languages_offer_the_same_subject_placeholders():
+    """A subject that lost its {name} in one language mails the braces to a grandmother."""
+    french, english = main.EMAIL_STRINGS["fr"], main.EMAIL_STRINGS["en"]
+    assert set(french) == set(english)
+    for key in set(french) & set(english):
+        assert set(re.findall(r"\{(\w+)\}", french[key])) == set(
+            re.findall(r"\{(\w+)\}", english[key])), key
+
+
+def test_the_subject_names_the_person_because_a_family_shares_one_inbox():
+    """Six mails from one sender with one subject are indistinguishable in a phone's list view."""
+    ready = main.build_email("Ghislaine", "Réveillon chez Gaétan", "https://x.test/?t=t", "fr", True)
+    assert ready["subject"].startswith("Ghislaine")
+    assert "ton lien" in ready["subject"]
+    assert "Réveillon chez Gaétan" in ready["subject"]
+    pending = main.build_email("Enfant", "Réveillon", "https://x.test/?t=t", "en", False)
+    assert pending["subject"].startswith("Enfant") and "your link" in pending["subject"]
+
+
+# --------------------------------------------------------------------------- #
+# The link in the mail has to be a route the server serves
+# --------------------------------------------------------------------------- #
+
+
+def test_the_link_shape_the_mail_carries_is_the_shape_the_spa_reads():
+    """The console's copy button and the email must agree — one builder, not two guesses."""
+    assert main.participant_link("https://tirage-noel.alserv.org", "abc") == \
+        "https://tirage-noel.alserv.org/?t=abc"
+    # the SPA reads its token from the query string, so the two cannot drift apart silently
+    assert "params.get('t')" in main.INDEX_HTML
+    assert "${window.location.origin}/?t=${person.token}" in main.INDEX_HTML
+
+
+def test_the_api_path_shape_still_works_for_links_already_in_inboxes(client):
+    """The first real send mailed `/draw/<uuid>`, which answered 404. Emails cannot be unsent."""
+    created = add(client, "Ghislaine", "ADULT", "Bernier")
+    token = created["token"]
+
+    bounce = client.get(f"/draw/{token}", follow_redirects=False)
+    assert bounce.status_code == 302
+    assert bounce.headers["location"] == f"/?t={token}"
+
+    landing = client.get(f"/draw/{token}")          # follow it the way a mail client does
+    assert landing.status_code == 200
+    assert "text/html" in landing.headers["content-type"]
+    assert "giftExchange" in landing.text
+
+
+def test_a_non_token_under_the_old_path_stays_a_404(client):
+    """The bounce is for UUIDs, not a catch-all that hints other shapes are meaningful."""
+    for path in ("/draw/pas-un-jeton", "/draw/1234", "/draw/"):
+        assert client.get(path).status_code == 404
 
 
 # --------------------------------------------------------------------------- #
