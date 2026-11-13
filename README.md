@@ -290,6 +290,16 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 * **What a mail contains:** the event name, the participant's own name, and their own link —
   never a pairing, never anyone else's name. Names are escaped before they touch the HTML.
   `X-Entity-Ref-ID` is the participant id, so repeats thread into one conversation.
+* **The link is `/?t=<uuid>`, built by `participant_link()` and nobody else.** That is the URL the
+  SPA reads and the one the console's « Copier le lien » hands out. The first real send built it
+  from the API's path shape instead (`/draw/<uuid>`), and twelve inboxes got
+  `{"detail":"Not Found"}` — the API lives under `/api`, so the pretty path was never a route.
+  `GET /draw/<uuid>` now 302s to `/?t=<uuid>` (UUID-shaped only, rate-limited, logged as
+  `/draw/<token>`), because emails cannot be unsent; the test that would have caught the original
+  follows the link out of the mail body and demands `200 text/html`.
+* **The subject leads with the person:** `Ghislaine — ton lien secret · Réveillon chez Gaétan`.
+  A family shares one inbox, so six mails from one sender with one subject are impossible to tell
+  apart in a phone's list view — and the event title, being last, is the part Gmail truncates.
 * **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake and the
   gift strip served from `/static` as `<img>` — Gmail strips inline `<svg>` markup but renders
   SVG files through its image proxy. Without an absolute base URL the art is simply omitted.
@@ -397,7 +407,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 134 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
+bash run_tests.sh          # 139 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
 #                  security, previews, email delivery
 ```
 
@@ -421,7 +431,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 134 tests
+├── tests/                        # 139 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution

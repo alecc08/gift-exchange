@@ -774,3 +774,19 @@ feature, not just provider politeness. One process-wide gate, two layers: a glob
 Bulk order interleaves addresses so the lanes share the wait instead of stacking sleeps, and a
 provider 429 gets exactly one retry after `EMAIL_RETRY_AFTER_S` (3 s). Measured on the live build:
 4 sends, 4 distinct addresses, elapsed 3.63 s = three 1200 ms spacings, zero failures.
+
+### Link shape and subject (hotfix after the first real send, 2026-11-13)
+
+The first batch of link emails on prod carried `https://tirage-noel.alserv.org/draw/<uuid>` — the
+API's path shape, not the SPA's. `/draw/<uuid>` is not a route (the token endpoints live under
+`/api/draw/…`), so twelve people got FastAPI's `{"detail":"Not Found"}`. Nothing in the suite had
+ever *followed* a link out of a mail: the test asserted the link's text, and the text was wrong.
+Fixed in three parts: one builder (`participant_link()`) for the console, the mail and the preview;
+`GET /draw/<uuid>` → 302 → `/?t=<uuid>` so the links already sitting in inboxes work without a
+resend; and a test that extracts the href from the mail body and requires `200 text/html`. Measured
+on prod after the deploy: the old URL bounces and lands, the new URL is served directly.
+
+Subject order changed from `{event} — ton lien secret` to `{name} — ton lien secret · {event}`. The
+event title on prod is 53 characters, which pushed the whole purpose of the mail past Gmail's list
+view truncation and left six identical subjects at one shared mailbox. Name first is the only thing
+a mailbox sorts and scans by; the event goes last so it is the part that gets cut.

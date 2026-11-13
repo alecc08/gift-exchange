@@ -40,7 +40,7 @@ from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -421,6 +421,18 @@ def redacted_path(request: Request) -> str:
     """
     return "/".join("<token>" if TOKEN_SEGMENT.match(part) else part
                     for part in request.url.path.split("/"))
+
+
+def participant_link(base_url: str, token: str) -> str:
+    """The participant's own URL, built in one place because it is a credential *and* a route.
+
+    The SPA reads its token from the query string (`/?t=<uuid>`), and that is what the console's
+    « Copier le lien » hands out. An email that instead reuses the API's path shape — `/draw/<uuid>`
+    — lands on a route the server does not serve, and the family reads `{"detail":"Not Found"}`.
+    That happened, twelve inboxes, on the first real send; this function is the seam that keeps the
+    console, the mail template and the sample preview saying the same URL.
+    """
+    return f"{base_url}/?t={token}"
 
 
 def client_ip(request: Request) -> str:
@@ -1013,8 +1025,8 @@ EMAIL_STRINGS = {
         "link_note": "Si le bouton ne s’affiche pas, copie ce lien dans ton navigateur :",
         "privacy": "Garde ton lien pour toi : celui qui le tient voit ton tirage.",
         "footer": "❄ Échange de cadeaux · tirage automatique, jamais dans la même famille",
-        "subject_ready": "{event} — ton lien secret",
-        "subject_pending": "{event} — ton lien pour l’échange de cadeaux",
+        "subject_ready": "{name} — ton lien secret · {event}",
+        "subject_pending": "{name} — ton lien pour l’échange de cadeaux · {event}",
     },
     "en": {
         "kicker": "Secret Santa draw · Family gift exchange",
@@ -1030,8 +1042,8 @@ EMAIL_STRINGS = {
         "link_note": "If the button does not show up, copy this link into your browser:",
         "privacy": "Keep your link to yourself: whoever holds it sees your draw.",
         "footer": "❄ Gift exchange · automatic draw, never within the same household",
-        "subject_ready": "{event} — your secret link",
-        "subject_pending": "{event} — your link for the gift exchange",
+        "subject_ready": "{name} — your secret link · {event}",
+        "subject_pending": "{name} — your link for the gift exchange · {event}",
     },
 }
 
@@ -1057,7 +1069,10 @@ def build_email(name: str, event_title: str, link: str, language: str, ready: bo
     """
     copy = EMAIL_STRINGS.get((language or "fr").strip().lower(), EMAIL_STRINGS["fr"])
     title = event_title or (copy["kicker"])
-    subject = copy["subject_ready" if ready else "subject_pending"].format(event=title)
+    # The name comes first, deliberately: a family shares one inbox, and six mails from the same
+    # sender with the same subject are impossible to tell apart in a phone's list view — which is
+    # where the truncation happens anyway. Subject order is the only thing the mailbox sorts by.
+    subject = copy["subject_ready" if ready else "subject_pending"].format(event=title, name=name)
     hello = copy["hello"].format(name=name)
     body = copy["body_ready" if ready else "body_pending"]
     link_note = copy["link_note"]
@@ -1132,7 +1147,7 @@ def deliver_link_email(conn: sqlite3.Connection, participant: dict[str, Any], ev
     # middle of a bulk run, and one shared process gate keeps both honest.
     _throttle_before_send(address.lower())
     ready = bool(conn.execute("SELECT is_locked FROM config WHERE id = 1").fetchone()["is_locked"])
-    link = f"{base_url}/draw/{participant['token']}"
+    link = participant_link(base_url, participant["token"])
     content = build_email(participant["name"], event_title, link, language, ready,
                           assets_base=base_url)
     try:
@@ -1761,7 +1776,7 @@ def email_preview(
     config_row = _load_config(conn)
     language = payload.language or config_row["email_language"]
     base_url = public_base_url(request) or "https://tirage-noel.alserv.org"
-    link = f"{base_url}/draw/00000000-0000-0000-0000-000000000000"
+    link = participant_link(base_url, "00000000-0000-0000-0000-000000000000")
     content = build_email("Aline", config_row["event_title"], link, language,
                           ready=payload.state == "ready", assets_base=base_url)
     audit("email_previewed", ip=client_ip(request), language=language, state=payload.state)
@@ -1934,6 +1949,26 @@ def index(request: Request) -> HTMLResponse:
     """
     body = INDEX_HTML.replace(SHARE_META_MARKER, share_meta(request))
     return HTMLResponse(body, headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/draw/{token}", dependencies=[Depends(enforce_draw_limit)])
+def legacy_draw_link(token: str) -> RedirectResponse:
+    """`/draw/<uuid>` -> the SPA route, for links that are already sitting in inboxes.
+
+    The first batch of link emails was built from the API's path shape instead of the SPA's, so
+    twelve people were handed a URL that answered `{"detail":"Not Found"}`. Emails cannot be
+    unsent, and asking a grandmother to wait for a rebuild is not a fix: this turns every such
+    link into a bounce to `/?t=<uuid>`, the URL the interface actually reads.
+
+    Only a UUID-shaped token is redirected — anything else stays a 404 rather than advertising
+    that some other path shape is meaningful. The redirect itself reveals nothing (it echoes the
+    token back to the same browser that supplied it), and the path is already redacted to
+    `/draw/<token>` in the audit log by redacted_path(). `enforce_draw_limit` keeps it off the
+    cheap-enumeration path anyway.
+    """
+    if not TOKEN_SEGMENT.match(token):
+        raise HTTPException(status_code=404, detail="Link not found")
+    return RedirectResponse(f"/?t={token}", status_code=302)
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
