@@ -232,9 +232,10 @@ Requested after the original spec, and implemented in `static/index.html`:
    (`animation-delay: index * 120ms`). Everything is CSS-only and collapses under
    `prefers-reduced-motion: reduce`.
 4. **French by default, English on request.** Every string lives in an `I18N.fr` / `I18N.en`
-   table; `lang="fr"` is the default, the FR/EN segmented control in the header switches both
+   table; `lang="fr-CA"` is the default, the FR/EN segmented control in the header switches both
    views, the choice persists in `localStorage`, and `<html lang>` follows. Dates use
-   `Intl.DateTimeFormat` with `fr-FR` / `en-GB`. Backend messages stay exactly as specified
+   `Intl.DateTimeFormat` with `fr-CA` / `en-CA` (see the Québécois addendum below). Backend
+   messages stay exactly as specified
    (English `detail` strings); the frontend maps the four known failure details to the current
    language so the organizer's error banner is never half-translated.
 
@@ -323,13 +324,30 @@ untouched; everything below is additive and lives in `static/index.html` plus `G
 | Feedback | Toast stack (`#toasts`, `aria-live="polite"`) for saves, copies, draw results and rate limits; the inline notice/banner pair was replaced by one persistent, dismissible `adminError` block so a failure is never lost when the view re-renders. |
 | Login | Busy state ("Vérification…"), disabled until a password is typed, and the server's `429`/lockout is shown as the remaining wait instead of a bare "wrong password". |
 | Rules | Live "total gifts to prepare" row per target group; Save disabled until something actually changed (`rulesDirty` chip); character counters on title/budget; quota `max` read from the server. |
-| Feasibility | The engine's necessary conditions are mirrored client-side (`warnings`), so an impossible quota is explained **before** the draw is attempted, and "Generate" is blocked with "Corrigez d'abord les alertes ci-dessus". The server still validates independently. |
+| Feasibility | The engine's necessary conditions are mirrored client-side (`warnings`), so an impossible quota is explained **before** the draw is attempted, and "Generate" is blocked with « Régle les alertes en haut avant ». The server still validates independently. |
 | Draw | `confirm()` before locking (states the gift count and that it locks the rules), `409` handled as "already locked", and the locked panel counts opened links (`3/10 lien(s) ouvert(s)`). |
-| Roster | Family-group `datalist` + clickable household filter chips with counts; per-row "n cadeau(x) à offrir" / "ne tire aucun cadeau"; wishlist preview truncated with `title`; relative "Consulté · il y a 5 minutes" (full timestamp in `title`); empty-roster guidance; **Copy all links** (name, role, household, URL) with a fallback for insecure origins. |
-| Participant | PENDING page checks again automatically (25 s) and offers a manual "Vérifier à nouveau"; a toast announces the switch to READY; the reveal is remembered per link in `sessionStorage` so a refresh doesn't replay the surprise; "Copier ma liste"; wishlist autosave (1.2 s debounce) with a "Non enregistré" chip and Ctrl/⌘+Enter to save now. |
+| Roster | Family-group `datalist` + clickable household filter chips with counts; per-row « {n} cadeau(s) à acheter » / « tire pas de cadeau »; wishlist preview truncated with `title`; relative « Consulté · il y a 5 minutes » (`fr-CA`, full timestamp in `title`); empty-roster guidance; **Copy all links** (name, role, household, URL) with a fallback for insecure origins. |
+| Participant | PENDING page checks again automatically (25 s) and offers a manual « Vérifier encore »; a toast announces the switch to READY; the reveal is remembered per link in `sessionStorage` so a refresh doesn't replay the surprise; "Copier ma liste"; wishlist autosave (1.2 s debounce) with a « Pas enregistré » chip and Ctrl/⌘+Enter to save now. |
 | Limits | `GET /api/limits` publishes the Pydantic caps; the SPA binds `maxlength` and counters to them, and surfaces `default_password: true` as a visible organizer warning. |
 | Auth UX | The browser keeps the **session token** (`sessionStorage.ge_admin_token`) rather than the password; a `401` anywhere clears it and drops back to the gate with an "expired" toast. |
 | i18n | Every new string exists in FR and EN (the two tables stay key-symmetric; audited by script on each pass). FR remains the default. |
+
+## Québécois French and CAD (addendum)
+
+The FR table was rewritten in **Quebec French** (`fr-CA`), not metropolitan French, and all money
+is expressed in **Canadian dollars**. Keys are unchanged, and the FR/EN tables are audited to stay
+key-symmetric (118 keys each).
+
+| Aspect | What changed |
+|---|---|
+| Register | Warm spoken Québécois for the friendly copy: « Règles pis quotas », « Le monde participant », « Le monde que tu vas gâter », « Ouvre donc ça », « même toé », « Garde-le pour toé », « Ça s'en vient, repasse tantôt ! ». |
+| Lock vocabulary | `state.locked` → « Tirage fretté », the header button → « Fretter », « Générer pis fretter le tirage ». (« fretté » is what a Quebecer says for a locked file/account.) |
+| Softened errors | « Le tirage a capoté », « Là, c'est pas faisable avec les familles pis les quotas d'astheure », « Mot de passe pas correct. », « Réessa dans {s} seconde(s). » |
+| Removed Gallicisms | « Liste d'envies » → « Liste de souhaits »; « pull bleu marine » → « tuque en laine / patins / jeu de société »; « groupe familial » → « Famille »; household example « Martin » → « Tremblay ». |
+| Locale | `locale()` returns `fr-CA` (and `en-CA`), so timestamps and the relative chip format as « il y a 5 minutes » with the 24-hour clock; `<html lang>` is `fr-CA`. |
+| Currency | No amount field exists in the schema — money only lives in the free-text `budget_note`. Every default, placeholder and demo value now uses CAD: « Ex. 25 $ par personne, taxes incluses », demo note « 25 $ par personne, taxes incluses — les cadeaux maison, c'est correct », EN placeholder « e.g. $25 CAD each, taxes included ». `€` no longer appears anywhere in the repo. |
+| Tooling | `tools/seed_demo.py` seeds a Quebec family (Tremblay / Gagnon / Bouchard / Roy, wishlists with tuques, mitaines, raquettes, chaussettes à orignaux); `tools/verify_acceptance.py` uses Quebec households (Tremblay, Gagnon, Bouchard, Roy, Ouellet) and a « 25 $ par personne » budget; `tests/test_api.py` fixtures use `25 $ maximum`. |
+| Deliberate limit | The technical/warning copy stays explicit (« mais y en a juste {available} en dehors de sa propre famille ») rather than full joual: an error message still has to be unambiguous, and no vulgarisms are used. |
 
 ## Verification log
 
@@ -414,3 +432,23 @@ mounted) was re-audited with `tools/verify_acceptance.py` → `ACCEPTANCE: PASS`
 (30 rows, 0 same-family pairings, no leak in admin state, `viewed_at` flips, `400 400 400`
 while locked), and the container-served page was driven through Playwright (FR participant view,
 reveal animation, 3 recipient cards).
+
+### Re-verification after the Québécois / CAD pass — 2026-11-12
+
+* `bash run_tests.sh` → **49 passed** (currency fixture is now `25 $ maximum`).
+* `python tools/verify_acceptance.py` against the rebuilt container → **ACCEPTANCE: PASS**, with
+  the Quebec households seeded by the tool (Tremblay, Gagnon, Bouchard, Roy, Ouellet):
+  `30` assignments, `0` self/same-family pairings, `ADULT receives [1]`, `CHILD receives [2]`,
+  `ADULT gives [0, 3]`, `CHILD gives [0]`, no assignment vocabulary in `GET /api/admin/state`,
+  `viewed_at: None -> 2026-11-13T00:02:15+00:00`, and `400 400 400` while locked.
+* i18n audit script: FR and EN tables are key-symmetric (118 keys each), every `t('…')` used in
+  the markup exists in both, and no `€` byte remains in the repository.
+* Playwright re-shoot of the whole gallery (15 stills + the two GIFs) against the container, so
+  the README media shows the Québécois copy — header « TEMPS DES FÊTES », « Règles pis quotas »,
+  « Le monde participant », « Fretter », participant card « Bonjour Mario » /
+  « Le monde que tu vas gâter » / « Ses souhaits » with « 25 $ par personne, taxes incluses ».
+* Repeated wrong password in the browser now reads « Mot de passe pas correct. » and, once the
+  limiter trips, « Trop de demandes. Réessa dans 300 seconde(s). » (previously the raw
+  `Unauthorized` detail). Mobile (390 px) still has no horizontal overflow:
+  `documentElement.scrollWidth == window.innerWidth == 390` on both the participant and the
+  organizer views.

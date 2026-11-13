@@ -4,7 +4,8 @@ Configurable Secret Santa for a big family: role-based draw quotas (adult / chil
 exclusions, one private UUID link per person, and an organizer who **never sees the pairings**.
 
 FastAPI + SQLite backend, single-page frontend (Tailwind CDN + Alpine.js CDN, no build step).
-UI is **French by default** with a one-click FR/EN switch.
+UI is **Québec French by default** (`fr-CA`) with a one-click FR/EN switch, and every amount is
+Canadian dollars.
 
 Spec and the list of deliberate deviations: [`PLAN.md`](PLAN.md).
 
@@ -47,8 +48,8 @@ ADMIN_PASSWORD=admin DB_PATH=$PWD/data/exchange.db \
    (compared case/whitespace-insensitively) can never draw each other. Family chips let you filter
    the table; **Copy all links** puts every private link on the clipboard in one click.
 3. **Panel 3 — Generate & lock.** The matching engine deals the gifts and locks the event.
-   Statuses show only whether a link was opened ("Consulté · il y a 5 minutes" / "Non ouvert"),
-   never who buys what.
+   Statuses show only whether a link was opened (« Consulté · il y a 5 minutes » /
+   « Pas encore ouvert »), never who buys what.
 4. Each person opens their own link, unwraps the gift card, and can edit their wishlist at any
    time — it autosaves, even after the draw is locked.
 5. **Reset draw** wipes the pairings and the opened-markers and reopens editing.
@@ -85,6 +86,9 @@ ADMIN_PASSWORD=admin DB_PATH=$PWD/data/exchange.db \
 
 UX details worth knowing:
 
+* **The French is Québécois** (`fr-CA`): « Règles pis quotas », « Le monde que tu vas gâter »,
+  « Fretter le tirage », « Ouvre donc ça », and dates like « il y a 5 minutes ». Money is Canadian
+  dollars (« 25 $ par personne, taxes incluses »); the English switch says `$25 CAD`.
 * **Nothing is destructive without a confirm**, and every failure keeps its message on screen
   (wrong password, rate limit, unsolvable roster) with a translated explanation, not a raw
   `detail` string.
