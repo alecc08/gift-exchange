@@ -546,6 +546,21 @@ def test_auto_email_on_draw_refuses_an_unreachable_base_too(client, monkeypatch)
     assert stub.sent == []
 
 
+def test_the_preview_resolves_its_origin_like_a_send_does(monkeypatch, client):
+    """A preview that shows one URL while the mail carries another stops being proof of anything.
+
+    The first prod debugging session hit exactly this: an admin call made inside the container showed
+    `127.0.0.1` links in the preview, which made the *art* look broken when the real problem was the
+    base URL. Both the preview and the send now ask the same question.
+    """
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://tirage-noel.alserv.org")
+    preview = client.post("http://127.0.0.1:8000/api/admin/emails/preview", headers=ADMIN,
+                          json={"state": "ready", "language": "fr", "links": 3}).json()
+    assert "https://tirage-noel.alserv.org/?t=" in preview["html"]
+    assert "https://tirage-noel.alserv.org/static/email-gift.png" in preview["html"]
+    assert "127.0.0.1" not in preview["html"]
+
+
 def test_template_carries_the_site_art_over_absolute_urls():
     content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
                                assets_base="https://tirage-noel.alserv.org")
