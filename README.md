@@ -179,7 +179,7 @@ delete and re-add the participant.
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
 | Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` (« already locked, reset first ») instead of silently invalidating links people already opened. |
 | Organizer blindness | No admin route ever reads the `assignments` table — the console physically cannot show pairings. |
-| Debug noise vs leaks | One line per request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency. The path is **redacted**: `/api/draw/<uuid>` logs as `/api/draw/<token>`, because that path *is* a family member's credential and the log outlives the event. Error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
+| Debug noise vs leaks | One line per **API** request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency. Only paths under `/api` are logged at all: page routes — `/`, `/static/…`, and `/draw/<token>` — never reach the log, so a participant link cannot be recovered from it by reading the lines. For the requests that *are* logged, the path is **redacted** anyway: any UUID-shaped segment becomes `<token>`, so `/api/draw/<uuid>` logs as `/api/draw/<token>` — that path *is* a family member's credential, and the log outlives the event. A first link opening is audited as `link_opened participant_id=…`, never as the token. Error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
 
 ### Tuning knobs
 
@@ -238,6 +238,49 @@ ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py  # ends with: ACCEPTANCE:
     <td><img src="docs/screenshots/09-admin-english.jpg" alt="Same console in English"><br><b>One-click FR ⇄ EN</b> — every string exists in both languages, remembered per browser.</td>
   </tr>
 </table>
+
+### On a phone
+
+There are real breakpoints now, instead of a desktop layout that simply hung off the edge of a
+narrow screen. Below **900 px** the roster stops being a seven-column table and becomes one card per
+person, each field labelled with its column name (`td[data-label]`, so the labels are the same
+strings as the table headers and translate with the UI). Below **640 px** buttons get a 40 px target
+and inputs go to 16 px — under that, Mobile Safari zooms the page on focus and never gives the zoom
+back. Below **480 px** the status chips drop the *when* (« il y a 2 h ») and keep the *what*
+(« Lien envoyé »); the full timestamp stays in the chip's `title` and in the tooltip, so the fact
+survives and the chip stops running into the cell next to it. The quota table, the mail preview and
+the toasts reflow with the screen; the toasts go full-width. `tools/check_organizer_ui.py` asserts
+this at 390 px and 360 px: no element outside the viewport, no horizontal scroll, and the roster
+rendered as cards.
+
+### Several draws on one server
+
+One deployment can hold more than one exchange — the Réveillon, the office, the cousins' — and each
+one has its **own** roster, rules, links, pairings and mail history. Signing in lands on
+**« Choisis un tirage »**: one card per draw with its status (« Pas encore tiré » / « Tiré le
+13 nov. »), how many people are in it, how many links went out and how many were opened. Opening a
+draw puts it in the URL (`/?draw=7`), so a reload or a bookmarked console comes back to the same
+event instead of dropping you on the list.
+
+| Endpoint | Behaviour |
+| --- | --- |
+| `GET /api/admin/draws` | Every draw with its counts. Counts only — never a name, never a pairing. |
+| `POST /api/admin/draws` | `{event_title, budget_note?, copy_participants_from?}`. Copies **people** (names, households, wishlists, addresses) with **fresh tokens** and no `viewed_at` / `email_sent_at`: a link that already went out with last year's pairing must not become this year's credential. |
+| `DELETE /api/admin/draws/{id}` | Removes the draw, its roster and its pairings. A **locked** draw is refused (`400`) rather than forced: relatives are holding links that reveal it, so the sequence is *reset*, then delete. |
+| every other `/api/admin/*` | Takes `?draw_id=`. Omitted, it means "the only draw there is" — the contract every older client and the whole pre-multi-draw test suite was written against. With two draws and no `draw_id` the server refuses to guess: `400 No draw selected`. Unknown id: `404 This draw does not exist`. Empty server: `400 There is no draw yet`. |
+
+Participant ids are global, so the console cannot reach across either: editing, mailing or deleting
+a person who belongs to another draw answers `404`. A participant's link never carries a draw id —
+the token resolves to its own row, and therefore to its own draw.
+
+**Upgrading an existing database** (a deployment that already ran one draw) needs nothing from you:
+on start the app rebuilds the old single-row `config` table as `draws`, keeps the ids, adds
+`draw_id` to every participant with `DEFAULT 1`, and adds `created_at` / `drawn_at`. Tokens,
+pairings and delivery stamps are untouched, and the mail a family already received keeps working.
+It is a rebuild rather than an `ALTER TABLE … RENAME` because the original table was
+`id INTEGER PRIMARY KEY CHECK (id = 1)` — renamed, that check comes along and a *second* draw can
+never be created. `tests/test_draws.py` pins the upgrade against a live-shaped database, and the
+migration was rehearsed on a copy of the production file before anything was deployed.
 
 ### Grouping: a family name is not a household
 
@@ -300,9 +343,15 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 * **The subject leads with the person:** `Ghislaine — ton lien secret · Réveillon chez Gaétan`.
   A family shares one inbox, so six mails from one sender with one subject are impossible to tell
   apart in a phone's list view — and the event title, being last, is the part Gmail truncates.
-* **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake and the
-  gift strip served from `/static` as `<img>` — Gmail strips inline `<svg>` markup but renders
-  SVG files through its image proxy. Without an absolute base URL the art is simply omitted.
+* **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake, the big gift
+  and the gift strip served from `/static` as `<img>` — Gmail strips inline `<svg>` markup but
+  renders SVG files through its image proxy. Without an absolute base URL the art is simply omitted.
+  The big gift is the mail's whole idea in one picture: the box is shut, the lid has jumped off, and
+  somebody inside is holding it open and looking up — the pairing is already in there, and only the
+  reader can open it. It is drawn static on purpose: email clients disagree about CSS animation
+  (Outlook ignores `@keyframes`, Gmail strips them), and art that silently freezes in half the
+  family's inboxes is worse than no animation. The `<img>` carries a localized `alt`, because for a
+  screen reader that picture *is* the pitch.
 * **Triggers:** « Envoyer » per row, « Envoyer les liens par courriel » for everyone with an
   address (per-row report, skipped addresses listed not hidden), and an opt-in
   `auto_email_on_draw` config switch that mails *after* the draw commits — a dead Resend can
@@ -431,7 +480,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 139 tests
+├── tests/                        # 165 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution

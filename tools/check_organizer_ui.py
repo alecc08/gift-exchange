@@ -2,19 +2,24 @@
 
     GE_BASE=http://127.0.0.1:8085 ADMIN_PASSWORD=<pw> python tools/check_organizer_ui.py
 
-The Python suite covers the API and the engine; `tests/test_i18n.py` covers the strings. What is
-left is the glue in `static/index.html` — Alpine getters, the `0/1` ↔ boolean coercion behind the
-group checkbox, and the two notices the console shows about groups. Those break silently (a getter
-that throws renders an empty box), so this walks the exact path the feature adds:
+The Python suite covers the API and the engine; `tests/test_i18n.py` covers the strings and
+`tests/test_frontend.py` the SPA's static shape. What is left is the glue in `static/index.html` —
+Alpine getters, the `0/1` ↔ boolean coercion behind the group checkbox, the two notices the console
+shows about groups, the draw list, and the phone-width layout. Those break silently (a getter that
+throws renders an empty box), so this walks the exact paths:
 
-  1. turn « Éviter les piges dans le même groupe » off, save, reload — it must still be off and the
+  1. land on the **draw list**, open a draw, and come back to the list;
+  2. turn « Éviter les piges dans le même groupe » off, save, reload — it must still be off and the
      panel must not read "unsaved changes" (the bug that would happen if one copy kept 0 and the
      other kept false);
-  2. add a roster with two households, one of them two people deep, and filter by group;
-  3. check the console *predicts* the crossing the arithmetic forces, that the draw button stays
+  3. add a roster with two households, one of them two people deep, and filter by group;
+  4. check the console *predicts* the crossing the arithmetic forces, that the draw button stays
      enabled (a relaxable rule must not block the draw), and that it then *reports* it;
-  4. reset, add a person who makes a clean draw possible, and check the notice flips;
-  5. switch to EN and fail on any raw i18n key left on screen.
+  5. reset, add a person who makes a clean draw possible, and check the notice flips;
+  6. open a **second draw**, check its roster is empty and the first one's is untouched, that a
+     locked draw refuses to be deleted, and that deleting the second one works;
+  7. at 390 px, check the roster renders as cards and nothing sticks out of the viewport;
+  8. switch to EN and fail on any raw i18n key left on screen.
 
 Exits non-zero on a failed assertion, a console error, or a page error. The Tailwind CDN warning is
 ignored: it is the documented cost of a no-build frontend.
@@ -37,13 +42,28 @@ ROSTER = [("Aline", "Roy", "Roy (chez Gaétan)"),
 
 
 class Console:
+    """Collects browser complaints, with one allowance the checks themselves provoke.
+
+    A deliberate refusal (deleting a locked draw answers `400`) makes Chromium log a failed
+    resource, exactly like an accidental one. `allow()` pre-authorises one occurrence of an exact
+    status, so the check can prove the refusal happened without tripping its own alarm.
+    """
+
     def __init__(self, page):
         self.problems = []
+        self.allowed: dict[str, int] = {}
         page.on("console", lambda msg: self.record(f"console {msg.type}: {msg.text}")
                 if msg.type in ("error", "warning") and "cdn.tailwindcss.com" not in msg.text else None)
         page.on("pageerror", lambda error: self.record(f"pageerror: {error}"))
 
-    def record(self, text):
+    def allow(self, fragment: str) -> None:
+        self.allowed[fragment] = self.allowed.get(fragment, 0) + 1
+
+    def record(self, text: str) -> None:
+        for fragment, count in list(self.allowed.items()):
+            if count > 0 and fragment in text:
+                self.allowed[fragment] = count - 1
+                return
         self.problems.append(text)
 
 
@@ -74,7 +94,18 @@ def main() -> int:
         page.wait_for_selector("#pw")
         page.fill("#pw", PASSWORD)
         page.press("#pw", "Enter")
+
+        # The list screen is the entry point now: one server can hold several exchanges, and the
+        # console only exists once one is open.
+        page.wait_for_selector("text=Choisis un tirage")
+        page.wait_for_selector("#draw-cards article")   # the heading is static; the cards are a fetch
+        cards = page.locator("#draw-cards article")
+        assert cards.count() >= 1, "the draw list opened empty on an instance that has draws"
+        first_title = cards.first.locator("h3").inner_text()
+        cards.first.get_by_role("button", name="Ouvrir").click()
         page.wait_for_selector("text=Copier tous les liens")
+        assert "?draw=" in page.url, \
+            "opening a draw did not put it in the URL, so a reload would lose it"
 
         # Start from a clean slate using the session the console already has, so the check is
         # repeatable against an instance someone else left mid-event.
@@ -113,7 +144,14 @@ def main() -> int:
 
         for name, family, group in ROSTER:
             add_person(name, family, group)
-        rows = page.locator("#roster-table tbody tr:visible")
+        # The add is a fetch, and the row list is a second one after it: wait for the roster to
+        # actually show three people before counting, or the count is whatever happened to be in.
+        page.wait_for_function(
+            "() => [...document.querySelectorAll('#roster-table tbody tr.part')]"
+            ".filter(tr => tr.offsetParent !== null).length === %d" % len(ROSTER))
+        # `.part` marks a person row: the table also carries a "nobody here yet" row, which would
+        # otherwise be counted as a person.
+        rows = page.locator("#roster-table tbody tr.part:visible")
         assert rows.count() == 3, f"expected 3 roster rows, saw {rows.count()}"
         page.get_by_role("button", name=re.compile(r"^Roy \(chez Gaétan\)")).first.click()
         page.wait_for_selector("text=Montre tout le monde")
@@ -139,6 +177,74 @@ def main() -> int:
         page.once("dialog", lambda dialog: dialog.accept())
         page.get_by_role("button", name=re.compile("Lancer le tirage")).click()
         page.wait_for_selector("text=Personne a pigé dans son propre groupe")
+
+        # ------------------------------------------------------------------ #
+        # Several draws on one server: the list keeps them apart
+        # ------------------------------------------------------------------ #
+        page.get_by_role("button", name="Tous les tirages").click()
+        page.wait_for_selector("text=Choisis un tirage")
+        assert cards.count() == 1, f"expected one draw on the demo instance, saw {cards.count()}"
+
+        page.fill("#d-title", "Échange du bureau")
+        page.get_by_role("button", name="Créer le tirage").click()
+        idle()
+        page.wait_for_selector("#roster-table")
+        page.wait_for_selector("text=Il n’y a personne dans la liste")
+        assert page.locator("#roster-table tbody tr.part:visible").count() == 0, \
+            "a new draw came with people it should not have"
+
+        page.get_by_role("button", name="Tous les tirages").click()
+        page.wait_for_function(f"{DATA}.draws.length === 2")   # the list is a fetch, the heading is not
+        assert cards.count() == 2, "the new draw is not on the list"
+        page.locator("#draw-cards article", has_text=first_title).get_by_role("button", name="Ouvrir").click()
+        page.wait_for_selector("#roster-table")
+        page.wait_for_function(
+            "() => [...document.querySelectorAll('#roster-table tbody tr.part')]"
+            ".filter(tr => tr.offsetParent !== null).length === 4")
+        assert page.locator("#roster-table tbody tr.part:visible").count() == 4, \
+            "opening a second draw changed the first one's roster"
+
+        # This draw has been drawn, so deleting it has to be refused *and said*.
+        page.get_by_role("button", name="Tous les tirages").click()
+        page.wait_for_selector("text=Choisis un tirage")
+        page.once("dialog", lambda dialog: dialog.accept())
+        problems.allow("status of 400")   # the refusal this check is proving
+        page.locator("#draw-cards article", has_text=first_title).get_by_role("button", name="Supprimer").click()
+        page.wait_for_selector("text=Le tirage est verrouillé")
+        assert cards.count() == 2, "a locked draw was deleted"
+
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.locator("#draw-cards article", has_text="Échange du bureau").get_by_role("button", name="Supprimer").click()
+        page.wait_for_function(f"{DATA}.draws.length === 1")
+
+        # ------------------------------------------------------------------ #
+        # Phone width: the roster is cards, and nothing hangs off the screen
+        # ------------------------------------------------------------------ #
+        page.locator("#draw-cards article").first.get_by_role("button", name="Ouvrir").click()
+        page.wait_for_selector("#roster-table")
+        for width in (390, 360):
+            page.set_viewport_size({"width": width, "height": 844})
+            page.wait_for_timeout(300)
+            offscreen = page.evaluate("""() => {
+              const vw = document.documentElement.clientWidth;
+              return [...document.querySelectorAll('body *')].filter(el => {
+                const r = el.getBoundingClientRect();
+                if (!r.width || !r.height) return false;
+                const cs = getComputedStyle(el);
+                if (cs.position === 'fixed' || el.closest('#snow')) return false;
+                return r.right > vw + 1 || r.left < -1;
+              }).map(el => el.tagName.toLowerCase() + ' ' + (typeof el.className === 'string' ? el.className : ''));
+            }""")
+            assert not offscreen, f"{width}px: outside the viewport: {offscreen[:3]}"
+            assert page.evaluate("document.documentElement.scrollWidth") <= \
+                page.evaluate("document.documentElement.clientWidth") + 1, f"{width}px: horizontal scroll"
+        assert page.evaluate("getComputedStyle(document.querySelector('#roster-table thead')).display") == "none", \
+            "the roster is still a wide table at phone width"
+        unlabelled = page.evaluate(
+            "[...document.querySelectorAll('#roster-table tr.part td')].filter(td => !td.dataset.label).length")
+        assert unlabelled == 0, "a card cell lost the column name it is labelled with"
+        page.set_viewport_size({"width": 1440, "height": 950})
+        page.wait_for_timeout(250)
 
         page.get_by_role("button", name="EN", exact=True).click()
         page.wait_for_selector("text=Avoid picks within the same group")

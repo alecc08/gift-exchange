@@ -67,6 +67,18 @@ def shot(page, name, full=False):
     print("  still:", name)
 
 
+def enter_console(page):
+    """Login now lands on the draw list; open the first draw to reach the console.
+
+    Also shoots the list itself, since it is the first thing an organizer sees.
+    """
+    page.wait_for_selector("#draw-cards article")
+    time.sleep(0.8)
+    shot(page, "18-draw-list.png", full=True)
+    page.locator("#draw-cards article").first.get_by_role("button", name="Ouvrir").click()
+    page.wait_for_selector("text=Copier tous les liens")
+
+
 def capture_admin_page(page):
     """Organizer flow: login, rules, warnings, roster, filters, clipboard, draw, EN."""
     page.goto(BASE, wait_until="networkidle")
@@ -76,7 +88,7 @@ def capture_admin_page(page):
 
     page.fill("#pw", PASSWORD)
     page.press("#pw", "Enter")
-    page.wait_for_selector("text=Copier tous les liens")
+    enter_console(page)
     time.sleep(1.0)
     shot(page, "02-admin-rules.png")
 
@@ -98,6 +110,14 @@ def capture_admin_page(page):
     shot(page, "05-group-filter.png")
     page.get_by_role("button", name="Montre tout le monde").click()
     time.sleep(0.4)
+
+    # the same roster at phone width: below 900 px each person becomes a card, which is the whole
+    # answer to "the console hides the excess on a phone"
+    page.set_viewport_size({"width": 390, "height": 844})
+    time.sleep(0.8)
+    shot(page, "19-roster-phone.png", full=True)
+    page.set_viewport_size({"width": 1440, "height": 900})
+    time.sleep(0.6)
 
     page.get_by_role("button", name="Copier tous les liens").click()
     page.wait_for_selector("#toasts > div")
@@ -137,7 +157,7 @@ def capture_relaxed_draw(browser, auth):
     page.wait_for_selector("#pw")
     page.fill("#pw", PASSWORD)
     page.press("#pw", "Enter")
-    page.wait_for_selector("text=Copier tous les liens")
+    enter_console(page)
     page.wait_for_function("Alpine.$data(document.querySelector('[x-data]')).busy === false")
     time.sleep(1.0)
     shot(page, "16-group-note.png", full=True)  # the console predicts the crossing

@@ -86,6 +86,10 @@ UNSOLVABLE = (
 LOCKED_MSG = "The draw is locked. Reset it before making changes."
 ALREADY_LOCKED = "The draw is already locked. Reset it before drawing again."
 NO_PARTICIPANTS = "Cannot run a draw with no participants"
+DRAW_NOT_FOUND = "This draw does not exist"
+DRAW_ID_REQUIRED = "No draw selected"
+DRAW_NONE = "There is no draw yet"
+DRAW_TITLE_REQUIRED = "A draw needs a name"
 TOO_LARGE = "Request body too large"
 EMAIL_NOT_CONFIGURED = "Email sending is not configured on this server"
 EMAIL_NO_ADDRESS = "This participant has no email address"
@@ -282,8 +286,8 @@ def _configure_logging() -> None:
 _configure_logging()
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS config (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
+CREATE TABLE IF NOT EXISTS draws (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_title TEXT NOT NULL DEFAULT 'Christmas Gift Exchange',
     adult_draws_adult INTEGER NOT NULL DEFAULT 1,
     adult_draws_child INTEGER NOT NULL DEFAULT 2,
@@ -293,13 +297,17 @@ CREATE TABLE IF NOT EXISTS config (
     avoid_same_group INTEGER NOT NULL DEFAULT 1,
     email_language TEXT NOT NULL DEFAULT 'fr',
     auto_email_on_draw INTEGER NOT NULL DEFAULT 0,
-    is_locked INTEGER NOT NULL DEFAULT 0
+    is_locked INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT '',
+    drawn_at TEXT DEFAULT NULL
 );
 
-INSERT OR IGNORE INTO config (id) VALUES (1);
+-- The first draw of a fresh install is seeded after the migrations (see _ensure_default_draw), not
+-- here: on an upgraded database these columns may not exist yet when this script runs.
 
 CREATE TABLE IF NOT EXISTS participants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    draw_id INTEGER NOT NULL DEFAULT 1 REFERENCES draws(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('ADULT', 'CHILD')),
     family_group TEXT NOT NULL,
@@ -325,22 +333,98 @@ CREATE TABLE IF NOT EXISTS assignments (
 # one gets them here, and `group_key` inherits what `family_group` used to mean so a roster built
 # before this existed keeps drawing exactly as it did. See "Grouping" in PLAN.md for why the two
 # fields are separate now: a surname is not a household.
+# The rules that belong to one draw. Named once because three things have to agree on the list:
+# the API payload (_config_dict), the column migrations below, and the rebuild that turns the old
+# single-event `config` table into `draws`.
+DRAW_RULE_COLUMNS = (
+    "event_title", "adult_draws_adult", "adult_draws_child", "child_draws_adult",
+    "child_draws_child", "budget_note", "avoid_same_group", "email_language",
+    "auto_email_on_draw", "is_locked",
+)
+
 MIGRATIONS = (
     ("participants", "group_key", "ALTER TABLE participants ADD COLUMN group_key TEXT NOT NULL DEFAULT ''",
      "UPDATE participants SET group_key = family_group WHERE group_key = ''"),
-    ("config", "avoid_same_group",
-     "ALTER TABLE config ADD COLUMN avoid_same_group INTEGER NOT NULL DEFAULT 1", None),
+    ("draws", "avoid_same_group",
+     "ALTER TABLE draws ADD COLUMN avoid_same_group INTEGER NOT NULL DEFAULT 1", None),
     # The email round: an address and a delivery stamp per participant, a language and an
-    # auto-send switch per event. No backfill for `email` on purpose — an address nobody typed
+    # auto-send switch per draw. No backfill for `email` on purpose — an address nobody typed
     # is nobody's address, and guessing one is how family feuds start.
     ("participants", "email", "ALTER TABLE participants ADD COLUMN email TEXT NOT NULL DEFAULT ''", None),
     ("participants", "email_sent_at",
      "ALTER TABLE participants ADD COLUMN email_sent_at TEXT DEFAULT NULL", None),
-    ("config", "email_language",
-     "ALTER TABLE config ADD COLUMN email_language TEXT NOT NULL DEFAULT 'fr'", None),
-    ("config", "auto_email_on_draw",
-     "ALTER TABLE config ADD COLUMN auto_email_on_draw INTEGER NOT NULL DEFAULT 0", None),
+    ("draws", "email_language",
+     "ALTER TABLE draws ADD COLUMN email_language TEXT NOT NULL DEFAULT 'fr'", None),
+    ("draws", "auto_email_on_draw",
+     "ALTER TABLE draws ADD COLUMN auto_email_on_draw INTEGER NOT NULL DEFAULT 0", None),
+    # The multi-draw round. `draw_id` carries DEFAULT 1, so every participant that already exists
+    # lands on the draw it was always part of; there is nothing to guess.
+    ("participants", "draw_id", "ALTER TABLE participants ADD COLUMN draw_id INTEGER NOT NULL DEFAULT 1", None),
+    ("draws", "created_at", "ALTER TABLE draws ADD COLUMN created_at TEXT NOT NULL DEFAULT ''",
+     "UPDATE draws SET created_at = strftime('%Y-%m-%dT%H:%M:%S+00:00', 'now') WHERE created_at = ''"),
+    # NULL on a draw that was already locked before this column existed: the console then says
+    # "verrouillé" without inventing a date it never recorded.
+    ("draws", "drawn_at", "ALTER TABLE draws ADD COLUMN drawn_at TEXT DEFAULT NULL", None),
 )
+
+
+def migrate_draws_table(conn: sqlite3.Connection) -> list[str]:
+    """`config` (one row, one event) becomes `draws` (one row per event).
+
+    A rebuild, not an `ALTER TABLE ... RENAME`, and the reason is a constraint nobody would think to
+    look for: the original table was `id INTEGER PRIMARY KEY CHECK (id = 1)`. Renamed, that CHECK
+    comes along for the ride, and creating a second draw — the entire point of this change — would
+    fail with a constraint error on a live database. Rebuilding also lets any vintage of legacy
+    table be copied column by column (`avoid_same_group` may not exist yet), and leaves the two
+    newest columns to apply_migrations below, which is where their backfill lives.
+
+    Ids survive, so `participants.draw_id = 1` is true by construction for a live deployment and a
+    family whose links are already in their inbox notices nothing except a new screen.
+    """
+    tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "config" not in tables or "draws" in tables:
+        return []
+
+    legacy = _columns(conn, "config")
+    keep = [column for column in DRAW_RULE_COLUMNS if column in legacy]
+    conn.execute(
+        """
+        CREATE TABLE draws_new (
+            id INTEGER PRIMARY KEY,
+            event_title TEXT NOT NULL DEFAULT 'Christmas Gift Exchange',
+            adult_draws_adult INTEGER NOT NULL DEFAULT 1,
+            adult_draws_child INTEGER NOT NULL DEFAULT 2,
+            child_draws_adult INTEGER NOT NULL DEFAULT 0,
+            child_draws_child INTEGER NOT NULL DEFAULT 0,
+            budget_note TEXT NOT NULL DEFAULT '',
+            avoid_same_group INTEGER NOT NULL DEFAULT 1,
+            email_language TEXT NOT NULL DEFAULT 'fr',
+            auto_email_on_draw INTEGER NOT NULL DEFAULT 0,
+            is_locked INTEGER NOT NULL DEFAULT 0
+        );
+        """
+    )
+    conn.execute(
+        f"INSERT INTO draws_new (id, {', '.join(keep)}) "
+        f"SELECT id, {', '.join(keep)} FROM config"
+    )
+    conn.execute("DROP TABLE config")
+    conn.execute("ALTER TABLE draws_new RENAME TO draws")
+    return ["config -> draws"]
+
+
+def _ensure_default_draw(conn: sqlite3.Connection) -> None:
+    """The first draw of a fresh install, after the migrations have given the table its columns.
+
+    The timestamp is bound from utc_now() rather than strftime() in SQL, so a seeded draw and a
+    draw created by the API carry the same format — the list screen sorts and prints these.
+    """
+    conn.execute("INSERT OR IGNORE INTO draws (id, created_at) VALUES (1, ?)", (utc_now(),))
+
+
+def _ensure_indexes(conn: sqlite3.Connection) -> None:
+    """Indexes that depend on migrated columns have to be created after the migrations."""
+    conn.execute("CREATE INDEX IF NOT EXISTS participants_draw_id ON participants(draw_id)")
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
@@ -380,10 +464,15 @@ def connect() -> sqlite3.Connection:
 def init_db() -> None:
     conn = connect()
     try:
+        renamed = migrate_draws_table(conn)
         conn.executescript(SCHEMA)
         applied = apply_migrations(conn)
+        _ensure_default_draw(conn)
+        _ensure_indexes(conn)
     finally:
         conn.close()
+    if renamed:
+        audit("schema_migrated", tables=renamed)
     if applied:
         audit("schema_migrated", columns=applied)
 
@@ -1027,6 +1116,10 @@ EMAIL_STRINGS = {
         "footer": "❄ Échange de cadeaux · tirage automatique, jamais dans la même famille",
         "subject_ready": "{name} — ton lien secret · {event}",
         "subject_pending": "{name} — ton lien pour l’échange de cadeaux · {event}",
+        # The hero art is not decoration for a screen reader: it is the whole idea of the mail
+        # (le résultat est dans la boîte, et toi seul peux l’ouvrir), so it gets described.
+        "gift_alt": "Un cadeau bien fermé : le couvercle a sauté et quelqu’un à l’intérieur "
+                    "pousse pour sortir.",
     },
     "en": {
         "kicker": "Secret Santa draw · Family gift exchange",
@@ -1044,6 +1137,8 @@ EMAIL_STRINGS = {
         "footer": "❄ Gift exchange · automatic draw, never within the same household",
         "subject_ready": "{name} — your secret link · {event}",
         "subject_pending": "{name} — your link for the gift exchange · {event}",
+        "gift_alt": "A tightly closed gift: the lid has popped off and somebody inside is "
+                    "pushing to get out.",
     },
 }
 
@@ -1062,10 +1157,12 @@ def build_email(name: str, event_title: str, link: str, language: str, ready: bo
     organizer typed, and a name containing markup would otherwise style — or script — the mail.
     The email never contains a pairing: only the participant's own link.
 
-    The Christmas art is <img>-referenced from the site's own /static (the flake and the gift
-    strip, same shapes as the interface), never inline <svg>: Gmail strips inline SVG markup but
-    renders SVG files through its image proxy. Without an absolute `assets_base` there is no art
-    at all — a relative src in an email is just a broken image with extra steps.
+    The Christmas art is <img>-referenced from the site's own /static (the flake, the big gift and
+    the gift strip, same shapes as the interface), never inline <svg>: Gmail strips inline SVG
+    markup but renders SVG files through its image proxy. Without an absolute `assets_base` there is
+    no art at all — a relative src in an email is just a broken image with extra steps. The art is
+    deliberately static: email clients disagree about CSS animation (Outlook ignores keyframes,
+    Gmail strips them), so art that only works in half the inboxes is worse than a still frame.
     """
     copy = EMAIL_STRINGS.get((language or "fr").strip().lower(), EMAIL_STRINGS["fr"])
     title = event_title or (copy["kicker"])
@@ -1081,6 +1178,14 @@ def build_email(name: str, event_title: str, link: str, language: str, ready: bo
     art = assets_base.rstrip("/")
     flake = f'<img src="{html.escape(art + "/static/email-flake.svg", quote=True)}" width="56" ' \
             'height="56" alt="" style="display:block">' if art else ""
+    # The hero: the gift is shut, the lid has jumped, and somebody inside is pushing. That is the
+    # app's whole promise in one picture — the result is already in the box, and only the reader can
+    # open it. Static art in an <img>, no CSS animation: Outlook ignores keyframes and Gmail strips
+    # them, and a joke that only lands in half the inboxes is worse than no joke.
+    gift = f'<div style="padding:26px 28px 2px;text-align:center">\
+<img src="{html.escape(art + "/static/email-gift.svg", quote=True)}" width="330" alt="\
+{html.escape(copy['gift_alt'], quote=True)}" style="display:block;width:100%;max-width:330px;\
+margin:0 auto" height="190"></div>' if art else ""
     strip = f'<div style="padding:4px 28px 20px"><img src="\
 {html.escape(art + "/static/email-gift-strip.svg", quote=True)}" width="504" alt="" \
 style="display:block;width:100%;max-width:504px"></div>' if art else ""
@@ -1103,6 +1208,7 @@ style="background:{_PINE_DARK}">
         <td width="84" align="right" valign="top" style="padding:20px 22px 0 0">{flake}</td>
       </tr>
     </table>
+    {gift}
     <div style="padding:28px;color:#1f5340;font-size:15px;line-height:1.65">
       <p style="margin:0 0 14px">{html.escape(hello)}</p>
       <p style="margin:0 0 24px">{html.escape(body)}</p>
@@ -1130,8 +1236,12 @@ font-size:12px;line-height:1.7">{html.escape(copy['privacy'])}<br>{html.escape(c
 
 
 def deliver_link_email(conn: sqlite3.Connection, participant: dict[str, Any], event_title: str,
-                       language: str, base_url: str) -> dict[str, Any]:
+                       language: str, base_url: str, ready: bool) -> dict[str, Any]:
     """Send one participant their link, and stamp email_sent_at when Resend accepted it.
+
+    `ready` (has this draw been drawn?) arrives as an argument instead of being re-read from a
+    settings row: with several draws on one server there is no longer one row to read, and the
+    caller already knows which draw it is mailing.
 
     Never raises: the caller gets a per-participant result row. A batch of twelve must not die on
     the fourth address, and the organizer console needs to see exactly which ones failed."""
@@ -1146,7 +1256,6 @@ def deliver_link_email(conn: sqlite3.Connection, participant: dict[str, Any], ev
     # Spacing happens right before the wire: the organizer may fire a single "Envoyer" in the
     # middle of a bulk run, and one shared process gate keeps both honest.
     _throttle_before_send(address.lower())
-    ready = bool(conn.execute("SELECT is_locked FROM config WHERE id = 1").fetchone()["is_locked"])
     link = participant_link(base_url, participant["token"])
     content = build_email(participant["name"], event_title, link, language, ready,
                           assets_base=base_url)
@@ -1168,10 +1277,14 @@ def deliver_link_email(conn: sqlite3.Connection, participant: dict[str, Any], ev
             "message_id": message_id or None}
 
 
-def _all_participants(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+def _all_participants(conn: sqlite3.Connection, draw_id: int | None = None) -> list[dict[str, Any]]:
+    target = select_draw_id(conn, draw_id)
     return [
         _participant_dict(row)
-        for row in conn.execute(f"SELECT {PARTICIPANT_COLUMNS} FROM participants ORDER BY id")
+        for row in conn.execute(
+            f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE draw_id = ? ORDER BY id",
+            (target,),
+        )
     ]
 
 
@@ -1182,7 +1295,8 @@ def send_link_emails(conn: sqlite3.Connection, participants: list[dict[str, Any]
     an uncle. Interleaved by address first: consecutive mails to the same mailbox are the one
     pattern the per-address gap exists to prevent, and good ordering makes it wait less."""
     results = [deliver_link_email(conn, person, config_row["event_title"],
-                                  config_row["email_language"], base_url)
+                                  config_row["email_language"], base_url,
+                                  ready=bool(config_row["is_locked"]))
                for person in _interleave_by_address(participants)]
     return {
         "sent": sum(1 for r in results if r["ok"]),
@@ -1223,6 +1337,24 @@ class ConfigUpdate(BaseModel):
         if value is not None and not 0 <= value <= MAX_DRAW_QUOTA:
             raise ValueError(f"must be between 0 and {MAX_DRAW_QUOTA}")
         return value
+
+
+class DrawCreate(BaseModel):
+    """A new draw. Rules come from the defaults and are edited on the console afterwards; what
+    has to be said here is the name, because that is what the list screen is sorted and scanned by."""
+    event_title: str = Field(max_length=MAX_EVENT_TITLE)
+    budget_note: str = Field(default="", max_length=MAX_BUDGET_NOTE)
+    # Same people, next event: the family roster is re-typed by hand otherwise. The copy takes the
+    # people, never their history — fresh tokens, no viewed_at, no email_sent_at.
+    copy_participants_from: Optional[int] = None
+
+    @field_validator("event_title")
+    @classmethod
+    def _titled(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
 
 
 class ParticipantCreate(BaseModel):
@@ -1382,6 +1514,11 @@ def _config_dict(row: sqlite3.Row) -> dict[str, Any]:
         "email_language": row["email_language"],
         "auto_email_on_draw": row["auto_email_on_draw"],
         "is_locked": row["is_locked"],
+        # When this draw was opened and when it was drawn. The console shows both, and the list
+        # screen sorts by them; `drawn_at` is NULL for a draw that was locked before the column
+        # existed, which the UI renders as "verrouillé" with no date rather than an invented one.
+        "created_at": row["created_at"],
+        "drawn_at": row["drawn_at"],
     }
 
 
@@ -1406,13 +1543,55 @@ def _participant_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
-def _load_config(conn: sqlite3.Connection) -> sqlite3.Row:
-    return conn.execute("SELECT * FROM config WHERE id = 1").fetchone()
+def _draw_row(conn: sqlite3.Connection, draw_id: int) -> sqlite3.Row:
+    row = conn.execute("SELECT * FROM draws WHERE id = ?", (draw_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail=DRAW_NOT_FOUND)
+    return row
+
+
+def select_draw_id(conn: sqlite3.Connection, requested: int | None) -> int:
+    """Which draw an admin call acts on.
+
+    An omitted `draw_id` means "the only draw there is" — the shape every deployment had before
+    there was more than one, so an old client and the whole existing test suite keep working.
+    Once a second draw exists, asking stops being optional: guessing which family event a click
+    referred to is exactly the ambiguity that ends with relatives mailed from the wrong draw.
+    """
+    if requested is not None:
+        _draw_row(conn, requested)
+        return requested
+    rows = conn.execute("SELECT id FROM draws ORDER BY id").fetchall()
+    if len(rows) == 1:
+        return rows[0]["id"]
+    raise HTTPException(status_code=400, detail=DRAW_NONE if not rows else DRAW_ID_REQUIRED)
+
+
+def _load_config(conn: sqlite3.Connection, draw_id: int | None = None) -> sqlite3.Row:
+    """The rules of one draw. `draw_id=None` follows select_draw_id's single-draw rule."""
+    return _draw_row(conn, select_draw_id(conn, draw_id))
 
 
 def _reject_if_locked(row: sqlite3.Row) -> None:
     if row["is_locked"]:
         raise HTTPException(status_code=400, detail=LOCKED_MSG)
+
+
+def _participant_row(conn: sqlite3.Connection, participant_id: int,
+                     draw_id: int | None) -> sqlite3.Row:
+    """A participant, but only if it belongs to the draw being acted on.
+
+    Participant ids are global, so without this a console pointed at one draw could edit, mail or
+    delete a person from another one by id. The roster already reads through a `draw_id` filter;
+    this closes the same hole on the write paths.
+    """
+    row = conn.execute(
+        f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE id = ? AND draw_id = ?",
+        (participant_id, select_draw_id(conn, draw_id)),
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Participant not found")
+    return row
 
 
 # --------------------------------------------------------------------------- #
@@ -1478,32 +1657,39 @@ def logout(request: Request, _: None = Depends(require_admin)) -> dict[str, str]
 
 @app.get("/api/admin/state", dependencies=[Depends(enforce_api_limit)])
 def admin_state(
+    request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Config + roster.
+    """One draw: its rules + its roster.
 
     The organizer stays blind: this reads no pairing. The one contact with the `assignments` table is
     a single COUNT of same-group pairs, which says "N gifts crossed a group" and cannot name a single
     one of them. That number is what lets the console admit a relaxed draw instead of hiding it.
     """
+    target = select_draw_id(conn, draw_id)
     participants = [
         _participant_dict(row)
         for row in conn.execute(
-            f"SELECT {PARTICIPANT_COLUMNS} FROM participants ORDER BY id"
+            f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE draw_id = ? ORDER BY id",
+            (target,),
         )
     ]
     # A COUNT, never a pairing — and only while the preference is on. The number answers "how far did
     # the rule have to bend", which has no meaning when the rule was switched off on purpose: counting
-    # same-group pairs then would report a relaxation that was never forced.
-    config = _config_dict(_load_config(conn))
+    # same-group pairs then would report a relaxation that was never forced. Scoped to this draw, so
+    # a second family's pairings cannot tint this one's numbers.
+    config = _config_dict(_load_config(conn, target))
     crossed = 0
     if config["avoid_same_group"]:
         crossed = conn.execute(
             "SELECT COUNT(*) FROM assignments a "
             "JOIN participants g ON g.id = a.giver_id "
             "JOIN participants r ON r.id = a.receiver_id "
-            "WHERE g.group_key <> '' AND lower(trim(g.group_key)) = lower(trim(r.group_key))"
+            "WHERE g.draw_id = ? AND r.draw_id = ? "
+            "AND g.group_key <> '' AND lower(trim(g.group_key)) = lower(trim(r.group_key))",
+            (target, target),
         ).fetchone()[0]
     config["same_group_crossings"] = crossed
     # The console needs to know whether emailing is even possible before offering the buttons —
@@ -1512,14 +1698,134 @@ def admin_state(
     return {"config": config, "participants": participants, "email_enabled": email_enabled()}
 
 
-@app.put("/api/admin/config", dependencies=[Depends(enforce_api_limit)])
-def update_config(
-    payload: ConfigUpdate,
+@app.get("/api/admin/draws", dependencies=[Depends(enforce_api_limit)])
+def list_draws(
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Every draw with the counts the list screen needs — never a pairing.
+
+    The status line is what an organizer scans: has this one been drawn, how many people are in it,
+    how many have opened their link, how many have been mailed. `assignments` is touched only as a
+    COUNT, and only to answer "is there a result yet", which is the same question is_locked answers
+    from the other side.
+    """
+    rows = conn.execute(
+        "SELECT id, event_title, is_locked, created_at, drawn_at FROM draws ORDER BY id"
+    ).fetchall()
+    counts = {
+        row["draw_id"]: row
+        for row in conn.execute(
+            "SELECT draw_id, COUNT(*) AS people, "
+            "SUM(CASE WHEN viewed_at IS NOT NULL THEN 1 ELSE 0 END) AS opened, "
+            "SUM(CASE WHEN email_sent_at IS NOT NULL THEN 1 ELSE 0 END) AS mailed, "
+            "SUM(CASE WHEN email <> '' THEN 1 ELSE 0 END) AS with_email "
+            "FROM participants GROUP BY draw_id"
+        )
+    }
+    draws = []
+    for draw in rows:
+        tally = counts.get(draw["id"])
+        draws.append({
+            "id": draw["id"],
+            "event_title": draw["event_title"],
+            "is_locked": draw["is_locked"],
+            "created_at": draw["created_at"],
+            "drawn_at": draw["drawn_at"],
+            "participants": tally["people"] if tally else 0,
+            "opened": tally["opened"] if tally else 0,
+            "mailed": tally["mailed"] if tally else 0,
+            "with_email": tally["with_email"] if tally else 0,
+        })
+    return {"draws": draws, "email_enabled": email_enabled()}
+
+
+@app.post("/api/admin/draws", status_code=201, dependencies=[Depends(enforce_api_limit)])
+def create_draw(
+    payload: DrawCreate,
     request: Request,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    _reject_if_locked(_load_config(conn))
+    """Open a new draw. Existing draws are untouched — that is the whole point of the screen.
+
+    `copy_participants_from` re-seeds the roster for the next event. It copies the *people*: the new
+    rows get brand new tokens and no `viewed_at` / `email_sent_at`, because a link that already went
+    out to last year's pairing must not silently become this year's credential. Two draws sharing a
+    token would also break the one property the participant URL relies on: whoever holds a token
+    holds exactly one draw.
+    """
+    created = conn.execute(
+        "INSERT INTO draws (event_title, budget_note, created_at) VALUES (?, ?, ?)",
+        (payload.event_title.strip(), payload.budget_note, utc_now()),
+    )
+    new_id = created.lastrowid
+    copied = 0
+    if payload.copy_participants_from is not None:
+        source = _draw_row(conn, payload.copy_participants_from)
+        people = conn.execute(
+            "SELECT name, role, family_group, group_key, wishlist, email FROM participants "
+            "WHERE draw_id = ? ORDER BY id",
+            (source["id"],),
+        ).fetchall()
+        conn.executemany(
+            "INSERT INTO participants (draw_id, name, role, family_group, group_key, wishlist, "
+            "email, token) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(new_id, person["name"], person["role"], person["family_group"], person["group_key"],
+              person["wishlist"], person["email"], str(uuid.uuid4())) for person in people],
+        )
+        copied = len(people)
+    audit("draw_created", ip=client_ip(request), draw_id=new_id, copied_participants=copied)
+    return {"status": "OK", "draw": _config_dict(_draw_row(conn, new_id)),
+            "copied_participants": copied}
+
+
+@app.delete("/api/admin/draws/{draw_id}", dependencies=[Depends(enforce_api_limit)])
+def delete_draw(
+    draw_id: int,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Delete a draw, its roster and its pairings. Locked draws are refused, not forced.
+
+    A locked draw is a result: relatives hold links that reveal it. Deleting it should not be one
+    mis-click away from unlinking them, so the sequence is reset (which clears the pairings and the
+    delivery stamps and says so out loud) and then delete. The cascade is written out rather than
+    left to the FK because a database migrated from the single-draw schema has no FK on
+    `participants.draw_id` — SQLite cannot add one to an existing table.
+    """
+    row = _draw_row(conn, draw_id)
+    _reject_if_locked(row)
+    with _draw_lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute(
+                "DELETE FROM assignments WHERE giver_id IN "
+                "(SELECT id FROM participants WHERE draw_id = ?) "
+                "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
+                (draw_id, draw_id),
+            )
+            gone = conn.execute("DELETE FROM participants WHERE draw_id = ?", (draw_id,)).rowcount
+            conn.execute("DELETE FROM draws WHERE id = ?", (draw_id,))
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    audit("draw_deleted", ip=client_ip(request), draw_id=draw_id, participants_removed=gone)
+    return {"status": "OK", "deleted": draw_id, "participants_removed": gone}
+
+
+@app.put("/api/admin/config", dependencies=[Depends(enforce_api_limit)])
+def update_config(
+    payload: ConfigUpdate,
+    request: Request,
+    draw_id: int | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    target = select_draw_id(conn, draw_id)
+    _reject_if_locked(_load_config(conn, target))
     updates = payload.model_dump(exclude_unset=True, exclude_none=True)
     allowed = (
         "event_title",
@@ -1535,23 +1841,26 @@ def update_config(
     updates = {key: value for key, value in updates.items() if key in allowed}
     if updates:
         clauses = ", ".join(f"{key} = ?" for key in updates)
-        conn.execute(f"UPDATE config SET {clauses} WHERE id = 1", list(updates.values()))
-    audit("config_updated", ip=client_ip(request), fields=sorted(updates))
-    return {"status": "OK", "config": _config_dict(_load_config(conn))}
+        conn.execute(f"UPDATE draws SET {clauses} WHERE id = ?", list(updates.values()) + [target])
+    audit("config_updated", ip=client_ip(request), draw_id=target, fields=sorted(updates))
+    return {"status": "OK", "config": _config_dict(_load_config(conn, target))}
 
 
 @app.post("/api/admin/participants", status_code=201, dependencies=[Depends(enforce_api_limit)])
 def add_participant(
     payload: ParticipantCreate,
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    _reject_if_locked(_load_config(conn))
+    target = select_draw_id(conn, draw_id)
+    _reject_if_locked(_load_config(conn, target))
     cursor = conn.execute(
-        "INSERT INTO participants (name, role, family_group, group_key, wishlist, email, token) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO participants (draw_id, name, role, family_group, group_key, wishlist, email, "
+        "token) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
         (
+            target,
             payload.name,
             payload.role,
             payload.family_group,
@@ -1573,6 +1882,7 @@ def update_participant(
     participant_id: int,
     payload: ParticipantUpdate,
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
@@ -1584,7 +1894,8 @@ def update_participant(
     LOCKED_MSG the UI already explains. Editing an email clears email_sent_at: a correction means
     the old send went somewhere else.
     """
-    config_row = _load_config(conn)
+    target = select_draw_id(conn, draw_id)
+    config_row = _load_config(conn, target)
     if config_row["is_locked"]:
         updates = payload.model_dump(exclude_unset=True, exclude_none=True)
         if set(updates) - {"email"}:
@@ -1596,20 +1907,17 @@ def update_participant(
     if not updates:
         raise HTTPException(status_code=422, detail="No fields to update")
 
-    existed = conn.execute("SELECT id, email FROM participants WHERE id = ?",
-                           (participant_id,)).fetchone()
-    if existed is None:
-        raise HTTPException(status_code=404, detail="Participant not found")
+    existed = _participant_row(conn, participant_id, target)
 
     clauses = ", ".join(f"{key} = ?" for key in updates)
     values = list(updates.values())
     if "email" in updates and updates["email"] != (existed["email"] or ""):
         clauses += ", email_sent_at = NULL"
-    conn.execute(f"UPDATE participants SET {clauses} WHERE id = ?", values + [participant_id])
+    conn.execute(f"UPDATE participants SET {clauses} WHERE id = ? AND draw_id = ?",
+                 values + [participant_id, target])
     audit("participant_updated", ip=client_ip(request), participant_id=participant_id,
-          fields=sorted(updates))
-    row = conn.execute(f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE id = ?",
-                       (participant_id,)).fetchone()
+          draw_id=target, fields=sorted(updates))
+    row = _participant_row(conn, participant_id, target)
     return {"status": "OK", "participant": _participant_dict(row)}
 
 
@@ -1617,29 +1925,35 @@ def update_participant(
 def delete_participant(
     participant_id: int,
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    _reject_if_locked(_load_config(conn))
-    cursor = conn.execute("DELETE FROM participants WHERE id = ?", (participant_id,))
-    if cursor.rowcount == 0:
-        raise HTTPException(status_code=404, detail="Participant not found")
-    audit("participant_deleted", ip=client_ip(request), participant_id=participant_id)
+    target = select_draw_id(conn, draw_id)
+    _reject_if_locked(_load_config(conn, target))
+    _participant_row(conn, participant_id, target)
+    cursor = conn.execute("DELETE FROM participants WHERE id = ? AND draw_id = ?",
+                          (participant_id, target))
+    audit("participant_deleted", ip=client_ip(request), participant_id=participant_id,
+          draw_id=target)
     return {"status": "OK", "deleted": participant_id}
 
 
 @app.post("/api/admin/draw", dependencies=[Depends(enforce_api_limit)])
 def run_draw(
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    config_row = _load_config(conn)
+    target = select_draw_id(conn, draw_id)
+    config_row = _load_config(conn, target)
     if config_row["is_locked"]:
         raise HTTPException(status_code=409, detail=ALREADY_LOCKED)
     participants = [
         {"id": row["id"], "role": row["role"], "group_key": row["group_key"]}
-        for row in conn.execute("SELECT id, role, group_key FROM participants ORDER BY id")
+        for row in conn.execute(
+            "SELECT id, role, group_key FROM participants WHERE draw_id = ? ORDER BY id", (target,))
     ]
     if not participants:
         raise HTTPException(status_code=400, detail=NO_PARTICIPANTS)
@@ -1650,16 +1964,25 @@ def run_draw(
     with _draw_lock:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute("DELETE FROM assignments")
+            # Scoped to this draw: re-drawing the office exchange must not erase the family's
+            # pairings, and a reset on one draw cannot clear another one's "already mailed" stamps.
+            conn.execute(
+                "DELETE FROM assignments WHERE giver_id IN "
+                "(SELECT id FROM participants WHERE draw_id = ?) "
+                "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
+                (target, target),
+            )
             conn.executemany(
                 "INSERT INTO assignments (giver_id, receiver_id) VALUES (?, ?)", pairs
             )
-            conn.execute("UPDATE config SET is_locked = 1 WHERE id = 1")
+            conn.execute("UPDATE draws SET is_locked = 1, drawn_at = ? WHERE id = ?",
+                         (utc_now(), target))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    audit("draw_locked", ip=client_ip(request), assignments=len(pairs), same_group_crossings=crossed)
+    audit("draw_locked", ip=client_ip(request), draw_id=target, assignments=len(pairs),
+          same_group_crossings=crossed)
 
     # Opt-in auto-delivery (the config checkbox). It runs strictly after the lock committed: a
     # slow or dead Resend can never leave a half-drawn event, and a failed send never undoes the
@@ -1667,13 +1990,13 @@ def run_draw(
     emailed = None
     if config_row["auto_email_on_draw"]:
         base_url = public_base_url(request)
-        with_email = [p for p in _all_participants(conn) if p["email"]]
+        with_email = [p for p in _all_participants(conn, target) if p["email"]]
         emailed = send_link_emails(conn, with_email, config_row, base_url)
-        audit("auto_email_on_draw", ip=client_ip(request), sent=emailed["sent"],
+        audit("auto_email_on_draw", ip=client_ip(request), draw_id=target, sent=emailed["sent"],
               failed=emailed["failed"])
 
-    response = {"status": "OK", "assignments_created": len(pairs), "same_group_crossings": crossed,
-                "is_locked": 1}
+    response = {"status": "OK", "draw_id": target, "assignments_created": len(pairs),
+                "same_group_crossings": crossed, "is_locked": 1}
     if emailed is not None:
         response["emails"] = emailed
     return response
@@ -1682,23 +2005,31 @@ def run_draw(
 @app.post("/api/admin/reset", dependencies=[Depends(enforce_api_limit)])
 def reset_draw(
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
+    target = select_draw_id(conn, draw_id)
     with _draw_lock:
         conn.execute("BEGIN IMMEDIATE")
         try:
-            conn.execute("DELETE FROM assignments")
+            conn.execute(
+                "DELETE FROM assignments WHERE giver_id IN "
+                "(SELECT id FROM participants WHERE draw_id = ?) "
+                "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
+                (target, target),
+            )
             # Both stamps describe the current draw, not the person: a re-draw means the links
             # reveal something new AND the old mail quotes an obsolete draw. The addresses
             # themselves survive — only the "this draw went out" stamps reset.
-            conn.execute("UPDATE participants SET viewed_at = NULL, email_sent_at = NULL")
-            conn.execute("UPDATE config SET is_locked = 0 WHERE id = 1")
+            conn.execute("UPDATE participants SET viewed_at = NULL, email_sent_at = NULL "
+                         "WHERE draw_id = ?", (target,))
+            conn.execute("UPDATE draws SET is_locked = 0, drawn_at = NULL WHERE id = ?", (target,))
             conn.execute("COMMIT")
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    audit("draw_reset", ip=client_ip(request))
+    audit("draw_reset", ip=client_ip(request), draw_id=target)
     return {"status": "OK"}
 
 
@@ -1732,17 +2063,16 @@ def _send_rows_or_422(request: Request, conn: sqlite3.Connection, people: list[d
 def email_participant_link(
     participant_id: int,
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     """Send one participant their link. Works locked or unlocked: before the draw the mail says
     "the draw has not happened yet, here is your link to add ideas" — the token is already
     theirs to keep."""
-    row = conn.execute(f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE id = ?",
-                       (participant_id,)).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="Participant not found")
-    result = _send_rows_or_422(request, conn, [_participant_dict(row)], _load_config(conn))
+    target = select_draw_id(conn, draw_id)
+    row = _participant_row(conn, participant_id, target)
+    result = _send_rows_or_422(request, conn, [_participant_dict(row)], _load_config(conn, target))
     outcome = result["results"][0]
     if not outcome["ok"]:
         code = 503 if outcome["reason"] == EMAIL_NOT_CONFIGURED else 422
@@ -1753,14 +2083,20 @@ def email_participant_link(
 @app.post("/api/admin/emails", dependencies=[Depends(enforce_api_limit)])
 def email_all_links(
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Send every participant who has an address. Participants with no address are skipped and
-    listed, not failed: the point is a per-row report the console can show, not one error that
-    hides who got mail."""
-    report = _send_rows_or_422(request, conn, _all_participants(conn), _load_config(conn))
-    audit("emails_bulk", ip=client_ip(request), sent=report["sent"], failed=report["failed"])
+    """Send every participant of this draw who has an address. Participants with no address are
+    skipped and listed, not failed: the point is a per-row report the console can show, not one
+    error that hides who got mail. Scoped by draw — "send the links" must never mean "mail every
+    relative in every event this server has ever held".
+    """
+    target = select_draw_id(conn, draw_id)
+    report = _send_rows_or_422(request, conn, _all_participants(conn, target),
+                               _load_config(conn, target))
+    audit("emails_bulk", ip=client_ip(request), draw_id=target, sent=report["sent"],
+          failed=report["failed"])
     return {"status": "OK", **report}
 
 
@@ -1768,12 +2104,13 @@ def email_all_links(
 def email_preview(
     payload: EmailPreviewRequest,
     request: Request,
+    draw_id: int | None = None,
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     """Render the template with a sample name and a sample link. No participant data goes into
     the response, so the preview is safe to screenshot and cannot leak a roster."""
-    config_row = _load_config(conn)
+    config_row = _load_config(conn, draw_id)
     language = payload.language or config_row["email_language"]
     base_url = public_base_url(request) or "https://tirage-noel.alserv.org"
     link = participant_link(base_url, "00000000-0000-0000-0000-000000000000")
@@ -1791,7 +2128,7 @@ def email_preview(
 
 def _participant_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row:
     row = conn.execute(
-        "SELECT id, name, role, family_group, wishlist, token, viewed_at "
+        "SELECT id, draw_id, name, role, family_group, wishlist, token, viewed_at "
         "FROM participants WHERE token = ?",
         (token,),
     ).fetchone()
@@ -1806,8 +2143,12 @@ def get_draw(
     conn: sqlite3.Connection = Depends(get_db),
 ) -> dict[str, Any]:
     participant = _participant_by_token(conn, token)
+    # The link decides which draw this is, not a server-wide "current" one: with several draws open
+    # at once, the event title and the locked/unlocked state a relative sees must come from the
+    # draw their token belongs to.
     config = conn.execute(
-        "SELECT event_title, budget_note, is_locked FROM config WHERE id = 1"
+        "SELECT event_title, budget_note, is_locked FROM draws WHERE id = ?",
+        (participant["draw_id"],),
     ).fetchone()
 
     if not config["is_locked"]:

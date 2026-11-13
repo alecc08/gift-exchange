@@ -132,7 +132,7 @@ def test_old_database_upgrades_and_keeps_drawing_the_way_it_did(tmp_path, monkey
     conn.row_factory = sqlite3.Row
     rows = conn.execute("SELECT name, family_group, group_key FROM participants ORDER BY id").fetchall()
     assert [row["group_key"] for row in rows] == ["Roy", "Nolin"]
-    assert conn.execute("SELECT avoid_same_group FROM config WHERE id = 1").fetchone()[0] == 1
+    assert conn.execute("SELECT avoid_same_group FROM draws WHERE id = 1").fetchone()[0] == 1
     conn.close()
 
     # idempotent: running the migration again changes nothing

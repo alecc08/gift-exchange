@@ -790,3 +790,92 @@ Subject order changed from `{event} — ton lien secret` to `{name} — ton lien
 event title on prod is 53 characters, which pushed the whole purpose of the mail past Gmail's list
 view truncation and left six identical subjects at one shared mailbox. Name first is the only thing
 a mailbox sorts and scans by; the event goes last so it is the part that gets cut.
+
+---
+
+## Multiple draws, a console that fits a phone, and a gift in the mail (addendum, 2026-11-13)
+
+**The ask.** « L'admin peut créer MULTIPLE tirages, pas juste un seul… la vue admin permet
+d'ouvrir un tirage précis, ou d'en créer un nouveau. Ça veut dire un écran de plus qui liste tous
+les tirages avec leur statut. » And: « la UI est trop chargée et pas vraiment responsive — « pas
+encore ouvert », « lien envoyé il y a … »… il faut que ça se voie sur mobile; là je pense que ça
+cache juste le surplus quand la page est trop étroite. » Bundled into one branch, verified in a
+browser, shipped as an unmerged PR.
+
+**Data model.** `config` (one row, one event) becomes `draws` (one row per event) and
+`participants.draw_id` (`NOT NULL DEFAULT 1`). Two columns come with it: `created_at`, and
+`drawn_at` — NULL on a draw that was locked before the column existed, which the UI renders as
+« Tiré » with no invented date.
+
+*Rebuild, not rename.* The original table was `id INTEGER PRIMARY KEY CHECK (id = 1)`. An
+`ALTER TABLE config RENAME TO draws` carries that CHECK along, and then creating a second draw —
+the entire point of the change — fails with a constraint error on the live box. The migration
+therefore creates `draws_new` without the check, copies column by column (so any vintage of legacy
+table works: `avoid_same_group` may not exist yet), drops `config`, renames. Ids survive, so
+`draw_id = 1` is true by construction for the running deployment. `created_at`/`drawn_at` are left
+to `apply_migrations`, and the default draw of a fresh install is seeded *after* the migrations —
+seeded inside `SCHEMA` it would run before those columns exist on an upgraded database. The index on
+`participants(draw_id)` is created after the migrations for the same reason.
+
+**The API contract.** Every `/api/admin/*` call except the draws list and the login pair takes
+`?draw_id=`. Omitted, it means "the only draw there is" — the contract the older client and the
+whole pre-multi-draw suite are written against, so nothing existing broke. With two draws and no id
+the server refuses to guess (`400 No draw selected`); unknown id `404`; empty server `400 There is
+no draw yet`. Participant ids are global, so `_participant_row()` scopes the *write* paths too —
+without it a console pointed at one draw could edit, mail or delete a person from another by id.
+The participant link never carries a draw id: the token resolves to its own row, hence its own draw.
+
+`copy_participants_from` copies people (name, household, wishlist, address) with **fresh tokens** and
+no `viewed_at`/`email_sent_at`: a link that already revealed last year's pairing must not silently
+become this year's credential, and two draws sharing a token would break the one property the URL
+relies on — whoever holds a token holds exactly one draw. Deleting a **locked** draw is refused
+rather than forced; relatives are holding links that reveal it, so the sequence is reset-then-delete.
+
+**Rehearsed on a copy of production before deploying.** 12 tokens byte-identical, 18 pairings intact,
+the old participant links still answer `200 READY` with the right event title, draw #2 creatable
+(the `CHECK (id = 1)` trap avoided), zero token overlap between a draw and its copy, a cross-draw
+delete refused `404`, and the locked draw refusing its own deletion.
+
+**The list screen.** « Choisis un tirage »: one card per draw — status, and the counts an organizer
+actually scans (people / links sent / links opened). Counts only: `assignments` is touched as a
+`COUNT`, never read, so the list cannot leak a pairing. Opening a draw writes `?draw=` into the URL
+so a reload or a bookmark comes back to the same event; a bookmark to a draw that no longer exists
+falls back to the list instead of showing a console pointed at nothing.
+
+**Responsive.** There were no breakpoints at all: at phone width the roster's seven columns
+overflowed their container and the chips (« Pas encore ouvert », « Lien envoyé il y a 2 h ») ran into
+the neighbouring cell. Now: ≤900 px the roster is one card per person with each field labelled by its
+own column name (`td[data-label]`, same strings as the headers, so they translate); ≤640 px 40 px
+button targets and 16 px inputs (below that Mobile Safari zooms on focus and does not give the zoom
+back); ≤480 px the chips keep the fact and drop the *when*, which stays in the `title`. Quota table,
+preview modal and toasts reflow.
+
+**Mail art.** A big gift between the header and the copy: box shut, lid jumped off, four mittened
+paws holding it open, two eyes looking up at it, motion arcs and escaped sparkles — the mail's whole
+promise (the pairing is already in the box, only you can open it) in one picture. Static on the
+organizer's explicit call (« keep it non-animated, let's play it safe »): Outlook ignores
+`@keyframes`, Gmail strips them, and art that freezes in half the family's inboxes is worse than a
+still frame. Localized `alt`, because for a screen reader that image *is* the pitch. A guard test
+asserts neither the mail nor the SVG carries `@keyframes`/`<animate>` — checked on the parsed SVG
+tree, because the art's own comment contains the word "animation" to explain why there is none.
+
+**Two bugs only a browser could catch**, both now static guards (`tests/test_frontend.py`):
+- `drawStatus()` called `formatDate(...)` bare. Markup may do that (Alpine puts the component on its
+  scope chain); JavaScript inside the component may not — Alpine swallowed the ReferenceError and the
+  status chip of every locked draw rendered empty.
+- The error strip lived inside the console block, so a refused action on the *list* — deleting a
+  locked draw — came back as a 400 the organizer could only read in the devtools console. It now
+  sits above both screens, and a guard asserts exactly one copy, before both.
+
+The i18n label guard paid for itself too: with a second « Supprimer » (delete a draw) the English
+pair `draws.delete` / `roster.delete` both read "Delete", so the roster's became **Remove** — two
+unrelated controls sharing a label is what broke the docs capture tool last time.
+
+**Verification.** 165 tests, incl. `tests/test_draws.py` (21: separation, copy semantics, per-draw
+mail and reset, cross-draw write refusal, delete rules, and the upgrade of a locked live-shaped
+database) and `tests/test_frontend.py` (Alpine `this.` scope, draw-scoped fetch coverage, the error
+strip's placement). `tools/check_organizer_ui.py` now walks login → list → console → second draw →
+refused locked delete → delete → **390 px and 360 px with no element outside the viewport and no
+horizontal scroll**, and passes clean: no console errors, no page errors, no raw i18n keys. Overflow
+probed by measurement (1440/1024/900/768/430/390/360 on the list, the console and the participant
+reveal), email art checked at 620 px and 390 px.
