@@ -173,7 +173,10 @@ delete and re-add the participant.
 | Token guessing | `GET /api/draw/{token}` has its own per-IP budget; tokens are UUIDv4; unknown tokens are an indistinguishable `404`. |
 | Volume / payload abuse | Shared per-IP budget for the rest, and a request-body cap → `413`. |
 | Password on every request | Login also returns a short-lived **HMAC-SHA256 session token** (12 h) usable as `Authorization: Bearer`; `POST /api/admin/logout` revokes it server-side; the SPA stores the token, never the password. |
-| Injection / XSS | Zero-build frontend, no `innerHTML` of user data; CSP pins the CDNs (`script-src`, `base-uri 'self'`, `form-action 'none'`, `frame-ancestors 'none'`, `object-src 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`. |
+| Injection / XSS | Zero-build frontend, no `innerHTML` of user data; CSP pins the CDNs (`script-src`, `base-uri 'self'`, `form-action 'none'`, `frame-ancestors 'none'`, `object-src 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`. One deliberate exception: `/static/*`
+  sends `Cross-Origin-Resource-Policy: cross-origin` instead of `same-origin`, because an email client and
+  the social-image crawler have to be able to load the art from another origin — and nothing personal is in
+  `/static`. |
 | Private-link leakage | `Referrer-Policy: no-referrer` + `<meta name="referrer" content="no-referrer">`, so `/?t=<uuid>` never rides out in a Referer. |
 | Unbounded input | Pydantic length caps on every text field (name 80, family name 60, group 60, wishlist 1000, title 120, budget 500); the SPA mirrors them via `GET /api/limits`. |
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
@@ -359,8 +362,16 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   `MAX_SUBJECT_NAMES` (3) the list becomes « A, B, C et 2 autre(s) » rather than pushing the words
   « vos liens » off the screen.
 * **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake, the big gift
-  and the gift strip served from `/static` as `<img>` — Gmail strips inline `<svg>` markup but
-  renders SVG files through its image proxy. Without an absolute base URL the art is simply omitted.
+  and the gift strip served from `/static` as `<img>`. **They are PNG, and that is a measured fact,
+  not a style choice:** the first version referenced the site's SVGs, the files served fine (`200`,
+  `image/svg+xml`), and Gmail drew nothing at all — Google's image proxy does not serve SVG and has
+  said it has no plans to (cani.email lists SVG as non-Google-only). Inline `<svg>` markup is
+  stripped by Gmail too, so the art is `<img>`-referenced, never inline. The SVGs stay the source of
+  truth (they are what gets edited and what the site's own vectors match); `tools/build_email_art.py`
+  rasterizes the three the mail loads, at 2x the displayed size so a phone shows them sharp, and a
+  test asserts both the format and that the intrinsic pixels are 2x the `width`/`height` the mail
+  declares. Without an absolute base URL the art is simply omitted — a relative src in an email is a
+  broken image with extra steps.
   The big gift is the mail's whole idea in one picture: the box is shut, the lid has jumped off, and
   somebody inside is holding it open and looking up — the pairing is already in there, and only the
   reader can open it. It is drawn static on purpose: email clients disagree about CSS animation
@@ -485,7 +496,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 175 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
+bash run_tests.sh          # 177 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
 #                  security, previews, email delivery
 ```
 
@@ -509,7 +520,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 175 tests
+├── tests/                        # 177 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution
@@ -524,6 +535,7 @@ ADMIN_PASSWORD=<pw> python3 tools/seed_demo.py
 GE_BASE=http://127.0.0.1:8085 python3 tools/capture_docs_media.py
 python3 tools/build_docs_media.py
 python3 tools/build_share_art.py            # link-preview card + icons (also Chromium)
+python3 tools/build_email_art.py            # the mail's PNG art, from the SVGs in static/
 ```
 
 The console's client-side glue (Alpine getters, the checkbox's `0/1` ↔ boolean coercion, the two

@@ -1285,22 +1285,29 @@ def _join_names(names: list[str], copy: dict[str, str]) -> str:
 def _email_assets(assets_base: str, copy: dict[str, str]) -> dict[str, str]:
     """The three `<img>` references, or three empty strings when there is no absolute base.
 
-    Inline `<svg>` is stripped by Gmail; the art is `<img>`-referenced from the site's own /static,
-    which its image proxy does render. A relative src in an email is a broken image with extra
-    steps, so no base means no art. Static on purpose: Outlook ignores `@keyframes` and Gmail
-    strips them, so art that freezes in half the family's inboxes is worse than no art.
+    **PNG, not SVG, and that is not a preference.** The mail fetched its art from `/static` as SVG,
+    the files served fine (`200`, `image/svg+xml`), and Gmail showed nothing at all: Google's image
+    proxy does not serve SVG, which it has said publicly it has no plans to change. Measured in a
+    real inbox on 2026-11-13, after a README that confidently claimed the opposite. The SVGs stay
+    the source art and the site's own vectors; `tools/build_email_art.py` rasterizes the copies the
+    mail loads, at 2x the displayed size so a phone shows them sharp.
+
+    Inline `<svg>` is stripped by Gmail, so the art is `<img>`-referenced, never inline. A relative
+    src in an email is a broken image with extra steps, so no base means no art. Static on purpose:
+    Outlook ignores `@keyframes` and Gmail strips them, so art that freezes in half the family's
+    inboxes is worse than no art.
     """
     base = assets_base.rstrip("/")
     if not base:
         return {"flake": "", "gift": "", "strip": ""}
-    flake_url = html.escape(f"{base}/static/email-flake.svg", quote=True)
-    gift_url = html.escape(f"{base}/static/email-gift.svg", quote=True)
-    strip_url = html.escape(f"{base}/static/email-gift-strip.svg", quote=True)
+    flake_url = html.escape(f"{base}/static/email-flake.png", quote=True)
+    gift_url = html.escape(f"{base}/static/email-gift.png", quote=True)
+    strip_url = html.escape(f"{base}/static/email-gift-strip.png", quote=True)
     alt = html.escape(copy["gift_alt"], quote=True)
     gift = (f'<div style="padding:26px 28px 2px;text-align:center"><img src="{gift_url}" width="330" '
             f'height="190" alt="{alt}" style="display:block;width:100%;max-width:330px;margin:0 auto">'
             f'</div>')
-    strip = (f'<div style="padding:4px 28px 20px"><img src="{strip_url}" width="504" alt="" '
+    strip = (f'<div style="padding:4px 28px 20px"><img src="{strip_url}" width="504" height="36" alt="" '
              f'style="display:block;width:100%;max-width:504px"></div>')
     flake = f'<img src="{flake_url}" width="56" height="56" alt="" style="display:block">'
     return {"flake": flake, "gift": gift, "strip": strip}
@@ -1631,7 +1638,18 @@ app = FastAPI(title="Family Gift Exchange", lifespan=lifespan, docs_url=None, re
 @app.middleware("http")
 async def security_middleware(request: Request, call_next):
     response = await call_next(request)
-    for header, value in SECURITY_HEADERS.items():
+    headers = SECURITY_HEADERS
+    if request.url.path.startswith("/static/"):
+        # `/static` is the only thing on this server another origin has to be able to load: an email
+        # client fetching the art (Apple Mail and friends fetch it directly; Gmail re-serves it from
+        # its own proxy), and the social-image crawler that reads /static/og-image.png. With
+        # `same-origin` those loads are blocked in the browser (`ERR_BLOCKED_BY_RESPONSE.
+        # NotSameOrigin`) and the mail shows a broken-image icon. Nothing personal lives in /static —
+        # the participant's data only ever comes from the API — so the art is explicitly shareable.
+        # No Cache-Control here on purpose: StaticFiles' ETag/Last-Modified already give the right
+        # revalidation window, and a max-age would pin stale art across a redeploy.
+        headers = {**SECURITY_HEADERS, "Cross-Origin-Resource-Policy": "cross-origin"}
+    for header, value in headers.items():
         response.headers.setdefault(header, value)
     return response
 
