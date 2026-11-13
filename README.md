@@ -179,6 +179,9 @@ python tools/build_docs_media.py
 
 ## Notes
 
+* All names, wishlists and events shown in the screenshots are **fictional demo data** produced
+  by `tools/seed_demo.py`; nothing about a real family is in this repository, and the SQLite file
+  (`data/`) is git-ignored.
 * Snowfall, the gift-box reveal and the snowflake burst are CSS/SVG only and disabled under
   `prefers-reduced-motion`.
 * Icons: inline SVG sprite — one bespoke crystalline snowflake plus Tabler Icons (MIT).
@@ -186,3 +189,9 @@ python tools/build_docs_media.py
   `navigator.clipboard` is unavailable.
 * `X-Admin-Password` guards every admin route; participant routes are guarded only by their
   UUID token. Password comparison is constant-time.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE). The inline SVG sprite mixes original artwork with Tabler Icons
+(MIT); fonts (Fraunces, Inter) are loaded from Google Fonts under the SIL OFL and are not
+vendored. Contributions are welcome under the same licence.
