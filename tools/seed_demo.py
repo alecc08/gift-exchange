@@ -17,16 +17,16 @@ BASE = os.environ.get("GE_BASE", "http://127.0.0.1:8085").rstrip("/")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 
 ROSTER = [
-    ("Nicolas", "ADULT", "Martin", "Un vin nature, des verres à pied, un bon couteau de cuisine"),
-    ("Julie", "ADULT", "Martin", "Des plantes d'intérieur, un plaid en laine, de la céramique"),
-    ("Sophie", "ADULT", "Dubois", "Un roman de Modiano, un coffret de thés, un vélo de ville"),
-    ("Marc", "ADULT", "Dubois", "Des vinyles de jazz, une machine à expresso, un sac de randonnée"),
-    ("Clara", "ADULT", "Nguyen", "Un abonnement à la médiathèque, des crayons aquarellables"),
-    ("Théo", "ADULT", "Faure", "Un échiquier en bois, un cours de menuiserie"),
-    ("Léa", "CHILD", "Martin", "Des feutres Stabilo, un livre sur les volcans, une peluche hérisson"),
-    ("Camille", "CHILD", "Dubois", "Un vélo, des LEGO, le jeu de société Taboo"),
-    ("Manon", "CHILD", "Nguyen", "Un appareil photo enfant, un carnet de dessins, des chaussettes à licornes"),
-    ("Hugo", "CHILD", "Faure", "Un football, un jeu Pokémon, des briques de construction"),
+    ("Mario", "ADULT", "Tremblay", "Une tuque en laine, un bon bourbon, des gants de vélo"),
+    ("Julie", "ADULT", "Tremblay", "Des plantes vivaces, une couple de casseroles en fonte, un foulard"),
+    ("Lise", "ADULT", "Gagnon", "Un cours de poterie, une bougie au sapin baumier, un bon vin rouge"),
+    ("Marc", "ADULT", "Gagnon", "Des cannes à pêche, un sac de jour, des vinyles de jazz"),
+    ("Steven", "ADULT", "Bouchard", "Un jeu de société, un abonnement au cinéma, un cours de menuiserie"),
+    ("Carole", "ADULT", "Roy", "Une couple de chaussures de marche, un livre de recettes d’ici"),
+    ("Florent", "CHILD", "Tremblay", "Un maillot du Canadien, des cartes Pokémon, des raquettes"),
+    ("Magalie", "CHILD", "Gagnon", "Des patins, un livre de fantasy, le jeu de société Tabou"),
+    ("Rosalie", "CHILD", "Bouchard", "Un appareil photo enfant, des feutres, des chaussettes à orignaux"),
+    ("Charlie", "CHILD", "Roy", "Un football, un jeu Pokémon, des briques de construction"),
 ]
 
 
@@ -60,8 +60,8 @@ def main():
         "/api/admin/config",
         "PUT",
         {
-            "event_title": "Échange de cadeaux des Martin & Dubois",
-            "budget_note": "25 € maximum — les cadeaux faits maison sont les bienvenus",
+            "event_title": "Échange de cadeaux du temps des Fêtes — Tremblay & Gagnon",
+            "budget_note": "25 $ par personne, taxes incluses — les cadeaux maison, c’est correct",
             "adult_draws_adult": 1,
             "adult_draws_child": 2,
             "child_draws_adult": 0,

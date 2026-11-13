@@ -21,11 +21,12 @@ DB = os.environ.get("GE_DB", "data/exchange.db")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 HEADERS = {"X-Admin-Password": PASSWORD, "Content-Type": "application/json"}
 
-GROUPS = ["Martin", "Dubois", "Nguyen", "Faure", "Perrot"]
+GROUPS = ["Tremblay", "Gagnon", "Bouchard", "Roy", "Ouellet"]
 ADULT_NAMES = [
-    "Nicolas", "Julie", "Sophie", "Marc", "Clara", "Théo", "Amina", "Paul", "Nadia", "Hélène",
+    "Mario", "Lise", "Steven", "Josée", "Yvan", "Carole", "Éric", "Manon", "Réjean", "Nicole",
 ]
-CHILD_NAMES = ["Léa", "Camille", "Manon", "Hugo", "Anna", "Liam", "Jade", "Noah", "Louise", "Tom"]
+CHILD_NAMES = ["Florent", "Magalie", "Émile", "Rosalie", "Zack", "Béatrice", "Xavier", "Charlie",
+               "Océane", "Tom"]
 
 
 def request(path, method="GET", body=None):
@@ -49,7 +50,7 @@ def seed_acceptance_scenario():
         "PUT",
         {
             "event_title": "Acceptance scenario — 10 adults, 10 children, 5 family groups",
-            "budget_note": "25 € maximum",
+            "budget_note": "25 $ par personne",
             "adult_draws_adult": 1,
             "adult_draws_child": 2,
             "child_draws_adult": 0,

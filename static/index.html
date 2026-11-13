@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr-CA">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -220,9 +220,9 @@
     <div class="flex items-center gap-2">
       <div class="flex rounded-full bg-white/75 ring-1 ring-black/5 p-1 text-xs font-semibold" role="group" :aria-label="t('lang.switch')">
         <button @click="setLang('fr')" :class="lang === 'fr' ? 'bg-pine-700 text-white shadow-sm' : 'text-pine-600 hover:text-pine-800'"
-                class="px-3 py-1.5 rounded-full transition">FR</button>
+                :title="t('lang.frTitle')" class="px-3 py-1.5 rounded-full transition">FR</button>
         <button @click="setLang('en')" :class="lang === 'en' ? 'bg-pine-700 text-white shadow-sm' : 'text-pine-600 hover:text-pine-800'"
-                class="px-3 py-1.5 rounded-full transition">EN</button>
+                :title="t('lang.enTitle')" class="px-3 py-1.5 rounded-full transition">EN</button>
       </div>
       <button x-show="mode === 'admin' && authed" @click="lock()" class="btn btn-quiet px-3 py-2 text-xs" x-text="t('admin.lock')"></button>
     </div>
@@ -721,136 +721,140 @@
 /* French is the default UI language; the FR/EN switch is persisted locally. */
 const I18N = {
   fr: {
-    'brand': 'Échange de cadeaux',
+    'brand': 'Temps des Fêtes',
     'admin.title': 'Espace organisateur',
-    'lang.switch': 'Choix de la langue',
-    'admin.lock': 'Verrouiller',
+    'lang.switch': 'Choisir la langue',
+    'lang.frTitle': 'Français québécois',
+    'lang.enTitle': 'English',
+    'admin.lock': 'Fretter',
     'admin.refresh': 'Rafraîchir',
     'admin.copyAll': 'Copier tous les liens',
 
     'login.title': 'Espace organisateur',
-    'login.sub': 'Saisissez le mot de passe d’administration pour piloter l’échange.',
+    'login.sub': 'Tape le mot de passe d’administration pour conduire l’échange.',
     'login.password': 'Mot de passe',
     'login.placeholder': 'Mot de passe d’administration',
     'login.button': 'Déverrouiller',
-    'login.checking': 'Vérification…',
-    'login.error': 'Mot de passe incorrect.',
-    'login.expired': 'Session expirée. Reconnectez-vous.',
+    'login.checking': 'On vérifie…',
+    'login.error': 'Mot de passe pas correct.',
+    'login.expired': 'Ta session a passé son tour. Reconnecte-toé.',
 
-    'state.locked': 'Tirage verrouillé',
+    'state.locked': 'Tirage fretté',
     'state.open': 'Tirage ouvert',
 
-    'warn.title': 'Le tirage risque d’échouer',
-    'warn.adultsNeed': 'Chaque adulte doit tirer {need} adulte(s), mais seuls {available} adulte(s) hors de son propre groupe sont éligibles.',
-    'warn.childrenNeed': 'Chaque adulte doit tirer {need} enfant(s), mais seuls {available} enfant(s) hors de son propre groupe sont éligibles.',
-    'warn.childAdultsNeed': 'Chaque enfant doit tirer {need} adulte(s), mais seuls {available} adulte(s) hors de son propre groupe sont éligibles.',
-    'warn.childChildrenNeed': 'Chaque enfant doit tirer {need} enfant(s), mais seuls {available} enfant(s) hors de son propre groupe sont éligibles.',
-    'warn.noReceivers': 'Aucun receveur n’est possible pour le rôle « {role} » avec les groupes familiaux actuels.',
-    'warn.selfOnly': 'Il n’y a qu’un seul participant : personne ne peut tirer qui que ce soit.',
+    'warn.title': 'Ça va pas passer avec ça',
+    'warn.adultsNeed': 'Chaque adulte doit tirer {need} adulte(s), mais y en a juste {available} en dehors de sa propre famille.',
+    'warn.childrenNeed': 'Chaque adulte doit tirer {need} enfant(s), mais y en a juste {available} en dehors de sa propre famille.',
+    'warn.childAdultsNeed': 'Chaque enfant doit tirer {need} adulte(s), mais y en a juste {available} en dehors de sa propre famille.',
+    'warn.childChildrenNeed': 'Chaque enfant doit tirer {need} enfant(s), mais y en a juste {available} en dehors de sa propre famille.',
+    'warn.noReceivers': 'Pour le rôle « {role} », y a personne à gâter avec les familles d’astheure.',
+    'warn.selfOnly': 'Y a un seul participant : personne peut tirer personne.',
 
     'rules.kicker': 'Panel 1',
-    'rules.title': 'Règles & quotas',
+    'rules.title': 'Règles pis quotas',
     'rules.eventTitle': 'Nom de l’événement',
     'rules.budget': 'Note de budget',
-    'rules.budgetPlaceholder': 'Ex. 25 € maximum, cadeau fait maison bienvenu',
+    'rules.budgetPlaceholder': 'Ex. 25 $ par personne, taxes incluses',
     'rules.quotas': 'Qui tire quoi',
     'rules.whoDraws': 'Chaque participant tire…',
     'rules.eachAdult': 'Un adulte tire',
     'rules.eachChild': 'Un enfant tire',
     'rules.totalToPrepare': 'Total de cadeaux à prévoir',
-    'rules.quotaHelp': '0 = ce type de cadeau n’est pas prévu. Le total doit rester équilibré entre donneurs et receveurs.',
+    'rules.quotaHelp': '0 = pas de cadeau de ce genre. Fais en sorte que le compte soit pareil du bord des donneurs pis des receveurs.',
     'rules.save': 'Enregistrer les règles',
-    'rules.unsaved': 'Modifications non enregistrées',
-    'rules.lockedHint': 'Tirage verrouillé : réinitialisez-le pour modifier les règles.',
+    'rules.unsaved': 'Y a des changements pas enregistrés',
+    'rules.lockedHint': 'Tirage fretté : réinitialise-le avant de toucher aux règles.',
     'rules.saved': 'Règles enregistrées.',
 
     'roster.kicker': 'Panel 2',
-    'roster.title': 'Liste des participants',
+    'roster.title': 'Le monde participant',
     'roster.name': 'Nom',
     'roster.namePlaceholder': 'Prénom',
     'roster.role': 'Rôle',
-    'roster.group': 'Groupe familial',
-    'roster.groupPlaceholder': 'Ex. Martin',
-    'roster.groupHelp': 'Les personnes d’un même groupe familial ne peuvent jamais se tirer entre elles.',
-    'roster.wishlist': 'Liste d’envies (facultatif)',
-    'roster.wishlistPlaceholder': 'Ex. des feutres, un livre…',
-    'roster.wishlistIs': 'Envies :',
+    'roster.group': 'Famille',
+    'roster.groupPlaceholder': 'Ex. Tremblay',
+    'roster.groupHelp': 'Le monde de la même famille se tire jamais entre eux.',
+    'roster.wishlist': 'Liste de souhaits (optionnel)',
+    'roster.wishlistPlaceholder': 'Ex. des mitaines, un livre…',
+    'roster.wishlistIs': 'Souhaits :',
     'roster.add': 'Ajouter',
     'roster.status': 'Statut',
     'roster.actions': 'Actions',
-    'roster.empty': 'Aucun participant pour l’instant — ajoutez la famille ci-dessus.',
+    'roster.empty': 'Y a personne dans la liste pour l’instant — ajoute ta famille en haut.',
     'roster.viewed': 'Consulté',
-    'roster.unopened': 'Non ouvert',
+    'roster.unopened': 'Pas encore ouvert',
     'roster.copy': 'Copier le lien',
     'roster.copied': 'Copié !',
-    'roster.delete': 'Supprimer',
-    'roster.confirmDelete': 'Supprimer {name} de la liste des participants ?',
-    'roster.noGiftsNote': 'ne tire aucun cadeau',
-    'roster.giftsN': '{n} cadeau(x) à offrir',
-    'roster.filterOff': 'Afficher tout le monde',
-    'roster.summary': '{n} participant(s) · {a} adulte(s) · {c} enfant(s)',
+    'roster.delete': 'Enlever',
+    'roster.confirmDelete': 'On enlève {name} de la liste ?',
+    'roster.noGiftsNote': 'tire pas de cadeau',
+    'roster.giftsN': '{n} cadeau(s) à acheter',
+    'roster.filterOff': 'Montre-moé le monde au complet',
+    'roster.summary': '{n} personne(s) · {a} adulte(s) · {c} enfant(s)',
 
     'draw.kicker': 'Panel 3',
-    'draw.title': 'Tirage au sort',
-    'draw.openCopy': 'Lancez le tirage : chaque participant reçoit un lien confidentiel. Personne, y compris vous, ne voit la répartition complète.',
-    'draw.lockedCopy': 'Le tirage est verrouillé. Les participants peuvent ouvrir leur lien à tout moment.',
-    'draw.blindNote': 'Aucune interface organisateur n’affiche les binômes : c’est voulu.',
-    'draw.needRoster': 'Ajoutez d’abord des participants dans le Panel 2, puis relancez le tirage.',
-    'draw.generate': 'Générer et verrouiller le tirage',
-    'draw.blockedByWarnings': 'Corrigez d’abord les alertes ci-dessus',
-    'draw.confirmGenerate': 'Générer le tirage maintenant ? Cela verrouille les règles et envoie {gifts} cadeau(s) aux participants. Vous ne pourrez plus les modifier sans réinitialiser.',
-    'draw.done': 'Tirage généré et verrouillé. Diffusez les liens aux participants.',
-    'draw.alreadyLocked': 'Le tirage est déjà verrouillé.',
+    'draw.title': 'Le tirage',
+    'draw.openCopy': 'Lance le tirage : chaque personne reçoit un lien ben à elle. Personne — même toé — voit le tableau complet.',
+    'draw.lockedCopy': 'Le tirage est frette. Le monde peut ouvrir son lien n’importe quand.',
+    'draw.blindNote': 'Aucun écran d’organisateur affiche les binômes : c’est voulu, ça reste un secret.',
+    'draw.needRoster': 'Ajoute d’abord du monde dans le Panel 2, pis là lance le tirage.',
+    'draw.generate': 'Générer pis fretter le tirage',
+    'draw.blockedByWarnings': 'Régle les alertes en haut avant',
+    'draw.confirmGenerate': 'On lance le tirage astheure ? Ça frette les règles pis ça part {gifts} cadeau(s) au monde. Tu pourras plus rien changer sans réinitialiser.',
+    'draw.done': 'Tirage généré pis fretté. Envoie les liens au monde.',
+    'draw.alreadyLocked': 'Le tirage est déjà fretté.',
     'draw.openedCount': '{n}/{total} lien(s) ouvert(s)',
     'draw.reset': 'Réinitialiser le tirage',
-    'draw.resetHint': 'Efface les binômes et rouvre l’édition.',
-    'draw.confirmReset': 'Réinitialiser le tirage ? Les binômes et les statuts « consulté » seront effacés.',
-    'draw.resetDone': 'Tirage réinitialisé. Vous pouvez modifier les règles et la liste.',
-    'draw.forecast': '{gifts} cadeau(s) au total : {toAdults} pour des adultes, {toChildren} pour des enfants',
+    'draw.resetHint': 'Efface les binômes pis ça rouvre la place.',
+    'draw.confirmReset': 'Réinitialiser le tirage ? Les binômes pis les marques « consulté » s’en vont.',
+    'draw.resetDone': 'Tirage réinitialisé. Les règles pis la liste sont repensables.',
+    'draw.forecast': '{gifts} cadeau(s) en tout : {toAdults} pour des adultes, {toChildren} pour des enfants',
 
     'p.hello': 'Bonjour',
-    'p.pending': 'le tirage n’est pas encore finalisé. Reviens bientôt !',
-    'p.checkAgain': 'Vérifier à nouveau',
-    'p.autoCheck': 'Cette page se rafraîchit toute seule.',
-    'p.readyTease': 'Ton tirage t’attend. Ouvre le cadeau.',
+    'p.pending': 'le tirage est pas encore réglé. Ça s’en vient, repasse tantôt !',
+    'p.checkAgain': 'Vérifier encore',
+    'p.autoCheck': 'La page se rafraîchit toute seule.',
+    'p.readyTease': 'Ton tirage t’attend. Ouvre donc ça.',
     'p.reveal': 'Révéler mes cadeaux',
     'p.revealNone': 'Ouvrir mon lien',
-    'p.privateNote': 'Lien confidentiel : ne le partagez pas.',
+    'p.privateNote': 'Lien confidentiel : garde-le pour toé.',
     'p.giftAria': 'Cadeau de Noël emballé',
-    'p.revealTitle': 'Les cadeaux que tu offres',
-    'p.revealSub': 'Retrouve chaque personne et ses envies.',
+    'p.revealTitle': 'Le monde que tu vas gâter',
+    'p.revealSub': 'Trouve chaque personne pis ses souhaits.',
     'p.copyList': 'Copier ma liste',
-    'p.noGifts': 'Tu n’as aucun cadeau à offrir cette année — prépare-toi à recevoir les tiens !',
-    'p.theirWishlist': 'Ses envies',
-    'p.noWishlist': 'Aucune envie indiquée — laisse parler ton imagination.',
-    'p.myWishlist': 'Ma liste d’envies',
-    'p.myWishlistHelp': 'Tu peux la modifier à tout moment, même après le tirage. Enregistrement automatique.',
-    'p.wishlistPlaceholder': 'Ex. un livre de polars, des feutres, un pull bleu marine…',
+    'p.noGifts': 'T’as pas de cadeau à acheter c’année — prépare-toé à recevoir les tiens !',
+    'p.theirWishlist': 'Ses souhaits',
+    'p.noWishlist': 'Pas de souhaits d’écrit — laisse aller ton imagination.',
+    'p.myWishlist': 'Ma liste de souhaits',
+    'p.myWishlistHelp': 'Tu peux la changer n’importe quand, même après le tirage. Ça s’enregistre tout seul.',
+    'p.wishlistPlaceholder': 'Ex. une tuque en laine, des patins, un jeu de société…',
     'p.save': 'Enregistrer',
-    'p.unsaved': 'Non enregistré',
+    'p.unsaved': 'Pas enregistré',
     'p.savedAt': 'Enregistré {at}',
-    'p.invalidTitle': 'Lien introuvable',
-    'p.invalidSub': 'Ce lien n’est plus valide. Demande un nouveau lien à l’organisateur.',
+    'p.invalidTitle': 'Lien pas trouvé',
+    'p.invalidSub': 'Ce lien-là marche pu. Demande-en un neuf à l’organisateur.',
 
     'role.ADULT': 'Adulte',
     'role.CHILD': 'Enfant',
 
-    'err.title': 'Le tirage a échoué',
-    'err.unsolvable': 'Les contraintes sont impossibles à satisfaire avec les groupes familiaux et les quotas actuels. Réduisez les quotas ou ajoutez des familles différentes.',
-    'err.emptyTarget': 'Impossible d’offrir des cadeaux à un groupe vide : il n’y a aucun receveur possible.',
-    'err.locked': 'Le tirage est verrouillé : réinitialisez-le avant de modifier quoi que ce soit.',
-    'err.noParticipants': 'Ajoutez au moins un participant avant de lancer le tirage.',
-    'err.rateLimited': 'Trop de demandes. Réessayez dans {s} seconde(s).',
+    'err.title': 'Le tirage a capoté',
+    'err.unsolvable': 'Là, c’est pas faisable avec les familles pis les quotas d’astheure. Descends un quota ou ajoute des familles différentes.',
+    'err.emptyTarget': 'Peut pas donner de cadeaux à un groupe vide : y a personne à gâter.',
+    'err.locked': 'Le tirage est frette : réinitialise-le avant de toucher à quoi que ce soit.',
+    'err.noParticipants': 'Ajoute au moins une personne avant de lancer le tirage.',
+    'err.rateLimited': 'Trop de demandes d’un coup. Réessa dans {s} seconde(s).',
     'err.rateLimitedTitle': 'Trop de demandes',
-    'err.tooLarge': 'Le contenu est trop long pour être enregistré.',
-    'err.unknown': 'Une erreur est survenue. Réessayez.',
-    'err.copy': 'Copie impossible : sélectionnez et copiez le lien manuellement.',
-    'notice.defaultPassword': 'Mot de passe d’administration encore par défaut : changez la variable ADMIN_PASSWORD avant de diffuser les liens.',
+    'err.tooLarge': 'C’est trop long pour être enregistré.',
+    'err.unknown': 'Quelque chose a capoté. Réessa.',
+    'err.copy': 'La copie a pas donné : surligne pis copie le lien à la main.',
+    'notice.defaultPassword': 'Le mot de passe d’administration est encore celui de départ : change ADMIN_PASSWORD avant d’envoyer les liens au monde.',
   },
   en: {
     'brand': 'Gift exchange',
     'admin.title': 'Organizer space',
     'lang.switch': 'Language choice',
+    'lang.frTitle': 'Quebec French',
+    'lang.enTitle': 'English',
     'admin.lock': 'Lock',
     'admin.refresh': 'Refresh',
     'admin.copyAll': 'Copy all links',
@@ -879,7 +883,7 @@ const I18N = {
     'rules.title': 'Rules & draw quotas',
     'rules.eventTitle': 'Event title',
     'rules.budget': 'Budget note',
-    'rules.budgetPlaceholder': 'e.g. $25 max, handmade welcome',
+    'rules.budgetPlaceholder': 'e.g. $25 CAD each, taxes included',
     'rules.quotas': 'Who draws what',
     'rules.whoDraws': 'Each participant draws…',
     'rules.eachAdult': 'Each adult draws',
@@ -1074,7 +1078,9 @@ function giftExchange() {
     },
     get draftReady() { return !!(this.draft.name && this.draft.family_group); },
     get wishlistDirty() { return this.wishlistDraft !== this.savedWishlist; },
-    locale() { return this.lang === 'fr' ? 'fr-FR' : 'en-GB'; },
+    /* Quebec French for dates/relative times ("il y a 5 minutes", 24 h clock);
+       Canadian English for the EN switch. */
+    locale() { return this.lang === 'fr' ? 'fr-CA' : 'en-CA'; },
     formatDate(value) {
       if (!value) return '';
       const date = new Date(value);
@@ -1095,7 +1101,7 @@ function giftExchange() {
 
     /* ---------- boot ---------- */
     async boot() {
-      document.documentElement.lang = this.lang;
+      document.documentElement.lang = this.locale();
       this.burst = Array.from({ length: 14 }, (_unused, i) => {
         const angle = (i / 14) * Math.PI * 2 + Math.random() * 0.4;
         const distance = 90 + Math.random() * 90;
@@ -1125,7 +1131,7 @@ function giftExchange() {
     setLang(lang) {
       this.lang = lang;
       localStorage.setItem('ge_lang', lang);
-      document.documentElement.lang = lang;
+      document.documentElement.lang = this.locale();
     },
 
     async loadLimits() {

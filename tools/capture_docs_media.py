@@ -78,13 +78,13 @@ def capture_admin_page(page):
     page.wait_for_selector(".chip.bg-holly-100", state="hidden")
     time.sleep(0.4)
 
-    page.locator("text=Liste des participants").scroll_into_view_if_needed()
+    page.locator("h2", has_text="Le monde participant").scroll_into_view_if_needed()
     time.sleep(0.6)
     shot(page, "04-roster.png")
-    page.get_by_role("button", name=re.compile(r"^Martin")).first.click()
+    page.get_by_role("button", name=re.compile(r"^Tremblay")).first.click()
     time.sleep(0.6)
     shot(page, "05-family-filter.png")
-    page.get_by_role("button", name="Afficher tout le monde").click()
+    page.get_by_role("button", name="Montre-moé le monde au complet").click()
     time.sleep(0.4)
 
     page.get_by_role("button", name="Copier tous les liens").click()
@@ -132,15 +132,15 @@ def main():
         if not locked:
             pending = context.new_page()
             pending.goto(hero_url, wait_until="networkidle")
-            pending.wait_for_selector("text=Vérifier à nouveau")
+            pending.wait_for_selector("text=Vérifier encore")
             time.sleep(1.0)
             shot(pending, "07-participant-pending.png")
             pending.close()
 
-            page.locator("text=Générer et verrouiller").scroll_into_view_if_needed()
+            page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
             page.once("dialog", lambda dialog: dialog.accept())
-            page.get_by_role("button", name=re.compile("Générer et verrouiller")).click()
-            page.wait_for_selector("text=Tirage verrouillé")
+            page.get_by_role("button", name=re.compile("Générer pis fretter")).click()
+            page.wait_for_selector("text=Tirage fretté")
 
             # a few participants have already opened their link: the panel tracks that
             others = [p["token"] for p in snapshot["participants"] if p["name"] != hero][:3]
@@ -148,11 +148,11 @@ def main():
                 open_link(link)
             page.get_by_role("button", name="Rafraîchir").click()
             page.wait_for_selector(r"text=/[1-9]\/\d+ lien\(s\) ouvert/")
-            page.locator("text=Tirage au sort").scroll_into_view_if_needed()
+            page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
             time.sleep(0.8)
             shot(page, "08-draw-locked.png")
         else:
-            page.locator("text=Tirage au sort").scroll_into_view_if_needed()
+            page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
             time.sleep(0.6)
             shot(page, "08-draw-locked.png")
 

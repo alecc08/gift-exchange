@@ -5,7 +5,7 @@ import re
 
 from conftest import ADMIN, add, set_config
 
-FESTIVE = dict(event_title="Échange de Noël", budget_note="25 € maximum",
+FESTIVE = dict(event_title="Échange de Noël", budget_note="25 $ maximum",
                adult_draws_adult=1, adult_draws_child=2, child_draws_adult=0, child_draws_child=0)
 
 
@@ -151,7 +151,7 @@ def test_viewed_at_transitions_and_token_flow(client):
     ready = client.get(f"/api/draw/{adult['token']}")
     body = ready.json()
     assert body["status"] == "READY"
-    assert body["budget_note"] == "25 € maximum"
+    assert body["budget_note"] == "25 $ maximum"
     assert len(body["assignments"]) == 3
     assert {a["role"] for a in body["assignments"]} == {"ADULT", "CHILD"}
 
