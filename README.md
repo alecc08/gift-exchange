@@ -191,7 +191,7 @@ delete and re-add the participant.
 | `ADMIN_PASSWORD` | `admin` (hardened file: required) | Organizer password. |
 | `SESSION_SECRET` | derived (hardened file: required) | HMAC key for session tokens. |
 | `TRUST_PROXY` | `0` | Trust `X-Forwarded-For` only behind your own proxy. |
-| `PUBLIC_BASE_URL` | unset | The absolute origin used in mailed links, mailed art and share tags. Unset, the request's own `Host` is used — and a loopback `Host` then *refuses* to send (503) rather than mail links nobody can open. Set it to the address the family types. |
+| `PUBLIC_BASE_URL` | unset | The absolute origin used for **mailed** links and mailed art. Unset, the request's own `Host` is used — and a loopback `Host` then *refuses* to send (503) rather than mail links nobody can open. Set it to the address the family types. (Share tags keep following the request's `Host`, which is what a crawler needs, and they are validated against injection separately.) |
 | `LOGIN_RATE_LIMIT` | `10` | Login attempts per minute per client. |
 | `LOGIN_LOCKOUT_THRESHOLD` / `LOGIN_LOCKOUT_SECONDS` | `5` / `300` | Failed logins before a temporary lockout, and its length. |
 | `DRAW_RATE_LIMIT` / `API_RATE_LIMIT` | `120` / `300` | Per-minute budgets for participant links / everything else. |
