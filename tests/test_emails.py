@@ -489,6 +489,63 @@ def test_names_are_escaped_before_they_touch_the_html():
     assert "Noël &lt;2026&gt;" in content["html"]
 
 
+def test_a_mail_that_would_point_at_the_server_itself_is_not_sent(client, monkeypatch):
+    """A link to 127.0.0.1 is a dead link in somebody's inbox, so it is refused, not mailed.
+
+    This is the bug the mail art made visible: an admin call made from inside the container carries
+    `Host: 127.0.0.1:8000`, and every link and every image URL in the mail inherited that — Gmail
+    cannot fetch the loopback network, and a relative who clicked the link landed on nothing. The
+    send refuses instead, and says which knob to turn.
+    """
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    add(client, "Alec", "ADULT", "Chamberland", email="alec@exemple.ca")
+
+    answer = client.post("http://127.0.0.1:8000/api/admin/emails", headers=ADMIN)
+    assert answer.status_code == 503
+    assert "PUBLIC_BASE_URL" in answer.json()["detail"], "the answer has to name the knob"
+    assert stub.sent == [], "a mail with unreachable links must not leave the process"
+
+    single = client.post("http://localhost:8000/api/admin/participants/1/email", headers=ADMIN)
+    assert single.status_code == 503, "the per-row send refuses the same way"
+    assert stub.sent == []
+
+
+def test_public_base_url_wins_over_the_host_header(monkeypatch, client):
+    """The operator's configured origin is the only one known reachable from outside."""
+    configure_emails(monkeypatch)
+    monkeypatch.setenv("PUBLIC_BASE_URL", "https://tirage-noel.alserv.org/")
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    add(client, "Alec", "ADULT", "Chamberland", email="alec@exemple.ca")
+
+    answer = client.post("http://127.0.0.1:8000/api/admin/emails", headers=ADMIN)
+    assert answer.status_code == 200, "a configured origin makes even a loopback request mailable"
+    mail = stub.sent[0]
+    assert "https://tirage-noel.alserv.org/?t=" in mail["html"], "the link came from the Host header"
+    assert "https://tirage-noel.alserv.org/static/email-gift.png" in mail["html"]
+    assert "127.0.0.1" not in mail["html"] and "127.0.0.1" not in mail["text"]
+
+
+def test_auto_email_on_draw_refuses_an_unreachable_base_too(client, monkeypatch):
+    """The automatic send obeys the same rule — and still never undoes the draw."""
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    add(client, "Alec", "ADULT", "Chamberland", email="alec@exemple.ca")
+    add(client, "Gaby", "ADULT", "Roy", email="gaby@exemple.ca")
+    set_config(client, adult_draws_adult=1, adult_draws_child=0,
+               child_draws_adult=0, child_draws_child=0, auto_email_on_draw=True)
+
+    answer = client.post("http://127.0.0.1:8000/api/admin/draw", headers=ADMIN)
+    assert answer.status_code == 200, "the draw commits: mail problems never roll it back"
+    assert answer.json()["emails"]["sent"] == 0 and answer.json()["emails"]["failed"] == 2
+    reasons = {row["reason"] for row in answer.json()["emails"]["results"]}
+    assert reasons == {main.EMAIL_BAD_BASE_URL}, reasons
+    assert stub.sent == []
+
+
 def test_template_carries_the_site_art_over_absolute_urls():
     content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
                                assets_base="https://tirage-noel.alserv.org")

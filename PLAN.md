@@ -951,27 +951,44 @@ links, the names in the subject.
 ## The mail's art is a PNG now (addendum, 2026-11-13)
 
 **The symptom.** The first household test mail arrived complete — right subject, three labelled links
-— and every picture in it was blank. So the art, not the copy, was the bug.
+— and every picture in it was blank. Two separate causes were in that one mail, and only one of them
+is about the art format.
 
-**Measured, in this order:**
+**What was actually measured:**
 
 | Check | Result |
 | --- | --- |
-| The three URLs the mail used | `200`, `image/svg+xml`, correct bytes, TLS fine |
-| What Gmail drew | nothing |
-| Why | Gmail serves every image through its own proxy, and that proxy **does not serve SVG**. Google has confirmed it has no plans to; cani.email lists SVG as "partially supported, non-Google only" |
+| The three URLs in the first mail | `http://127.0.0.1:8000/static/…` — **wrong host**, because that send was scripted from inside the container and the app built its links from the request's `Host` header |
+| Whether Gmail could fetch those | no. A loopback address is unreachable from Google's proxies, so the art was blank *and* every link in the mail was dead for the family |
+| Re-sent through `https://tirage-noel.alserv.org` | art renders, links resolve |
+| And the format? | Gmail serves every image through its own proxy, and that proxy **does not serve SVG** — documented by Google (no plans to support it) and by cani.email ("partially supported, non-Google only"). The SVG art would have failed too, on any host |
 
-The README had claimed the opposite — "renders SVG files through its image proxy" — and that sentence
-was an assumption that was never tested. Replaced, and the rule now lives in a test rather than in
-prose: **art that has to appear in an email is a raster.**
+The README had claimed the proxy renders SVG — an assumption that was never tested. Both fixes went
+in, and the rule now lives in a test rather than in prose: **art that has to appear in an email is a
+raster, and a URL that leaves by email must be one the receiver can open.**
 
-**The fix, and what stayed the same.** The SVGs are still the source of truth — they are the files
-that get edited, and the site's own vectors match them. `tools/build_email_art.py` (Chromium, like
-the other tools in that directory) rasterizes the three the mail loads at **2x the displayed size**,
-transparent background, and the mail references the `.png`. The `<img width height>` attributes are
-kept, so the intrinsic pixels are exactly 2x the box the mail declares — sharp on a phone, and no
-mail client resampling. All three together are 49 KiB, well under the threshold where Gmail starts
-dropping images.
+**The art.** The SVGs are still the source of truth — they are the files that get edited, and the
+site's own vectors match them. `tools/build_email_art.py` (Chromium, like the other tools in that
+directory) rasterizes the three the mail loads at **2x the displayed size**, transparent background,
+and the mail references the `.png`. The `<img width height>` attributes are kept, so the intrinsic
+pixels are exactly 2x the box the mail declares — sharp on a phone, and no mail client resampling.
+All three together are 49 KiB, well under the threshold where Gmail starts dropping images.
+
+**The link origin (`PUBLIC_BASE_URL`), which is the part that actually hurt.** Any URL in a mail —
+the participant's link and the art — is built from one base, and it used to be read off the request.
+Correct when the organizer clicks in a browser; wrong in exactly the way above when the call is
+scripted inside the container, a health check, or a port-forward. A mail whose every link is dead on
+arrival is worse than an error on the organizer's screen, so:
+
+- `PUBLIC_BASE_URL` set → it wins outright (which also makes the share tags immune to a forged
+  `Host`), and it is the documented answer for any deployment behind a proxy;
+- otherwise the request's origin, **refused when it is loopback**: `503` naming the variable, the
+  per-row send answering the same, and the auto-send-on-draw listing every person as skipped with
+  `EMAIL_BAD_BASE_URL` while the draw itself still commits;
+- the console translates that 503 into its own message instead of the admin-password one. A latent
+  ordering bug in `errorText()` was fixed on the way: it answered *every* 503 with « admin password
+  not configured » before reading the detail, which had been masking the email feature's own 503 all
+  along — a guard now pins the order.
 
 **One header that was quietly wrong too.** Every response carried
 `Cross-Origin-Resource-Policy: same-origin`. That is *not* what Gmail broke — it re-serves images
@@ -983,4 +1000,35 @@ leaves through the API and there is nothing personal in the art directory.
 
 **Guards.** No `.svg` may appear in the mail HTML; the three PNGs must exist, start with the PNG
 signature, and match 2x the `width`/`height` the template declares; `/static/*` must answer
-`cross-origin` while `/`, the API and an error page keep `same-origin`. 177 tests.
+`cross-origin` while `/`, the API and an error page keep `same-origin`; a send whose base would be
+loopback is refused and mails nothing, `PUBLIC_BASE_URL` overrides the `Host` header for both the
+link and the art, and the auto-send still commits the draw while reporting the skip per person. 181
+tests.
+
+## Mailed URLs cannot be loopback (addendum, 2026-11-13)
+
+Follow-up to the blank-images report, and the part that actually bit: the test sends were scripted
+**from inside the container**, so their `Host` was `127.0.0.1:8000`, and `public_base_url()` copied
+that into every URL the app writes — the participant's link and the mail's art. The mail looked
+perfect and was unusable: no external proxy can fetch a loopback address, and the family clicking a
+link would have landed on nothing. (This is also why the PNG change could not be judged from that
+first inbox: that mail was already unreachable. The SVG limitation stands on its own evidence —
+Google's own statements and cani.email — and the PNG mail sent through the real hostname did render.)
+
+`mail_base_url()` is now the one function the send paths ask, and it is deliberately narrower than
+`public_base_url()`:
+
+1. `PUBLIC_BASE_URL` wins outright when set. That is the honest answer for anything behind a proxy,
+   and it also makes the share tags immune to a chosen `Host` header.
+2. Otherwise the request's own origin — refused when the host is loopback (`localhost`, `127.x`,
+   `::1`, `0.0.0.0`), logged as `mail_base_url_refused`, because a mail whose links are dead on
+   arrival is worse than an error on the organizer's screen.
+3. The refusal is uniform: bulk and per-row answer `503` naming the variable, and auto-send-on-draw
+   lists each person as skipped with `EMAIL_BAD_BASE_URL` — the draw itself still commits, because a
+   mail problem must never roll a draw back.
+
+Two smaller things found on the way, both now guarded: the SPA answered **every** 503 with « admin
+password not configured » before reading the detail, so the email feature's own 503s (`not
+configured on this server`, and now `public address`) were unreachable — a guard pins the order. And
+the i18n parity check reads one entry per line, so a wrapped entry was invisible to every test; a new
+guard counts the raw `'<key>':` starts against the parsed keys. 182 tests.
