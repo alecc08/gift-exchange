@@ -79,11 +79,22 @@ def env_int(name: str, default: int) -> int:
 
 
 def admin_password() -> str:
-    return os.environ.get("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD)
+    """The organizer password.
+
+    Unset falls back to the spec default (and is flagged everywhere as such). A **blank**
+    value is not a password: it returns "" so nothing can authenticate. That case is not
+    hypothetical — a compose file expanding `${MAYBE_UNSET_SECRET}` hands the process an
+    empty string, and `compare_digest("", "")` would otherwise hand anyone the console.
+    """
+    raw = os.environ.get("ADMIN_PASSWORD")
+    if raw is None:
+        return DEFAULT_ADMIN_PASSWORD
+    return "" if raw.strip() == "" else raw
 
 
 def using_default_password() -> bool:
-    return os.environ.get("ADMIN_PASSWORD", DEFAULT_ADMIN_PASSWORD) == DEFAULT_ADMIN_PASSWORD
+    """True when the organizer console is not properly configured (default or blank)."""
+    return admin_password() in (DEFAULT_ADMIN_PASSWORD, "")
 
 
 def trust_proxy() -> bool:
@@ -116,6 +127,25 @@ SECURITY_HEADERS = {
 }
 
 LOGGER = logging.getLogger("gift-exchange")
+
+
+def _configure_logging() -> None:
+    """Make the audit trail actually reach the container log.
+
+    `logging.basicConfig` only runs in the `__main__` branch below, so under
+    `uvicorn main:app` (the image's CMD) this logger had no handler: every INFO line —
+    the startup warning, the auth failures, the draw/reset audit — was silently dropped
+    by the root logger's last-resort WARNING handler.
+    """
+    if not LOGGER.handlers:
+        handler = logging.StreamHandler()              # stderr, like uvicorn's own lines
+        handler.setFormatter(logging.Formatter("%(levelname)s %(name)s %(message)s"))
+        LOGGER.addHandler(handler)
+    LOGGER.setLevel(logging.INFO)
+    LOGGER.propagate = False                           # no duplicates if a root handler exists
+
+
+_configure_logging()
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS config (
@@ -341,8 +371,15 @@ def require_admin(
     authorization: Optional[str] = Header(default=None),
 ) -> None:
     """Accepts the spec's X-Admin-Password header, or a bearer session token."""
+    password = admin_password()
+    if not password:
+        # Nothing is configured to authenticate against. Fail closed: no header and no
+        # bearer token, because with a blank password the signing key is derivable from
+        # public defaults (PBKDF2 over "" with the DB path as salt).
+        audit("admin_auth_refused_unconfigured", ip=client_ip(request))
+        raise HTTPException(status_code=503, detail="ADMIN_PASSWORD is not configured on the server")
     supplied_password = x_admin_password is not None and hmac.compare_digest(
-        str(x_admin_password), admin_password()
+        str(x_admin_password), password
     )
     bearer = ""
     if authorization and authorization.lower().startswith("bearer "):
@@ -722,8 +759,9 @@ class LimitsOut(BaseModel):
 async def lifespan(app: FastAPI):
     init_db()
     if using_default_password():
-        audit("warning", message="ADMIN_PASSWORD is unset or is the default 'admin'; "
-                                 "set a real password before sharing links")
+        audit("warning", message="ADMIN_PASSWORD is unset, blank, or the default 'admin'. Set a real "
+                                 "password before sharing links; while it is blank the organizer "
+                                 "console refuses every login")
     yield
 
 
@@ -826,7 +864,12 @@ def login(payload: LoginRequest, request: Request) -> dict[str, Any]:
         audit("login_rate_limited", ip=ip)
         raise _too_many(retry)
 
-    if not hmac.compare_digest(payload.password, admin_password()):
+    password = admin_password()
+    if not password:
+        audit("login_refused_unconfigured", ip=ip)
+        raise HTTPException(status_code=503, detail="ADMIN_PASSWORD is not configured on the server")
+
+    if not hmac.compare_digest(payload.password, password):
         attempts = LIMITER.count("login", ip)
         if LOGIN_LOCKOUT_THRESHOLD > 0 and attempts >= LOGIN_LOCKOUT_THRESHOLD:
             LIMITER.block("login", ip, LOGIN_LOCKOUT_SECONDS)

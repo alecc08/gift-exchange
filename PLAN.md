@@ -475,3 +475,46 @@ The read-only-filesystem requirement is why the file runs as uid `1000` and docu
 one-time `chown -R 1000:1000 data`: with every capability dropped, the process needs to own the
 only writable path (`./data`, where SQLite keeps its WAL sidecars). `.env` is git-ignored;
 `.env.example` carries the documented defaults and the optional tuning knobs.
+
+### Pre-publication review — 2026-11-13 (two real defects, found by testing the deploy path)
+
+The app was about to be published on a public hostname, so the failure modes of a *misconfigured*
+deployment were probed directly instead of only the configured ones. Two of them were real:
+
+1. **`ADMIN_PASSWORD=""` authenticated the empty string.** `os.environ.get("ADMIN_PASSWORD",
+   "admin")` returns `""` when the variable is set-but-empty — which is exactly what
+   `ADMIN_PASSWORD: ${SOME_NAME}` does in Compose when the name is missing from `.env` — and
+   `hmac.compare_digest("", "")` is `True`. Measured on a live instance before the fix:
+   `POST /api/admin/login {"password":""}` → **200**. Fixed by making a blank value mean
+   "not configured": `admin_password()` returns `""`, `require_admin` and `login` answer `503`
+   before any comparison, and `using_default_password()` treats blank like the default so the
+   banner, the log line and `/api/limits.default_password` all say so. The `503` also covers the
+   bearer path: with a blank password *and* no `SESSION_SECRET`, the signing key is
+   `pbkdf2_hmac(sha256, b"", DB_PATH, 50_000)` — a value an attacker can compute, since the image
+   ships a fixed `DB_PATH`. Regression test:
+   `tests/test_security.py::test_blank_admin_password_disables_the_organizer_console`.
+2. **The audit trail never reached the log.** `logging.basicConfig` lived inside
+   `if __name__ == "__main__"`, so under the image's `CMD ["uvicorn", "main:app", …]` the
+   `gift-exchange` logger had no handler and the root logger's last-resort handler (WARNING)
+   dropped every INFO line: the startup password warning, `login_failed`, `draw_locked`, the
+   per-request lines. `_configure_logging()` now attaches a stderr handler at import. The image's
+   CMD also gained `--no-access-log`, because uvicorn's own access line records the *socket*
+   address — the proxy behind Traefik — while the app's line records the forwarded client address
+   that the rate limiters actually key on.
+
+Verified after the fix:
+
+```
+pytest -q                            -> 51 passed
+ADMIN_PASSWORD="" uvicorn main:app -> POST /api/admin/login {"password":""}  503
+                                      GET /api/admin/state (X-Admin-Password: "")  503
+                                      GET /api/limits  "default_password": true
+docker compose logs                  -> INFO gift-exchange login_failed ip=172.19.0.1
+                                         INFO gift-exchange request ip=… status=401 ms=4.4
+```
+
+Also measured on the way, and worth keeping straight for anyone wiring this behind Traefik:
+`HEAD /api/health` answers **405** (FastAPI adds no HEAD to a `@app.get` route in this
+configuration), so a monitoring probe has to fall back to `GET`; and with `TRUST_PROXY=1` the
+limiters key on the first `X-Forwarded-For` entry, which is why the app must never be reachable
+without the proxy in front.

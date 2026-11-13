@@ -123,7 +123,8 @@ delete and re-add the participant.
 1. **Set a real `ADMIN_PASSWORD`.** The spec default `admin` is refused by the hardened compose
    file, and while it is in use the container logs a warning and the organizer console shows a
    yellow banner (« Le mot de passe d'administration est encore celui de départ… »). If you see
-   that banner, you are not ready to send links.
+   that banner, you are not ready to send links. A **blank** value (an unset `${VAR}` in a
+   compose file) shuts the console entirely: every login and admin call answers `503`.
 2. **Set `SESSION_SECRET`.** Without it the signing key is derived from the password, so every
    password change invalidates live sessions (and any token you might have leaked across deploys
    keeps a predictable derivation). `openssl rand -hex 32`.
@@ -142,14 +143,22 @@ delete and re-add the participant.
    on purpose.
 9. **Distribute the links like keys**: privately (one message per person), never in a public group
    post or printed on the invitation; a link is enough to see that person's gifts.
-10. **Watch the log** while links are live — `docker compose logs -f` prints auth failures,
-    lockouts, draws, resets and link openings, with no secrets in the lines.
+10. **Watch the log** while links are live — `docker compose logs -f`. Every security-relevant
+    event is one line, with no secrets in it:
+
+    ```
+    INFO gift-exchange login_failed ip=24.114.27.9
+    INFO gift-exchange login_lockout ip=24.114.27.9 seconds=300
+    INFO gift-exchange request ip=24.114.27.9 method=GET path=/api/limits status=200 ms=1.3
+    INFO gift-exchange draw_locked ip=… assignments=18
+    ```
 
 ### Already enforced by the code (nothing to configure)
 
 | Control | Behaviour |
 |---|---|
 | Password guessing | Per-IP fixed-window limit on `POST /api/admin/login` → `429` + `Retry-After`, and a temporary lockout after repeated failures; constant-time comparison. |
+| Misconfigured secret | A **blank** `ADMIN_PASSWORD` (the usual result of an unset `${SECRET}` expanding in a compose file) is not treated as a password: the organizer console answers `503` to every login and every admin request, `/api/limits` reports `default_password: true`, the console shows the banner and the log says so. It can never authenticate `""`. |
 | Token guessing | `GET /api/draw/{token}` has its own per-IP budget; tokens are UUIDv4; unknown tokens are an indistinguishable `404`. |
 | Volume / payload abuse | Shared per-IP budget for the rest, and a request-body cap → `413`. |
 | Password on every request | Login also returns a short-lived **HMAC-SHA256 session token** (12 h) usable as `Authorization: Bearer`; `POST /api/admin/logout` revokes it server-side; the SPA stores the token, never the password. |
@@ -159,7 +168,7 @@ delete and re-add the participant.
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
 | Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` (« already locked, reset first ») instead of silently invalidating links people already opened. |
 | Organizer blindness | No admin route ever reads the `assignments` table — the console physically cannot show pairings. |
-| Debug noise vs leaks | Requests and auth/draw/reset/link events are logged with IP, status and latency; error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. |
+| Debug noise vs leaks | One line per request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency; error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
 
 ### Tuning knobs
 

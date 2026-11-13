@@ -845,6 +845,7 @@ const I18N = {
     'err.rateLimited': 'Trop de demandes d’un coup. Réessa dans {s} seconde(s).',
     'err.rateLimitedTitle': 'Trop de demandes',
     'err.tooLarge': 'C’est trop long pour être enregistré.',
+    'err.unconfiguredAdmin': 'Le serveur n’a pas de mot de passe d’administration de configuré : le panneau d’organisation est fermé. Faut fixer ADMIN_PASSWORD avant de continuer.',
     'err.unknown': 'Quelque chose a capoté. Réessa.',
     'err.copy': 'La copie a pas donné : surligne pis copie le lien à la main.',
     'notice.defaultPassword': 'Le mot de passe d’administration est encore celui de départ : change ADMIN_PASSWORD avant d’envoyer les liens au monde.',
@@ -974,6 +975,7 @@ const I18N = {
     'err.rateLimited': 'Too many requests. Try again in {s} second(s).',
     'err.rateLimitedTitle': 'Too many requests',
     'err.tooLarge': 'That text is too long to save.',
+    'err.unconfiguredAdmin': 'The server has no admin password configured, so the organizer console is closed. Set ADMIN_PASSWORD before continuing.',
     'err.unknown': 'Something went wrong. Please try again.',
     'err.copy': 'Copy failed: select and copy the link manually.',
     'notice.defaultPassword': 'The admin password is still the default one: change ADMIN_PASSWORD before sending links out.',
@@ -1192,6 +1194,7 @@ function giftExchange() {
         return this.t('err.rateLimited', { s: Number.isFinite(seconds) ? seconds : 30 });
       }
       if (response.status === 413) return this.t('err.tooLarge');
+      if (response.status === 503) return this.t('err.unconfiguredAdmin');
       if (detail.includes('unsolvable')) return this.t('err.unsolvable');
       if (detail.includes('empty target group')) return this.t('err.emptyTarget');
       if (detail.includes('locked')) return this.t('err.locked');

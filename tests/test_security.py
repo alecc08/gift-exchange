@@ -1,10 +1,50 @@
 """Hardening: rate limits, lockouts, session tokens, payload caps, headers."""
 
+import base64
+import hashlib
+import hmac
+import json
 import time
 
 from conftest import ADMIN, PASSWORD, add
 
+import main
+
 ROUTE_HEADERS = {"Origin": "https://evil.example"}
+
+
+def test_blank_admin_password_disables_the_organizer_console(client, monkeypatch):
+    """A `${MAYBE_UNSET_SECRET}` that expands to "" must never authenticate `""`.
+
+    Regression test: with ADMIN_PASSWORD empty, `compare_digest("", "")` used to return
+    True, so the organizer console was open to the world.
+    """
+    monkeypatch.setenv("ADMIN_PASSWORD", "")
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+
+    assert client.post("/api/admin/login", json={"password": ""}).status_code == 503
+    assert client.get("/api/admin/state", headers={"X-Admin-Password": ""}).status_code == 503
+    assert client.get("/api/admin/state", headers=ADMIN).status_code == 503   # even the right one
+    assert client.get("/api/limits").json()["default_password"] is True
+
+    # With a blank password the derived signing key is predictable (PBKDF2 over "" salted
+    # with the DB path), so the whole console is shut rather than checking signatures:
+    # a bearer token whose signature verifies against those public defaults still fails.
+    salt = str(main.db_path()).encode()
+    key = hashlib.pbkdf2_hmac("sha256", b"", salt, 50_000)
+    body = base64.urlsafe_b64encode(
+        json.dumps({"i": "x", "e": int(time.time()) + 300}, separators=(",", ":")).encode()
+    ).decode()
+    forged = f"{body}.{hmac.new(key, body.encode(), hashlib.sha256).hexdigest()}"
+    assert client.get("/api/admin/state",
+                      headers={"Authorization": f"Bearer {forged}"}).status_code == 503
+
+
+def test_unset_admin_password_still_uses_the_flagged_default(client, monkeypatch):
+    monkeypatch.delenv("ADMIN_PASSWORD", raising=False)
+    assert main.admin_password() == main.DEFAULT_ADMIN_PASSWORD
+    assert client.get("/api/limits").json()["default_password"] is True
+    assert client.get("/api/admin/state", headers={"X-Admin-Password": "admin"}).status_code == 200
 
 
 def test_login_rate_limit_and_lockout(client, monkeypatch):
