@@ -51,6 +51,14 @@ ADMIN_PASSWORD=<your password> python3 tools/seed_demo.py --draw   # fictional Q
 `docker compose up -d`, then give everyone `http://<this-machine's-LAN-IP>:8085`.
 **To put it behind a domain with HTTPS**, use the hardened file and a proxy — next section.
 
+**Already have Docker and no interest in building?** CI publishes the same image on every push to
+`main`, so one line of the compose file is enough — replace `build: .` with a pinned tag
+(`.github/workflows/build.yml` is the whole recipe, and the package is public):
+
+```yaml
+    image: ghcr.io/alecc08/gift-exchange:<full git sha>     # :latest also exists; pin the sha
+```
+
 ### Which compose file?
 
 | | `docker-compose.yml` | `docker-compose.hardened.yml` |
