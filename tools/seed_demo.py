@@ -16,17 +16,29 @@ import urllib.request
 BASE = os.environ.get("GE_BASE", "http://127.0.0.1:8085").rstrip("/")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 
+# name, family name, group (household), role, wishlist. Two households carry the same family name —
+# that is the situation the group field exists for, and the screenshots should show it.
 ROSTER = [
-    ("Mario", "ADULT", "Tremblay", "Une tuque en laine, un bon bourbon, des gants de vélo"),
-    ("Julie", "ADULT", "Tremblay", "Des plantes vivaces, une couple de casseroles en fonte, un foulard"),
-    ("Lise", "ADULT", "Gagnon", "Un cours de poterie, une bougie au sapin baumier, un bon vin rouge"),
-    ("Marc", "ADULT", "Gagnon", "Des cannes à pêche, un sac de jour, des vinyles de jazz"),
-    ("Steven", "ADULT", "Bouchard", "Un jeu de société, un abonnement au cinéma, un cours de menuiserie"),
-    ("Carole", "ADULT", "Roy", "Une couple de chaussures de marche, un livre de recettes d’ici"),
-    ("Florent", "CHILD", "Tremblay", "Un maillot du Canadien, des cartes Pokémon, des raquettes"),
-    ("Magalie", "CHILD", "Gagnon", "Des patins, un livre de fantasy, le jeu de société Tabou"),
-    ("Rosalie", "CHILD", "Bouchard", "Un appareil photo enfant, des feutres, des chaussettes à orignaux"),
-    ("Charlie", "CHILD", "Roy", "Un football, un jeu Pokémon, des briques de construction"),
+    ("Mario", "Tremblay", "Tremblay (chez Gaétan)", "ADULT",
+     "Une tuque en laine, un bon bourbon, des gants de vélo"),
+    ("Julie", "Tremblay", "Tremblay (chez Gaétan)", "ADULT",
+     "Des plantes vivaces, une couple de casseroles en fonte, un foulard"),
+    ("Florent", "Tremblay", "Tremblay (chez Gaétan)", "CHILD",
+     "Un maillot du Canadien, des cartes Pokémon, des raquettes"),
+    ("Lise", "Tremblay", "Tremblay (chez Réjean)", "ADULT",
+     "Un cours de poterie, une bougie au sapin baumier, un bon vin rouge"),
+    ("Marc", "Tremblay", "Tremblay (chez Réjean)", "ADULT",
+     "Des cannes à pêche, un sac de jour, des vinyles de jazz"),
+    ("Steven", "Gagnon", "Gagnon", "ADULT",
+     "Un jeu de société, un abonnement au cinéma, un cours de menuiserie"),
+    ("Carole", "Gagnon", "Gagnon", "ADULT",
+     "Une couple de chaussures de marche, un livre de recettes d’ici"),
+    ("Magalie", "Gagnon", "Gagnon", "CHILD",
+     "Des patins, un livre de fantasy, le jeu de société Tabou"),
+    ("Rosalie", "Roy", "Roy", "CHILD",
+     "Un appareil photo enfant, des feutres, des chaussettes à orignaux"),
+    ("Charlie", "Roy", "Roy", "CHILD",
+     "Un football, un jeu Pokémon, des briques de construction"),
 ]
 
 
@@ -43,14 +55,14 @@ def call(path, method="GET", body=None, headers=None):
     return response.status, json.loads(raw)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Seed a demo roster into a running instance.")
-    parser.add_argument("--draw", action="store_true", help="generate and lock the draw too")
-    args = parser.parse_args()
+def login():
+    _, response = call("/api/admin/login", "POST", {"password": PASSWORD})
+    return {"Authorization": f"Bearer {response['token']}"}
 
-    _, login = call("/api/admin/login", "POST", {"password": PASSWORD})
-    auth = {"Authorization": f"Bearer {login['token']}"}
 
+def seed(auth):
+    """Wipe and rebuild the demo roster (draw left open). Used by capture_docs_media.py too, so the
+    gallery and the demo can never drift apart."""
     call("/api/admin/reset", "POST", {}, auth)
     _, state = call("/api/admin/state", headers=auth)
     for person in state["participants"]:
@@ -66,22 +78,37 @@ def main():
             "adult_draws_child": 2,
             "child_draws_adult": 0,
             "child_draws_child": 0,
+            "avoid_same_group": True,
         },
         auth,
     )
 
-    for name, role, group, wishlist in ROSTER:
+    for name, family, group, role, wishlist in ROSTER:
         call(
             "/api/admin/participants",
             "POST",
-            {"name": name, "role": role, "family_group": group, "wishlist": wishlist},
+            {
+                "name": name,
+                "role": role,
+                "family_group": family,
+                "group_key": group,
+                "wishlist": wishlist,
+            },
             auth,
         )
+    return call("/api/admin/state", headers=auth)[1]
 
-    _, state = call("/api/admin/state", headers=auth)
+
+def main():
+    parser = argparse.ArgumentParser(description="Seed a demo roster into a running instance.")
+    parser.add_argument("--draw", action="store_true", help="generate and lock the draw too")
+    args = parser.parse_args()
+
+    auth = login()
+    state = seed(auth)
     print(f"seeded {len(state['participants'])} participants at {BASE}")
     for person in state["participants"]:
-        print(f"  {person['name']:<9} {BASE}/?t={person['token']}")
+        print(f"  {person['name']:<9} {person['group_key']:<24} {BASE}/?t={person['token']}")
 
     if args.draw:
         status, body = call("/api/admin/draw", "POST", {}, auth)

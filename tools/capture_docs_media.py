@@ -6,6 +6,9 @@ Writes PNG stills to docs/screenshots/, two .webm recordings to a temp directory
 and docs/media/manifest.json describing where the animations start inside each video
 (tools/build_docs_media.py turns those into the README GIFs).
 
+The instance may hold any state: the last stage rebuilds the demo roster from seed_demo.py,
+so the gallery is reproducible from a bare database.
+
 Requires Playwright (`uv pip install playwright && playwright install chromium`). This is a
 docs-only tool: the app itself has no test/docs dependencies.
 """
@@ -14,6 +17,7 @@ import json
 import os
 import pathlib
 import re
+import sys
 import time
 import urllib.request
 
@@ -26,6 +30,9 @@ SHOTS = REPO / "docs" / "screenshots"
 MEDIA = REPO / "docs" / "media"
 VIDEOS = pathlib.Path(os.environ.get("GE_VIDEO_DIR", "/tmp/opencode/videos"))
 
+sys.path.insert(0, str(REPO / "tools"))
+import seed_demo  # noqa: E402  same roster the gallery is built from
+
 
 def bearer_headers():
     """One login per run: the login endpoint is rate limited on purpose."""
@@ -37,9 +44,14 @@ def bearer_headers():
     return {"Authorization": "Bearer " + token}
 
 
-def admin_api(path, headers, method="GET"):
-    request = urllib.request.Request(BASE + path, data=b"{}" if method == "POST" else None,
-                                     method=method,
+def admin_api(path, headers, method="GET", body=None):
+    if body is not None:
+        data = json.dumps(body).encode()
+    elif method == "POST":
+        data = b"{}"
+    else:
+        data = None
+    request = urllib.request.Request(BASE + path, data=data, method=method,
                                      headers={"Content-Type": "application/json", **headers})
     return json.loads(urllib.request.urlopen(request).read())
 
@@ -83,7 +95,7 @@ def capture_admin_page(page):
     shot(page, "04-roster.png")
     page.get_by_role("button", name=re.compile(r"^Tremblay")).first.click()
     time.sleep(0.6)
-    shot(page, "05-family-filter.png")
+    shot(page, "05-group-filter.png")
     page.get_by_role("button", name="Montre tout le monde").click()
     time.sleep(0.4)
 
@@ -91,6 +103,50 @@ def capture_admin_page(page):
     page.wait_for_selector("#toasts > div")
     time.sleep(0.5)
     shot(page, "06-toast-clipboard.png")
+
+
+# The one roster where the group rule cannot be honoured: two people in one household, one person
+# on their own, everyone drawing exactly one adult. This is the case the old engine answered 422.
+RELAXED = [
+    ("Aline", "Roy", "Roy (chez Gaétan)", "ADULT"),
+    ("Benoit", "Roy", "Roy (chez Gaétan)", "ADULT"),
+    ("Carole", "Nolin", "Nolin", "ADULT"),
+]
+
+
+def capture_relaxed_draw(browser, auth):
+    """Predict the crossing, run the draw anyway, then report it — the whole soft-rule story."""
+    admin_api("/api/admin/reset", auth, "POST")
+    for person in admin_api("/api/admin/state", auth)["participants"]:
+        admin_api(f"/api/admin/participants/{person['id']}", auth, "DELETE")
+    admin_api("/api/admin/config", auth, "PUT", {
+        "event_title": "Tirage de Noël — trois personnes",
+        "budget_note": "25 $ par personne",
+        "adult_draws_adult": 1, "adult_draws_child": 0,
+        "child_draws_adult": 0, "child_draws_child": 0,
+        "avoid_same_group": True,
+    })
+    for name, family, group, role in RELAXED:
+        admin_api("/api/admin/participants", auth, "POST", {
+            "name": name, "role": role, "family_group": family, "group_key": group})
+
+    context = browser.new_context(viewport={"width": 1440, "height": 900},
+                                  device_scale_factor=2, locale="fr-CA")
+    page = context.new_page()
+    page.goto(BASE, wait_until="networkidle")
+    page.wait_for_selector("#pw")
+    page.fill("#pw", PASSWORD)
+    page.press("#pw", "Enter")
+    page.wait_for_selector("text=Copier tous les liens")
+    page.wait_for_function("Alpine.$data(document.querySelector('[x-data]')).busy === false")
+    time.sleep(1.0)
+    shot(page, "16-group-note.png", full=True)  # the console predicts the crossing
+    page.once("dialog", lambda dialog: dialog.accept())
+    page.get_by_role("button", name=re.compile("Lancer le tirage")).click()
+    page.wait_for_selector("text=Le tirage a pigé")
+    time.sleep(0.8)
+    shot(page, "17-draw-relaxed.png")          # ... and says what it actually did
+    context.close()
 
 
 def main():
@@ -236,7 +292,13 @@ def main():
         time.sleep(1.2)
         shot(mob2, "15-mobile-admin.png")
         mobile.close()
+
+        # ---- the group rule bent on purpose (last, because it rewrites the roster) ----
+        capture_relaxed_draw(browser, auth)
         browser.close()
+
+    seed_demo.seed(auth)
+    print("re-seeded the demo roster — the last two stills used a 3-person test roster")
 
     (MEDIA / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print("manifest:", MEDIA / "manifest.json")

@@ -45,11 +45,23 @@ def db(tmp_path):
     return open_db
 
 
-def add(client, name, role, family_group, wishlist=""):
+def add(client, name, role, family_group, wishlist="", group=None):
+    """Create a participant.
+
+    `family_group` is the display surname; `group` is the household the same-group rule works on, and
+    it defaults to the surname because the older tests were written before the two were separated.
+    Pass `group=""` for somebody in no group at all.
+    """
     response = client.post(
         "/api/admin/participants",
         headers=ADMIN,
-        json={"name": name, "role": role, "family_group": family_group, "wishlist": wishlist},
+        json={
+            "name": name,
+            "role": role,
+            "family_group": family_group,
+            "group_key": family_group if group is None else group,
+            "wishlist": wishlist,
+        },
     )
     assert response.status_code == 201, response.text
     return response.json()["participant"]

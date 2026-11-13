@@ -3,9 +3,9 @@
     python tools/verify_acceptance.py [base-url]        # seeds the spec scenario, then verifies
     python tools/verify_acceptance.py --no-seed         # verify whatever is in the DB now
 
-Seeds PLAN.md §7's scenario (10 adults + 10 children in 5 family groups, each adult draws
-1 adult + 2 children), runs the draw, then checks all four acceptance criteria. Exit code 0
-only when every criterion passes.
+Seeds PLAN.md §7's scenario (10 adults + 10 children in 6 households, each adult draws 1 adult +
+2 children — two of the households share the surname Tremblay, which is the point), runs the draw,
+then checks all four acceptance criteria. Exit code 0 only when every criterion passes.
 """
 
 import argparse
@@ -21,7 +21,16 @@ DB = os.environ.get("GE_DB", "data/exchange.db")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 HEADERS = {"X-Admin-Password": PASSWORD, "Content-Type": "application/json"}
 
-GROUPS = ["Tremblay", "Gagnon", "Bouchard", "Roy", "Ouellet"]
+# surname, household. Two households deliberately share the surname Tremblay: that is the case the
+# old engine could not tell apart, and the acceptance run is only meaningful if it is present.
+HOUSEHOLDS = [
+    ("Tremblay", "Tremblay (maison de Gaétan)"),
+    ("Tremblay", "Tremblay (maison de Réjean)"),
+    ("Gagnon", "Gagnon"),
+    ("Bouchard", "Bouchard"),
+    ("Roy", "Roy"),
+    ("Ouellet", "Ouellet"),
+]
 ADULT_NAMES = [
     "Mario", "Lise", "Steven", "Josée", "Yvan", "Carole", "Éric", "Manon", "Réjean", "Nicole",
 ]
@@ -49,27 +58,31 @@ def seed_acceptance_scenario():
         "/api/admin/config",
         "PUT",
         {
-            "event_title": "Acceptance scenario — 10 adults, 10 children, 5 family groups",
+            "event_title": "Acceptance scenario — 10 adults, 10 children, 6 households",
             "budget_note": "25 $ par personne",
             "adult_draws_adult": 1,
             "adult_draws_child": 2,
             "child_draws_adult": 0,
             "child_draws_child": 0,
+            "avoid_same_group": True,
         },
     )
     assert status == 200, body
     for index, name in enumerate(ADULT_NAMES):
+        surname, household = HOUSEHOLDS[index % len(HOUSEHOLDS)]
         status, body = request("/api/admin/participants", "POST", {
-            "name": name, "role": "ADULT", "family_group": GROUPS[index % len(GROUPS)]})
+            "name": name, "role": "ADULT", "family_group": surname, "group_key": household})
         assert status == 201, body
     for index, name in enumerate(CHILD_NAMES):
+        surname, household = HOUSEHOLDS[index % len(HOUSEHOLDS)]
         status, body = request("/api/admin/participants", "POST", {
-            "name": name, "role": "CHILD", "family_group": GROUPS[index % len(GROUPS)]})
+            "name": name, "role": "CHILD", "family_group": surname, "group_key": household})
         assert status == 201, body
     status, body = request("/api/admin/draw", "POST", {})
     assert status == 200, body
     print(f"seeded acceptance scenario: {len(ADULT_NAMES)} adults + {len(CHILD_NAMES)} children "
-          f"in {len(GROUPS)} family groups -> {body['assignments_created']} assignments")
+          f"in {len(HOUSEHOLDS)} households -> {body['assignments_created']} assignments, "
+          f"{body['same_group_crossings']} same-group crossing(s)")
 
 
 def main() -> int:
@@ -90,7 +103,7 @@ def main() -> int:
         "SELECT COUNT(*) c FROM assignments a "
         "JOIN participants g ON g.id = a.giver_id "
         "JOIN participants r ON r.id = a.receiver_id "
-        "WHERE g.id = r.id OR lower(trim(g.family_group)) = lower(trim(r.family_group))"
+        "WHERE g.id = r.id OR (g.group_key <> '' AND lower(trim(g.group_key)) = lower(trim(r.group_key)))"
     ).fetchone()["c"]
     per_role = {}
     for role in ("ADULT", "CHILD"):
@@ -111,7 +124,7 @@ def main() -> int:
     conn.close()
 
     print("1) assignments rows            :", total)
-    print("   self / same-family pairings :", bad)
+    print("   self / same-group pairings  :", bad)
     for key, value in per_role.items():
         print(f"   {key:<22}:", value)
 
@@ -121,6 +134,8 @@ def main() -> int:
     print("2) GET /api/admin/state        :", status, "keys:", sorted(state.keys()))
     print("   participant keys            :", sorted(state["participants"][0].keys()))
     print("   leaked assignment vocabulary:", leaks or "none")
+    reported = state["config"]["same_group_crossings"]
+    print("   same-group crossings (API)  :", reported, "(DB says", bad, ")")
 
     adult = next(p for p in state["participants"] if p["role"] == "ADULT" and p["viewed_at"] is None)
     before = adult["viewed_at"]
@@ -140,6 +155,7 @@ def main() -> int:
     ok = (
         total == 30
         and bad == 0
+        and reported == bad
         and per_role["CHILD receives"] == [2]
         and per_role["ADULT receives"] == [1]
         and per_role["ADULT gives"] == [0, 3]

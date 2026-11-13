@@ -302,6 +302,17 @@
           </template>
         </div>
 
+        <!-- Only the quota arithmetic can stop a draw. Group tightness goes here instead: the
+             solver relaxes it, so it is something to know, not something to fix before clicking. -->
+        <div x-show="groupNotes.length" x-cloak class="rounded-2xl bg-gold-100/60 ring-1 ring-gold-500/20 px-5 py-4">
+          <p class="text-sm font-semibold text-gold-600 flex items-center gap-2">
+            <svg class="w-4 h-4 shrink-0"><use href="#i-flake"/></svg><span x-text="t('note.title')"></span>
+          </p>
+          <template x-for="note in groupNotes" :key="note">
+            <p class="text-sm text-gold-600/90 mt-1 pl-6" x-text="note"></p>
+          </template>
+        </div>
+
         <div x-show="adminError" x-cloak class="rounded-2xl bg-holly-100 ring-1 ring-holly-500/25 px-5 py-4 flex items-start gap-3 fade-up">
           <svg class="w-5 h-5 text-holly-600 shrink-0 mt-0.5"><use href="#i-alert"/></svg>
           <div>
@@ -389,6 +400,18 @@
             <p class="text-xs text-pine-600/75 mt-2" x-text="t('rules.quotaHelp')"></p>
           </div>
 
+          <div class="mt-7">
+            <p class="label mb-2" x-text="t('rules.groupPolicy')"></p>
+            <label class="flex items-start gap-3 rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3.5 cursor-pointer">
+              <input type="checkbox" class="mt-0.5 w-4 h-4 accent-pine-700 shrink-0"
+                     x-model="cfg.avoid_same_group" :disabled="locked">
+              <span>
+                <span class="text-sm text-pine-800" x-text="t('rules.groupRule')"></span>
+                <span class="block text-xs text-pine-600/75 mt-1" x-text="t('rules.groupRuleHelp')"></span>
+              </span>
+            </label>
+          </div>
+
           <div class="flex flex-wrap items-center gap-3 mt-6">
             <button @click="saveConfig()" :disabled="locked || busy || !rulesDirty" class="btn btn-primary px-5 py-2.5 text-sm">
               <svg class="w-3.5 h-3.5"><use href="#i-check"/></svg>
@@ -411,7 +434,7 @@
             <svg class="w-7 h-7 text-pine-300 shrink-0"><use href="#i-flake"/></svg>
           </div>
 
-          <form @submit.prevent="addParticipant()" class="mt-6 grid sm:grid-cols-2 lg:grid-cols-4 gap-3 items-end">
+          <form @submit.prevent="addParticipant()" class="mt-6 grid sm:grid-cols-2 lg:grid-cols-3 gap-3 items-end">
             <div>
               <label class="label" for="p-name" x-text="t('roster.name')"></label>
               <input id="p-name" class="field mt-1.5" x-model.trim="draft.name" :disabled="locked"
@@ -425,17 +448,28 @@
               </select>
             </div>
             <div>
-              <label class="label" for="p-group" x-text="t('roster.group')"></label>
-              <input id="p-group" class="field mt-1.5" x-model.trim="draft.family_group" :disabled="locked"
-                     :placeholder="t('roster.groupPlaceholder')" :maxlength="limits.family_group"
-                     list="group-options" autocomplete="off">
-              <datalist id="group-options">
-                <template x-for="g in familyGroups" :key="g.name">
-                  <option :value="g.name"></option>
+              <label class="label" for="p-family" x-text="t('roster.family')"></label>
+              <input id="p-family" class="field mt-1.5" x-model.trim="draft.family_group" :disabled="locked"
+                     :placeholder="t('roster.familyPlaceholder')" :maxlength="limits.family_group"
+                     list="family-options" autocomplete="off">
+              <datalist id="family-options">
+                <template x-for="f in familyNames" :key="f.name">
+                  <option :value="f.name"></option>
                 </template>
               </datalist>
             </div>
             <div>
+              <label class="label" for="p-group" x-text="t('roster.group')"></label>
+              <input id="p-group" class="field mt-1.5" x-model.trim="draft.group_key" :disabled="locked"
+                     :placeholder="t('roster.groupPlaceholder')" :maxlength="limits.group_key"
+                     list="group-options" autocomplete="off">
+              <datalist id="group-options">
+                <template x-for="g in householdGroups" :key="g.name">
+                  <option :value="g.name"></option>
+                </template>
+              </datalist>
+            </div>
+            <div class="sm:col-span-2 lg:col-span-2">
               <label class="label" for="p-wish" x-text="t('roster.wishlist')"></label>
               <div class="flex gap-2 mt-1.5">
                 <input id="p-wish" class="field" x-model.trim="draft.wishlist" :disabled="locked"
@@ -451,7 +485,7 @@
               <svg class="w-3.5 h-3.5 text-pine-300 shrink-0"><use href="#i-flake"/></svg>
               <span x-text="t('roster.groupHelp')"></span>
             </p>
-            <template x-for="g in familyGroups" :key="g.name">
+            <template x-for="g in householdGroups" :key="g.name">
               <button @click="groupFilter = groupFilter === g.name ? '' : g.name"
                       class="chip transition"
                       :class="groupFilter === g.name ? 'bg-pine-700 text-white' : 'bg-pine-50 text-pine-600 hover:bg-pine-100'">
@@ -463,11 +497,12 @@
           </div>
 
           <div class="mt-5 overflow-x-auto">
-            <table class="w-full text-sm">
+            <table id="roster-table" class="w-full text-sm">
               <thead>
                 <tr class="text-pine-700/80 border-b hair">
                   <th class="py-2.5 pr-3 text-left label" x-text="t('roster.name')"></th>
                   <th class="py-2.5 px-3 text-left label" x-text="t('roster.role')"></th>
+                  <th class="py-2.5 px-3 text-left label" x-text="t('roster.family')"></th>
                   <th class="py-2.5 px-3 text-left label" x-text="t('roster.group')"></th>
                   <th class="py-2.5 px-3 text-left label" x-text="t('roster.status')"></th>
                   <th class="py-2.5 pl-3 text-right label" x-text="t('roster.actions')"></th>
@@ -475,7 +510,7 @@
               </thead>
               <tbody class="divide-y divide-black/5">
                 <tr x-show="visibleParticipants.length === 0">
-                  <td colspan="5" class="py-8 text-center text-pine-600/70" x-text="t('roster.empty')"></td>
+                  <td colspan="6" class="py-8 text-center text-pine-600/70" x-text="t('roster.empty')"></td>
                 </tr>
                 <template x-for="p in visibleParticipants" :key="p.id">
                   <tr class="hover:bg-pine-50/40 transition">
@@ -491,6 +526,12 @@
                          x-text="drawsOf(p) ? t('roster.giftsN', { n: drawsOf(p) }) : t('roster.noGiftsNote')"></p>
                     </td>
                     <td class="py-3 px-3 align-top text-pine-700" x-text="p.family_group"></td>
+                    <td class="py-3 px-3 align-top">
+                      <span x-show="p.group_key" x-cloak class="chip bg-pine-50 text-pine-700"
+                            :title="t('roster.groupHelp')" x-text="p.group_key"></span>
+                      <span x-show="!p.group_key" class="chip bg-black/5 text-pine-600/60"
+                            x-text="t('roster.noGroup')"></span>
+                    </td>
                     <td class="py-3 px-3 align-top">
                       <span x-show="p.viewed_at" x-cloak class="chip bg-pine-100 text-pine-700" :title="formatDate(p.viewed_at)">
                         <svg class="w-3 h-3"><use href="#i-check"/></svg>
@@ -540,6 +581,16 @@
             <span class="text-xs text-pine-600/75" x-text="giftForecast"></span>
             <span x-show="warnings.length > 0" x-cloak class="chip bg-holly-100 text-holly-600"
                   x-text="t('draw.blockedByWarnings')"></span>
+          </div>
+
+          <div x-show="locked && cfg.avoid_same_group && sameGroupCrossings > 0" x-cloak
+               class="mt-5 rounded-2xl bg-gold-100/60 ring-1 ring-gold-500/20 px-4 py-3 flex items-start gap-2.5">
+            <svg class="w-4 h-4 text-gold-600 shrink-0 mt-0.5"><use href="#i-flake"/></svg>
+            <p class="text-sm text-gold-600" x-text="t('draw.crossings', { n: sameGroupCrossings })"></p>
+          </div>
+          <div x-show="locked && cfg.avoid_same_group && sameGroupCrossings === 0" x-cloak
+               class="mt-5 rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3">
+            <p class="text-sm text-pine-700" x-text="t('draw.crossingsNone')"></p>
           </div>
 
           <div x-show="locked" x-cloak class="flex flex-wrap items-center gap-3 mt-6">
@@ -754,13 +805,20 @@ const I18N = {
     'state.locked': 'Tirage verrouillé',
     'state.open': 'Tirage ouvert',
 
-    'warn.title': 'Ça ne marchera pas comme ça',
-    'warn.adultsNeed': 'Chaque adulte doit piger {need} adulte(s), mais il y en a seulement {available} en dehors de sa famille.',
-    'warn.childrenNeed': 'Chaque adulte doit piger {need} enfant(s), mais il y en a seulement {available} en dehors de sa famille.',
-    'warn.childAdultsNeed': 'Chaque enfant doit piger {need} adulte(s), mais il y en a seulement {available} en dehors de sa famille.',
-    'warn.childChildrenNeed': 'Chaque enfant doit piger {need} enfant(s), mais il y en a seulement {available} en dehors de sa famille.',
-    'warn.noReceivers': 'Pour le rôle « {role} », il n’y a personne à gâter avec les familles actuelles.',
+    'warn.title': 'Ça ne marchera pas',
+    'warn.adultsNeed': 'Chaque adulte doit piger {need} adulte(s), mais il n’y en a que {available} en tout dans la liste.',
+    'warn.childrenNeed': 'Chaque adulte doit piger {need} enfant(s), mais il n’y en a que {available} en tout dans la liste.',
+    'warn.childAdultsNeed': 'Chaque enfant doit piger {need} adulte(s), mais il n’y en a que {available} en tout dans la liste.',
+    'warn.childChildrenNeed': 'Chaque enfant doit piger {need} enfant(s), mais il n’y en a que {available} en tout dans la liste.',
+    'warn.noReceivers': 'Pour le rôle « {role} », il n’y a personne à gâter.',
     'warn.selfOnly': 'Il n’y a qu’une seule personne dans la liste : le tirage ne peut pas se faire.',
+    'note.title': 'À savoir avant de lancer',
+    'note.crossingsNeeded': 'Avec des groupes gros comme ceux-là, le tirage devra bien piger {n} fois à l’intérieur d’un groupe.',
+    'note.groupsIgnored': 'La règle des groupes est désactivée : deux personnes du même groupe peuvent se piger entre elles.',
+    'note.noGroups': 'Aucun groupe n’est rempli : pour l’instant, la règle des groupes n’a rien à respecter.',
+    'rules.groupPolicy': 'Les groupes',
+    'rules.groupRule': 'Éviter les piges dans le même groupe',
+    'rules.groupRuleHelp': 'Si aucun tirage ne respecte ça à 100 %, le tirage a lieu quand même, avec le moins de piges possible dans le même groupe.',
 
     'rules.kicker': 'Panel 1',
     'rules.title': 'Règles et quotas',
@@ -783,9 +841,12 @@ const I18N = {
     'roster.name': 'Nom',
     'roster.namePlaceholder': 'Prénom',
     'roster.role': 'Rôle',
-    'roster.group': 'Famille',
-    'roster.groupPlaceholder': 'Ex. Tremblay',
-    'roster.groupHelp': 'Les gens de la même famille ne se pigent jamais entre eux.',
+    'roster.family': 'Nom de famille',
+    'roster.familyPlaceholder': 'Ex. Tremblay',
+    'roster.group': 'Groupe',
+    'roster.groupPlaceholder': 'Ex. Tremblay (chez Gaétan)',
+    'roster.groupHelp': 'Le groupe, c’est le monde qui vit ensemble. Deux familles peuvent avoir le même nom : c’est le groupe qui décide qui ne se pige pas.',
+    'roster.noGroup': 'pas de groupe',
     'roster.wishlist': 'Liste d’idées (facultatif)',
     'roster.wishlistPlaceholder': 'Ex. des mitaines, un livre…',
     'roster.wishlistIs': 'Ses idées :',
@@ -816,6 +877,8 @@ const I18N = {
     'draw.done': 'Tirage lancé et verrouillé. Envoie les liens au monde.',
     'draw.alreadyLocked': 'Le tirage est déjà verrouillé.',
     'draw.openedCount': '{n}/{total} lien(s) ouvert(s)',
+    'draw.crossings': 'Le tirage a pigé {n} fois dans le même groupe : avec ces groupes-là, il fallait bien ça.',
+    'draw.crossingsNone': 'Personne a pigé dans son propre groupe.',
     'draw.reset': 'Recommencer le tirage',
     'draw.resetHint': 'Efface les résultats et ça rouvre la place.',
     'draw.confirmReset': 'Recommencer le tirage ? Les résultats et les marques « ouvert » s’en vont.',
@@ -850,7 +913,7 @@ const I18N = {
     'role.CHILD': 'Enfant',
 
     'err.title': 'Le tirage n’a pas fonctionné',
-    'err.unsolvable': 'Ce n’est pas possible avec les familles et les quotas actuels. Baisse un quota ou ajoute des familles différentes.',
+    'err.unsolvable': 'Ce n’est pas possible avec les quotas actuels : du monde a plus de cadeaux à donner qu’il y a de personnes à gâter. Baisse un quota.',
     'err.emptyTarget': 'Impossible de donner des cadeaux à un groupe vide : il n’y a personne à gâter.',
     'err.locked': 'Le tirage est verrouillé : recommence-le avant de toucher à quoi que ce soit.',
     'err.noParticipants': 'Ajoute au moins une personne avant de lancer le tirage.',
@@ -885,12 +948,19 @@ const I18N = {
     'state.open': 'Draw open',
 
     'warn.title': 'The draw is likely to fail',
-    'warn.adultsNeed': 'Each adult must draw {need} adult(s), but only {available} adult(s) outside their own household are eligible.',
-    'warn.childrenNeed': 'Each adult must draw {need} child(ren), but only {available} child(ren) outside their own household are eligible.',
-    'warn.childAdultsNeed': 'Each child must draw {need} adult(s), but only {available} adult(s) outside their own household are eligible.',
-    'warn.childChildrenNeed': 'Each child must draw {need} child(ren), but only {available} child(ren) outside their own household are eligible.',
-    'warn.noReceivers': 'No receiver is possible for the “{role}” role with the current family groups.',
+    'warn.adultsNeed': 'Each adult must draw {need} adult(s), but there are only {available} adults in the roster.',
+    'warn.childrenNeed': 'Each adult must draw {need} child(ren), but there are only {available} children in the roster.',
+    'warn.childAdultsNeed': 'Each child must draw {need} adult(s), but there are only {available} adults in the roster.',
+    'warn.childChildrenNeed': 'Each child must draw {need} child(ren), but there are only {available} children in the roster.',
+    'warn.noReceivers': 'No receiver is possible for the “{role}” role: nobody is left to give to.',
     'warn.selfOnly': 'There is only one participant: nobody can draw anybody.',
+    'note.title': 'Before you run the draw',
+    'note.crossingsNeeded': 'Groups this big force the draw to pick inside one of them at least {n} time(s).',
+    'note.groupsIgnored': 'The group rule is off: two people from the same group can end up together.',
+    'note.noGroups': 'No group filled in yet: the group rule has nothing to enforce.',
+    'rules.groupPolicy': 'Groups',
+    'rules.groupRule': 'Avoid picks within the same group',
+    'rules.groupRuleHelp': 'If a draw cannot respect this completely, it still runs with as few same-group picks as possible.',
 
     'rules.kicker': 'Panel 1',
     'rules.title': 'Rules & draw quotas',
@@ -913,9 +983,12 @@ const I18N = {
     'roster.name': 'Name',
     'roster.namePlaceholder': 'First name',
     'roster.role': 'Role',
-    'roster.group': 'Family group',
-    'roster.groupPlaceholder': 'e.g. Martin',
-    'roster.groupHelp': 'People in the same family group will never draw each other.',
+    'roster.family': 'Family name',
+    'roster.familyPlaceholder': 'e.g. Tremblay',
+    'roster.group': 'Group',
+    'roster.groupPlaceholder': 'e.g. Gaétan’s household',
+    'roster.groupHelp': 'A group is the people who live together. Two families can share a name: the group decides who never draws each other.',
+    'roster.noGroup': 'no group',
     'roster.wishlist': 'Wishlist (optional)',
     'roster.wishlistPlaceholder': 'e.g. felt pens, a novel…',
     'roster.wishlistIs': 'Wishlist:',
@@ -946,6 +1019,8 @@ const I18N = {
     'draw.done': 'Draw generated and locked. Send the links to participants.',
     'draw.alreadyLocked': 'The draw is already locked.',
     'draw.openedCount': '{n}/{total} link(s) opened',
+    'draw.crossings': 'The draw picked inside the same group {n} time(s): with these groups, it had to.',
+    'draw.crossingsNone': 'Nobody drew inside their own group.',
     'draw.reset': 'Reset draw',
     'draw.resetHint': 'Clears the pairings and reopens editing.',
     'draw.confirmReset': 'Reset the draw? Pairings and “viewed” markers will be cleared.',
@@ -980,7 +1055,7 @@ const I18N = {
     'role.CHILD': 'Child',
 
     'err.title': 'The draw failed',
-    'err.unsolvable': 'The constraints cannot be satisfied with the current family groups and draw counts. Lower a quota or add more distinct family groups.',
+    'err.unsolvable': 'The draw counts cannot be met with this roster: somebody has more gifts to give than there are people to receive them. Lower a quota.',
     'err.emptyTarget': 'Cannot assign gifts to an empty target group: there is nobody who could receive one.',
     'err.locked': 'The draw is locked: reset it before changing anything.',
     'err.noParticipants': 'Add at least one participant before running the draw.',
@@ -995,7 +1070,14 @@ const I18N = {
 };
 
 /* ------------------------------- app ------------------------------- */
-const DEFAULT_LIMITS = { name: 80, family_group: 60, wishlist: 1000, event_title: 120, budget_note: 500, max_quota: 10, default_password: false };
+const DEFAULT_LIMITS = { name: 80, family_group: 60, group_key: 60, wishlist: 1000, event_title: 120, budget_note: 500, max_quota: 10, default_password: false };
+
+/* SQLite hands back 0/1 for the group preference and the checkbox wants a real boolean. Coerced on
+   the way in, for both the live copy and the saved copy, otherwise rulesDirty compares true to 1
+   and the panel reads "unsaved changes" forever. */
+function asAdminConfig(config) {
+  return { ...config, avoid_same_group: !!config.avoid_same_group };
+}
 
 function giftExchange() {
   return {
@@ -1006,10 +1088,10 @@ function giftExchange() {
 
     authed: false, busy: false, loginError: '', pwDraft: '',
     adminError: '', adminErrorTitle: '', securityNotice: '',
-    cfg: { event_title: '', budget_note: '', adult_draws_adult: 1, adult_draws_child: 2, child_draws_adult: 0, child_draws_child: 0 },
+    cfg: { event_title: '', budget_note: '', adult_draws_adult: 1, adult_draws_child: 2, child_draws_adult: 0, child_draws_child: 0, avoid_same_group: true },
     savedCfg: null,
     participants: [], locked: false, groupFilter: '',
-    draft: { name: '', role: 'ADULT', family_group: '', wishlist: '' },
+    draft: { name: '', role: 'ADULT', family_group: '', group_key: '', wishlist: '' },
     copiedId: null, copiedAll: false,
 
     participant: null, data: { status: '', assignments: [] }, pError: false,
@@ -1042,7 +1124,20 @@ function giftExchange() {
     get giftForecast() {
       return this.t('draw.forecast', { gifts: this.totals.gifts, toAdults: this.totals.toAdults, toChildren: this.totals.toChildren });
     },
-    get familyGroups() {
+    /* Two different labels on purpose: `family_group` is a surname people share, `group_key` is the
+       household the rule actually works on. Chips and filters use the household. */
+    get householdGroups() {
+      const counts = new Map();
+      for (const p of this.participants) {
+        const key = p.group_key.trim().toLowerCase();
+        if (!key) continue;
+        const found = counts.get(key);
+        if (found) found.count += 1;
+        else counts.set(key, { name: p.group_key, count: 1 });
+      }
+      return [...counts.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
+    },
+    get familyNames() {
       const counts = new Map();
       for (const p of this.participants) {
         const key = p.family_group.trim().toLowerCase();
@@ -1055,24 +1150,29 @@ function giftExchange() {
     get visibleParticipants() {
       if (!this.groupFilter) return this.participants;
       const wanted = this.groupFilter.trim().toLowerCase();
-      return this.participants.filter(p => p.family_group.trim().toLowerCase() === wanted);
+      return this.participants.filter(p => p.group_key.trim().toLowerCase() === wanted);
     },
     get openedCount() { return this.participants.filter(p => p.viewed_at).length; },
     get rulesDirty() {
       return this.savedCfg && JSON.stringify(this.savedCfg) !== JSON.stringify(this.cfg);
     },
-    /* Client-side mirror of the engine's hard rules: warn before the organizer wastes a draw. */
+    /* How many gifts crossed a group in the draw that is currently locked. A count only: the
+       organizer is told the draw had to relax, never which pair did. */
+    get sameGroupCrossings() { return this.cfg.same_group_crossings || 0; },
+    /* Client-side mirror of the engine's **hard** rules only: the quota arithmetic is the one thing
+       that can stop a draw, so this is what disables the button. Group tightness is a preference the
+       solver relaxes on its own, so it goes in groupNotes() as information. */
     get warnings() {
       const out = [];
       if (this.participants.length === 0 || this.locked) return out;
       if (this.participants.length === 1) return [this.t('warn.selfOnly')];
       const cfg = this.cfg;
-      const eligible = (p, pool) => pool.filter(q => q.family_group.trim().toLowerCase() !== p.family_group.trim().toLowerCase()).length;
       const check = (sample, need, pool, key) => {
         if (need <= 0) return;
         if (pool.length === 0) { out.push(this.t('warn.noReceivers', { role: this.t('role.' + sample.role) })); return; }
-        const worst = Math.min(...pool.map(q => eligible(q, pool)));
-        if (need > worst) out.push(this.t(key, { need, available: worst }));
+        // Nobody can receive their own gift, so a giver in this pool has one fewer option.
+        const available = Math.min(...pool.map(q => pool.length - (q.role === sample.role ? 1 : 0)));
+        if (need > available) out.push(this.t(key, { need, available }));
       };
       if (this.adults.length) {
         check(this.adults[0], cfg.adult_draws_adult, this.adults, 'warn.adultsNeed');
@@ -1083,6 +1183,48 @@ function giftExchange() {
         check(this.children[0], cfg.child_draws_child, this.children, 'warn.childChildrenNeed');
       }
       return [...new Set(out)];
+    },
+    /* Not errors: what the solver is going to have to bend. This is `_min_crossings()` from main.py
+       ported line by line — same blank-group handling, same lower bound — so the number shown here is
+       the number the draw will actually need to spend. */
+    get groupNotes() {
+      // The "rule is off" note is about the configuration, not the roster: it stands before *and*
+      // after the draw, because it explains why nothing is being reported about groups.
+      if (!this.cfg.avoid_same_group) return [this.t('note.groupsIgnored')];
+      if (this.locked || this.participants.length === 0) return [];
+      const cfg = this.cfg;
+      const quota = {
+        ADULT: [Number(cfg.adult_draws_adult) || 0, Number(cfg.adult_draws_child) || 0],
+        CHILD: [Number(cfg.child_draws_adult) || 0, Number(cfg.child_draws_child) || 0],
+      };
+      // A blank group is "in no group": everyone in that case gets a private key, exactly like the
+      // engine's `#solo:<id>`, so two people with nothing filled in are not one household.
+      const key = (p) => p.group_key.trim().toLowerCase() || '#solo:' + p.id;
+      let forced = 0;
+      const pools = [[this.adults, 0, this.totals.toAdults], [this.children, 1, this.totals.toChildren]];
+      for (const [members, index, slotsTotal] of pools) {
+        if (slotsTotal <= 0 || members.length === 0) continue;
+        const base = Math.floor(slotsTotal / members.length);
+        const sizes = new Map();
+        for (const member of members) sizes.set(key(member), (sizes.get(key(member)) || 0) + 1);
+        const demand = new Map();
+        let demandTotal = 0;
+        for (const giver of this.participants) {
+          const want = quota[giver.role][index];
+          if (!want) continue;
+          demand.set(key(giver), (demand.get(key(giver)) || 0) + want);
+          demandTotal += want;
+        }
+        for (const [group, size] of sizes) {
+          const insideSlots = base * size;
+          const wantInside = demand.get(group) || 0;
+          forced += Math.max(wantInside - (slotsTotal - insideSlots),
+                             insideSlots - (demandTotal - wantInside), 0);
+        }
+      }
+      if (forced > 0) return [this.t('note.crossingsNeeded', { n: forced })];
+      if (this.householdGroups.length === 0) return [this.t('note.noGroups')];
+      return [];
     },
     drawsOf(p) {
       const cfg = this.cfg;
@@ -1207,7 +1349,7 @@ function giftExchange() {
       }
       if (response.status === 413) return this.t('err.tooLarge');
       if (response.status === 503) return this.t('err.unconfiguredAdmin');
-      if (detail.includes('unsolvable')) return this.t('err.unsolvable');
+      if (detail.includes('cannot be satisfied')) return this.t('err.unsolvable');
       if (detail.includes('empty target group')) return this.t('err.emptyTarget');
       if (detail.includes('locked')) return this.t('err.locked');
       if (detail.includes('no participants')) return this.t('err.noParticipants');
@@ -1248,8 +1390,8 @@ function giftExchange() {
     async loadState() {
       const response = await this.api('/api/admin/state', { method: 'GET' }, true);
       if (!response.ok) return;
-      this.cfg = response.body.config;
-      this.savedCfg = { ...response.body.config };
+      this.cfg = asAdminConfig(response.body.config);
+      this.savedCfg = { ...this.cfg };
       this.participants = response.body.participants;
       this.locked = !!response.body.config.is_locked;
       if (response.body.config.event_title) document.title = response.body.config.event_title;
@@ -1260,6 +1402,7 @@ function giftExchange() {
       const numeric = ['adult_draws_adult', 'adult_draws_child', 'child_draws_adult', 'child_draws_child'];
       const body = { event_title: this.cfg.event_title, budget_note: this.cfg.budget_note };
       for (const key of numeric) body[key] = Math.max(0, Math.min(this.limits.max_quota, Number(this.cfg[key]) || 0));
+      body.avoid_same_group = !!this.cfg.avoid_same_group;
       const response = await this.api('/api/admin/config', { method: 'PUT', body: JSON.stringify(body) }, true);
       this.busy = false;
       if (response.ok) this.toast(this.t('rules.saved'));
@@ -1273,7 +1416,8 @@ function giftExchange() {
       const response = await this.api('/api/admin/participants', { method: 'POST', body: JSON.stringify(this.draft) }, true);
       this.busy = false;
       if (!response.ok) { this.showAdminError(response); return; }
-      this.draft = { name: '', role: this.draft.role, family_group: this.draft.family_group, wishlist: '' };
+      this.draft = { name: '', role: this.draft.role, family_group: this.draft.family_group,
+                     group_key: this.draft.group_key, wishlist: '' };
       await this.loadState();
       const field = document.getElementById('p-name');
       if (field) field.focus();
@@ -1314,7 +1458,9 @@ function giftExchange() {
     },
     async copyAllLinks() {
       const lines = this.participants
-        .map(p => `${p.name} (${this.t('role.' + p.role)}, ${p.family_group}) — ${window.location.origin}/?t=${p.token}`)
+        .map(p => `${p.name} (${this.t('role.' + p.role)}, ${p.family_group}`
+          + `${p.group_key ? ' · ' + this.t('roster.group') + ' ' + p.group_key : ''}`
+          + `) — ${window.location.origin}/?t=${p.token}`)
         .join('\n');
       if (!(await this.writeClipboard(lines))) { window.prompt(this.t('err.copy'), lines); return; }
       this.copiedAll = true;
@@ -1336,6 +1482,9 @@ function giftExchange() {
         return;
       }
       this.toast(this.t('draw.done'));
+      if (response.body?.same_group_crossings > 0) {
+        this.toast(this.t('draw.crossings', { n: response.body.same_group_crossings }), 'warn');
+      }
       await this.loadState();
     },
     async resetDraw() {

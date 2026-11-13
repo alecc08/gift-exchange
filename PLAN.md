@@ -74,6 +74,11 @@ CREATE TABLE IF NOT EXISTS assignments (
 );
 ```
 
+> **Superseded in part** by *Grouping: a household is not a surname* (addendum, 2026-11-13):
+> `participants.group_key` and `config.avoid_same_group` were added, `family_group`'s comment above
+> no longer holds (it is a display surname now), and an existing database is upgraded in place by
+> `MIGRATIONS` in `main.py`.
+
 ## 4. Constraint-Satisfaction Matching Engine (main.py)
 
 Implement `generate_draw(config, participants)` using a randomized slot-allocation and
@@ -105,6 +110,11 @@ backtracking/retry loop (`max_attempts = 20000`).
 * **Failure Handling:** If 20,000 attempts fail to find a valid permutation, return HTTP 422
   with message: `"Constraints are mathematically unsolvable with current family groups and draw counts."`
 
+> **Superseded in part** by *Grouping: a household is not a surname* (addendum, 2026-11-13): the
+> second rule above works on `group_key` (not `family_group`) and is a **preference** rather than a
+> rejection rule, the 422 message changed to talk about the draw counts, and `generate_draw` now
+> returns `(pairs, crossed)`.
+
 ## 5. Backend API Specification (main.py)
 
 ### 5.1 Authentication
@@ -114,6 +124,11 @@ backtracking/retry loop (`max_attempts = 20000`).
 * Participant endpoints authenticate solely via the `{token}` path parameter.
 
 ### 5.2 Endpoints
+
+> **Superseded in part** by the grouping addendum (2026-11-13): `participants` also carry
+> `group_key`, `PUT /api/admin/config` also accepts `avoid_same_group`, and `POST /api/admin/draw`
+> also returns `same_group_crossings`. The "never query the assignments table" rule now has exactly
+> one exception — a single `COUNT` of same-group pairs, exposed as `config.same_group_crossings`.
 
 * `GET /`: Serve `static/index.html`.
 * `POST /api/admin/login`: Body `{"password": "..."}`. Verifies against `ADMIN_PASSWORD` and
@@ -579,3 +594,66 @@ The rename that produced the duplicate-label test: `admin.lock` (top bar) calls
 same text as the real draw button, and `tools/capture_docs_media.py` failed with a Playwright
 strict-mode violation naming both buttons. Fixed by `admin.signout` → « Fermer la session » /
 "Sign out", and `test_no_two_different_controls_share_a_label` now guards it.
+
+## Grouping: a household is not a surname (addendum, 2026-11-13)
+
+Reported from the real event: everyone was being classified by `family_group`, but the same surname
+appears in several households, so the surname could not be the unit of the exclusion rule. Two
+changes follow, and they are separable — one is data, one is policy.
+
+**Data.** `participants.group_key` (label « Groupe ») is the constraint unit; `family_group` is
+demoted to a display surname and is never read by the engine. `group_key` may be blank, meaning *in
+no group*, and two blanks are not one group: `group_key_of()` hands anybody with no group a private
+key (`#solo:<id>`), which makes the exclusion a no-op without a second code path — and is also what
+prevents a self-pick when the rule is switched off.
+
+**Policy.** §4.1's "no same-family draw" was an axiom; it is now a preference (`config.avoid_same_group`,
+default on). The solver spends its budget on a draw with zero crossings and only relaxes when none
+exists, so the failure mode that used to be a `422` becomes a draw plus an honest report.
+
+| Decision | Why |
+|---|---|
+| Two fields rather than one renamed one | The surname is real information the organizer wants on the roster; overloading it is what broke. Nothing in the engine reads it any more, which `test_shared_surname_does_not_group_people` pins down. |
+| Blank `group_key` is legal, blank `family_group` is not | "In no group" is a real case (a friend of the family). The surname stays required because it labels the row. Deliberately *not* validated by the same `_not_blank` validator, and commented as such. |
+| Relaxation is a budget ladder, not a fallback pass | `_solve_attempt(..., same_budget=k)` counts crossings as it deals, so a relaxed draw uses exactly k. Starting at `_min_crossings()` (a real lower bound: `base·size` of a role's slots sit inside any group of size, and the demand inside that group can only be partly served from outside) stops the search wasting its whole attempt budget on k−1 impossible configurations. |
+| Strict pass keeps the full attempt budget, relaxations get `max_attempts // 10` | Without that split the ladder multiplies the worst case, and a roster that needs a crossing would take minutes. |
+| `_feasible()` keeps only the quota arithmetic | Same-group tightness is no longer a reason to answer 422. Keeping the old household supply/demand checks there would have kept the old failure. `test_impossible_without_a_crossing_relaxes_once_instead_of_failing` is the regression test for exactly that. |
+| `eligible(role, group, allow_same)` returns outsiders *then* insiders | A relaxed draw stays as relaxed as its budget allows instead of scattering crossings through it. |
+| The organizer learns a count, not a pairing | `/api/admin/state` touches `assignments` exactly once, as a `COUNT` of same-group pairs (`config.same_group_crossings`). Enough to admit the draw relaxed, not enough to name a pair; `test_acceptance_no_assignments_leak_to_admin` still forbids the words *assignment/giver/receiver/pairs* in the payload. |
+| The frontend predicts the same number | `groupNotes()` is `_min_crossings()` ported line by line, including `#solo:<id>`. A prediction that turns out exact is what makes the notice credible instead of mystical. |
+| `reported` is counted from the deal, not from the budget | `generate_draw` sums the pairs it actually returned. Reporting the budget instead would let the number drift from the assignments on disk the moment a solver found a cheaper deal than it was allowed. |
+| The lower bound is checked against brute force | `tests/test_bounds.py` enumerates every derangement-style deal for six small rosters and asserts `bound ≤ true minimum ≤ what the solver used`. A bound nobody checks can silently stop being a bound, and the ladder would then start above the answer — promising a crossing that was never needed. |
+| Only quota arithmetic disables *Lancer le tirage* | `warnings` (hard) and `groupNotes` (informational) are separate boxes; a relaxable rule must not grey out the button the organizer needs to click. |
+| Migration backfills `group_key` from `family_group` | An existing database keeps drawing exactly as it did before; `tests/test_groups.py` builds the pre-change schema literally (`OLD_SCHEMA`) and asserts the upgrade, plus that running it twice is a no-op. |
+
+### Verification — 2026-11-13 (grouping pass)
+
+```
+.venv/bin/pytest -q                      -> 90 passed   (24 new: 11 grouping + 7 brute-force
+                                             bounds + 6 engine/i18n guards)
+tools/verify_acceptance.py               -> ACCEPTANCE: PASS
+  seeded 10 adults + 10 children in 6 households (two of them both surnamed Tremblay)
+  30 assignments, 0 self/same-group pairings, children receive [2], adults receive [1],
+  API same_group_crossings == DB count == 0, no assignment vocabulary in /api/admin/state
+tools/check_organizer_ui.py              -> organizer console OK: no console errors, no page
+                                             errors, no raw i18n keys. What it walks:
+                                             checkbox off -> save -> reload -> still off, panel not
+                                             falsely dirty (asAdminConfig coerces the 0/1 on BOTH
+                                             the live and the saved copy); filter by
+                                             « Roy (chez Gaétan) » -> 2 of 3 rows; tight roster ->
+                                             note predicts 1 crossing, button stays enabled, draw
+                                             locks, panel says « Le tirage a pigé 1 fois … »; add a
+                                             person -> prediction disappears and the notice flips to
+                                             « Personne a pigé dans son propre groupe. »; EN switch
+                                             resolves every new label
+i18n audit                               -> 131 fr / 131 en keys, symmetric, placeholders match,
+                                            banned forms none, duplicate labels none; new guards:
+                                            every t('key') in the markup exists in both
+                                            dictionaries, and every detail.includes('…') fragment
+                                            still matches a real server message (the old one looked
+                                            for "unsolvable", which no longer appears anywhere)
+docs gallery                             -> re-shot: 17 stills + 2 GIFs (05-family-filter →
+                                            05-group-filter; new 16-group-note, 17-draw-relaxed),
+                                            built from seed_demo's roster, which the capture tool
+                                            now re-seeds so the gallery is reproducible from /
+```

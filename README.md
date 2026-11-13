@@ -1,7 +1,8 @@
 # Family Gift Exchange · Échange de cadeaux
 
-Configurable Secret Santa for a big family: role-based draw quotas (adult / child), household
-exclusions, one private link per person, and an organizer who **never sees the pairings**.
+Configurable Secret Santa for a big family: role-based draw quotas (adult / child), a group rule
+that keeps a household out of its own draw, one private link per person, and an organizer who
+**never sees the pairings**.
 
 FastAPI + SQLite · single-page frontend (Tailwind CDN + Alpine.js, no build step) · UI in
 **Québec French** (`fr-CA`) with a one-click EN switch · amounts in Canadian dollars.
@@ -33,9 +34,11 @@ openssl rand -hex 32       # -> SESSION_SECRET   (signs the admin session tokens
 
 Then open **http://localhost:8085**, sign in, and:
 
-1. **Panel 1** — event title, budget note (« 25 $ par personne, taxes incluses »), who draws what.
-2. **Panel 2** — add the family (name, adult/child, family group). Same group ⇒ they never draw
-   each other. Hit **Copier tous les liens** to put every private link on the clipboard.
+1. **Panel 1** — event title, budget note (« 25 $ par personne, taxes incluses »), who draws what,
+   and whether picks inside the same group should be avoided.
+2. **Panel 2** — add the family: name, adult/child, family name, and the **group** (the household the
+   rule actually works on — see [Grouping](#grouping-a-family-name-is-not-a-household)). Hit
+   **Copier tous les liens** to put every private link on the clipboard.
 3. **Panel 3** — **Lancer le tirage**. Everyone gets their own link; nobody, not even
    you, sees the pairings.
 4. Each person opens their link, unwraps the gift, and can edit their wishlist at any time —
@@ -172,7 +175,7 @@ delete and re-add the participant.
 | Password on every request | Login also returns a short-lived **HMAC-SHA256 session token** (12 h) usable as `Authorization: Bearer`; `POST /api/admin/logout` revokes it server-side; the SPA stores the token, never the password. |
 | Injection / XSS | Zero-build frontend, no `innerHTML` of user data; CSP pins the CDNs (`script-src`, `base-uri 'self'`, `form-action 'none'`, `frame-ancestors 'none'`, `object-src 'none'`), `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`. |
 | Private-link leakage | `Referrer-Policy: no-referrer` + `<meta name="referrer" content="no-referrer">`, so `/?t=<uuid>` never rides out in a Referer. |
-| Unbounded input | Pydantic length caps on every text field (name 80, family group 60, wishlist 1000, title 120, budget 500); the SPA mirrors them via `GET /api/limits`. |
+| Unbounded input | Pydantic length caps on every text field (name 80, family name 60, group 60, wishlist 1000, title 120, budget 500); the SPA mirrors them via `GET /api/limits`. |
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
 | Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` (« already locked, reset first ») instead of silently invalidating links people already opened. |
 | Organizer blindness | No admin route ever reads the `assignments` table — the console physically cannot show pairings. |
@@ -220,17 +223,57 @@ ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py  # ends with: ACCEPTANCE:
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/02-admin-rules.jpg" alt="Rules and quotas panel with live totals and character counters"><br><b>Rules &amp; quotas</b> — live gift totals, character counters, and a warning while the admin password is still the default.</td>
-    <td width="50%"><img src="docs/screenshots/03-warnings.jpg" alt="Warning that the draw cannot succeed with these quotas"><br><b>Feasibility warnings</b> — the engine's own rules are checked while you type, so an impossible quota is explained instead of failing after a click.</td>
+    <td width="50%"><img src="docs/screenshots/03-warnings.jpg" alt="Warning that the draw cannot succeed with these quotas"><br><b>Feasibility warnings</b> — the quota arithmetic is checked while you type, so an impossible draw is explained instead of failing after a click.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/04-roster.jpg" alt="Roster with family chips and per-person gift counts"><br><b>Roster</b> — per-person gift count, household chips with counts, wishlist preview.</td>
+    <td><img src="docs/screenshots/04-roster.jpg" alt="Roster with group chips, family name and group columns"><br><b>Roster</b> — per-person gift count, a column for the surname and one for the group, chips with counts, wishlist preview.</td>
     <td><img src="docs/screenshots/06-toast-clipboard.jpg" alt="Toast confirming all links were copied"><br><b>Copy all links</b> — one click, one toast; each row keeps its own copy state.</td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/16-group-note.jpg" alt="Console predicting that the draw will have to pick inside a group"><br><b>The console thinks ahead</b> — this roster cannot respect the group rule; the note says how many picks it will cost, and the draw button stays enabled.</td>
+    <td><img src="docs/screenshots/17-draw-relaxed.jpg" alt="Locked draw reporting the same-group pick it had to make"><br><b>…and admits what it did</b> — the draw ran, with exactly the one crossing the arithmetic forced. A count, never a pairing.</td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/08-draw-locked.jpg" alt="Locked draw panel with opened link counter"><br><b>Locked draw</b> — counts how many links were opened; re-drawing a locked event is refused until you reset.</td>
     <td><img src="docs/screenshots/09-admin-english.jpg" alt="Same console in English"><br><b>One-click FR ⇄ EN</b> — every string exists in both languages, remembered per browser.</td>
   </tr>
 </table>
+
+### Grouping: a family name is not a household
+
+A big family has two different things people call "la famille": the **surname**, and the **household
+the rule is about**. Cousins can carry the same surname as you and live in a different house, and two
+surnames can share one roof. So the participant record carries both:
+
+| Field | Label | What it does |
+|---|---|---|
+| `family_group` | « Nom de famille » | A label for the roster. Never used by the engine. |
+| `group_key` | « Groupe » | The unit of the rule. Two people with the same group_key are one household. |
+
+An empty `group_key` means *in no group* — and two empties are **not** one group: each one becomes a
+private key (`#solo:<id>` internally), so someone with nothing filled in can be drawn by anyone
+except themselves.
+
+The rule is a **preference, not an axiom** (Panel 1: « Éviter les piges dans le même groupe »):
+
+* The solver first tries a draw with **zero** same-group picks. Most rosters finish there.
+* If none exists, it does **not** answer `422`. It computes a lower bound on how many gifts *must*
+  cross (`_min_crossings()`), then tries that budget, then one more, until a draw exists — so the
+  relaxation is as small as the arithmetic allows. A 2-person household in a 3-person roster draws,
+  with exactly one crossing.
+* The console says so, in both directions: before the draw the note predicts it (« le tirage devra
+  bien piger 1 fois à l'intérieur d'un groupe »), after the draw the panel reports the number
+  (« Le tirage a pigé 1 fois dans le même groupe : avec ces groupes-là, il fallait bien ça. »).
+  A prediction this exact is not a coincidence — the frontend runs the same bound, ported from
+  `main.py`.
+* Only the **quota arithmetic** can block the button. Group tightness never disables *Lancer le
+  tirage*, because the engine can still deliver a draw.
+* Unchecking the box switches groups off entirely (`#solo:<id>` for everyone), which is also what
+  keeps a 2-person household from drawing itself.
+
+The organizer still learns nothing about who drew whom. The one thing read out of the `assignments`
+table for `/api/admin/state` is a single `COUNT` of same-group pairs, exposed as
+`config.same_group_crossings` — a number, never a name.
 
 ## The participant view
 
@@ -294,14 +337,25 @@ python3 tools/build_share_art.py   # static/og-image.png, icon-512.png, apple-to
 
 `generate_draw(config, participants)` builds a balanced receiver pool (`divmod` over each target
 group, so nobody receives an unfair number of gifts), then deals slots to givers — most-constrained
-first — with depth-first backtracking, retried up to `max_attempts = 20000` times. Hard rules: no
-self-draw, no same-household draw, never two gifts for the same person. Cheap necessary conditions
-short-circuit hopeless cases, so impossible rosters answer `422` immediately.
+first — with depth-first backtracking.
+
+Two layers of rule, and they are deliberately not the same kind of thing:
+
+* **Hard**: no self-draw, no two gifts from one giver to the same receiver, and a giver cannot owe
+  more adult/child gifts than the roster contains receivers of that kind. Only these are checked
+  up front (`_feasible`), and only these can produce a `422`.
+* **Soft**: the same-group exclusion. The search runs with a crossing budget, starting at the
+  `_min_crossings()` lower bound and stepping up by one, so it degrades by the smallest amount the
+  roster allows instead of failing. The strict pass gets the full attempt budget (`20000` by
+  default); a relaxation gets `max_attempts // 10`, so the ladder cannot multiply the worst case.
+
+Returns `(pairs, crossed)` — `crossed` is how many gifts landed inside a group, which is what the
+console reports.
 
 ## Tests
 
 ```bash
-bash run_tests.sh          # 66 tests: engine invariants, API contract, security, previews
+bash run_tests.sh          # 90 tests: engine invariants, grouping bounds, API contract, security, previews
 ```
 
 `run_tests.sh` creates its own virtualenv (`uv` if present) and adds `httpx` + `pytest` there only,
@@ -324,8 +378,8 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 66 tests
-├── tools/                        # seed_demo, verify_acceptance, docs media, share-card build
+├── tests/                        # 90 tests
+├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution
 └── PLAN.md                       # specification, deviations, threat table, verification log
@@ -341,10 +395,19 @@ python3 tools/build_docs_media.py
 python3 tools/build_share_art.py            # link-preview card + icons (also Chromium)
 ```
 
+The console's client-side glue (Alpine getters, the checkbox's `0/1` ↔ boolean coercion, the two
+group notices) is invisible to the Python suite, so there is a browser check for it too:
+
+```bash
+GE_BASE=http://127.0.0.1:8085 ADMIN_PASSWORD=<pw> python3 tools/check_organizer_ui.py
+```
+
 ## Notes
 
 * Names, wishlists and events in the screenshots are **fictional demo data** from
   `tools/seed_demo.py`; `data/` is git-ignored and nothing about a real family is in this repo.
+  Two of the demo households are deliberately both surnamed Tremblay — that is what the « Groupe »
+  column is for.
 * Snowfall, the reveal and the burst are CSS/SVG only, disabled under `prefers-reduced-motion`.
 * Icons: one inline SVG sprite — a bespoke crystalline snowflake plus Tabler Icons (MIT), see
   [NOTICE](NOTICE).

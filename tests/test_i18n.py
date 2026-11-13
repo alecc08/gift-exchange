@@ -27,6 +27,10 @@ BANNED_FR = [
 
 ENTRY_RE = re.compile(r"^\s*'([a-z0-9.]+)':\s*'((?:[^'\\]|\\.)*)',\s*$", re.IGNORECASE)
 PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+# `detail.includes('...')` is how the SPA decides which explanation to show, and `t('key')` is how
+# the markup asks for a label. Both are stringly-typed, so both drift silently.
+INCLUDE_RE = re.compile(r"detail\.includes\('([^']+)'\)")
+LABEL_RE = re.compile(r"\bt\('([a-z0-9.]+)'")
 
 
 def dictionary(language: str) -> dict[str, str]:
@@ -104,3 +108,32 @@ def test_the_share_copy_and_the_ui_agree():
     assert "qui pige qui" in main.SHARE_DESCRIPTION
     assert "qui pige qui" in french["draw.blindNote"]
     assert "liste d’idées" in french["p.myWishlist"].lower()
+
+
+def test_every_label_the_markup_asks_for_exists():
+    """A typo in `t('rostre.group')` renders the raw key name on screen. Prefixes built at runtime
+    (`t('role.' + p.role)`) are checked the other way round: something must start with them."""
+    french, english = dictionary("fr"), dictionary("en")
+    used = set(LABEL_RE.findall(main.INDEX_HTML))
+    assert used, "no labels found — the markup changed shape"
+    broken = []
+    for key in sorted(used):
+        if key.endswith("."):
+            children = [child for child in french if child.startswith(key)]
+            if not children or any(not english.get(child) for child in children):
+                broken.append(key + "*")
+        elif key not in french or key not in english:
+            broken.append(key)
+    assert not broken, broken
+
+
+def test_the_frontend_still_understands_the_servers_own_error_text():
+    """`errorText()` recognises the API's sentences by substring. Reword one in main.py without
+    touching the SPA and the organizer reads a bare English string instead of the explanation."""
+    fragments = INCLUDE_RE.findall(main.INDEX_HTML)
+    assert fragments
+    server = (main.UNSOLVABLE, main.EMPTY_TARGET_GROUP, main.LOCKED_MSG, main.ALREADY_LOCKED, main.NO_PARTICIPANTS)
+    dead = [fragment for fragment in fragments if not any(fragment in text for text in server)]
+    assert not dead, f"matchers that can never fire again: {dead}"
+    untranslated = [text for text in server if not any(fragment in text for fragment in fragments)]
+    assert not untranslated, f"errors the UI would show as-is: {untranslated}"

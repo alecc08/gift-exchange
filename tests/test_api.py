@@ -76,6 +76,12 @@ def test_acceptance_no_assignments_leak_to_admin(client):
     for forbidden in ("assignment", "giver", "receiver", "pairs"):
         assert forbidden not in text.lower()
 
+    # The console is allowed to know *that* the draw had to relax, never which pair did: the one
+    # thing read out of the assignments table is this integer.
+    crossings = payload.json()["config"]["same_group_crossings"]
+    assert isinstance(crossings, int) and crossings >= 0
+    assert len(payload.json()) == 2 and set(payload.json()) == {"config", "participants"}
+
     # re-drawing a locked event is refused instead of silently invalidating links
     again = client.post("/api/admin/draw", headers=ADMIN)
     assert again.status_code == 409
@@ -211,16 +217,27 @@ def test_draw_guard_rails(client, db):
 
     set_config(client, adult_draws_adult=1, adult_draws_child=0, child_draws_adult=0, child_draws_child=0)
     add(client, "Solo", "ADULT", "Martin")
-    add(client, "Spouse", "ADULT", "martin")
     failed = client.post("/api/admin/draw", headers=ADMIN)
     assert failed.status_code == 422
     assert failed.json()["detail"] == (
-        "Constraints are mathematically unsolvable with current family groups and draw counts."
+        "The draw counts cannot be satisfied with this roster: somebody has more "
+        "gifts to give than there are people allowed to receive them."
     )
     conn = db()
     assert conn.execute("SELECT is_locked FROM config WHERE id = 1").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM assignments").fetchone()[0] == 0
     conn.close()
+
+    # A second adult in the *same* household is no longer a dead end: the rule is a preference, so
+    # the draw goes ahead and says out loud that both gifts crossed.
+    add(client, "Spouse", "ADULT", "martin")
+    relaxed = client.post("/api/admin/draw", headers=ADMIN)
+    assert relaxed.status_code == 200
+    assert relaxed.json()["assignments_created"] == 2
+    assert relaxed.json()["same_group_crossings"] == 2
+    state = client.get("/api/admin/state", headers=ADMIN).json()
+    assert state["config"]["same_group_crossings"] == 2
+    assert client.post("/api/admin/reset", headers=ADMIN).status_code == 200
 
     assert client.post("/api/admin/draw").status_code == 401          # auth before anything else
     assert client.post("/api/admin/reset").status_code == 401

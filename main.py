@@ -6,8 +6,9 @@ FastAPI + SQLite, single-file backend:
   * public per-participant API guarded only by a UUID token
   * a randomized slot-allocation + backtracking matching engine
 
-The organizer is deliberately kept blind: no admin endpoint ever reads the
-`assignments` table.
+The organizer is deliberately kept blind: no admin endpoint returns a pairing, and the only thing
+read from the `assignments` table is one COUNT of same-group pairs — enough to admit that a draw had
+to relax, never enough to name one.
 
 Security posture (see PLAN.md "Security hardening"): per-IP rate limits, a request
 size cap, security headers with a CDN-pinning CSP, HMAC session tokens, constant-time
@@ -60,17 +61,19 @@ MAX_DRAW_QUOTA = 10
 # Field length caps: mirrored by the frontend so nobody hits a 422 blind.
 MAX_NAME = 80
 MAX_FAMILY_GROUP = 60
+MAX_GROUP_KEY = 60
 MAX_WISHLIST = 1000
 MAX_EVENT_TITLE = 120
 MAX_BUDGET_NOTE = 500
 
 EMPTY_TARGET_GROUP = "Cannot assign gifts to an empty target group"
 UNSOLVABLE = (
-    "Constraints are mathematically unsolvable with current family groups "
-    "and draw counts."
+    "The draw counts cannot be satisfied with this roster: somebody has more "
+    "gifts to give than there are people allowed to receive them."
 )
 LOCKED_MSG = "The draw is locked. Reset it before making changes."
 ALREADY_LOCKED = "The draw is already locked. Reset it before drawing again."
+NO_PARTICIPANTS = "Cannot run a draw with no participants"
 TOO_LARGE = "Request body too large"
 
 DEFAULT_ADMIN_PASSWORD = "admin"
@@ -165,6 +168,7 @@ CREATE TABLE IF NOT EXISTS config (
     child_draws_adult INTEGER NOT NULL DEFAULT 0,
     child_draws_child INTEGER NOT NULL DEFAULT 0,
     budget_note TEXT NOT NULL DEFAULT '',
+    avoid_same_group INTEGER NOT NULL DEFAULT 1,
     is_locked INTEGER NOT NULL DEFAULT 0
 );
 
@@ -175,6 +179,7 @@ CREATE TABLE IF NOT EXISTS participants (
     name TEXT NOT NULL,
     role TEXT NOT NULL CHECK (role IN ('ADULT', 'CHILD')),
     family_group TEXT NOT NULL,
+    group_key TEXT NOT NULL DEFAULT '',
     wishlist TEXT NOT NULL DEFAULT '',
     token TEXT UNIQUE NOT NULL,
     viewed_at TEXT DEFAULT NULL
@@ -189,6 +194,34 @@ CREATE TABLE IF NOT EXISTS assignments (
     UNIQUE(giver_id, receiver_id)
 );
 """
+
+# Columns added after the first release. A fresh database gets them from SCHEMA above; an existing
+# one gets them here, and `group_key` inherits what `family_group` used to mean so a roster built
+# before this existed keeps drawing exactly as it did. See "Grouping" in PLAN.md for why the two
+# fields are separate now: a surname is not a household.
+MIGRATIONS = (
+    ("participants", "group_key", "ALTER TABLE participants ADD COLUMN group_key TEXT NOT NULL DEFAULT ''",
+     "UPDATE participants SET group_key = family_group WHERE group_key = ''"),
+    ("config", "avoid_same_group",
+     "ALTER TABLE config ADD COLUMN avoid_same_group INTEGER NOT NULL DEFAULT 1", None),
+)
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
+    return [row["name"] for row in conn.execute(f"PRAGMA table_info({table})")]
+
+
+def apply_migrations(conn: sqlite3.Connection) -> list[str]:
+    """Idempotent column additions. Returns the names of what was actually added."""
+    applied: list[str] = []
+    for table, column, ddl, backfill in MIGRATIONS:
+        if column in _columns(conn, table):
+            continue
+        conn.execute(ddl)
+        if backfill:
+            conn.execute(backfill)
+        applied.append(f"{table}.{column}")
+    return applied
 
 
 def db_path() -> Path:
@@ -212,8 +245,11 @@ def init_db() -> None:
     conn = connect()
     try:
         conn.executescript(SCHEMA)
+        applied = apply_migrations(conn)
     finally:
         conn.close()
+    if applied:
+        audit("schema_migrated", columns=applied)
 
 
 def get_db() -> Iterator[sqlite3.Connection]:
@@ -410,8 +446,23 @@ def current_bearer(request: Request) -> str:
 
 
 def norm_group(value: str) -> str:
-    """Family-group key: participants sharing this value can never draw each other."""
+    """Case/whitespace-insensitive key for a grouping label."""
     return (value or "").strip().lower()
+
+
+def group_key_of(participant: dict[str, Any], respect_groups: bool) -> str:
+    """The key the matching engine treats as "same household".
+
+    Deliberately **not** the family name: two households can carry the same surname, and a surname is
+    then useless as the unit of the rule. `group_key` is what the rule works on; `family_group` is
+    only ever a label for the organizer.
+
+    An empty `group_key` means "in no group", and with `respect_groups` off everyone gets a private
+    key. Both cases make the exclusion a no-op without a second code path — and the private key is
+    also what stops a participant being dealt to themselves once group exclusion is switched off.
+    """
+    key = norm_group(participant.get("group_key", "")) if respect_groups else ""
+    return key or f"#solo:{participant['id']}"
 
 
 def _balanced_pool(
@@ -457,13 +508,19 @@ class _Slots:
     def available(self, pid: int) -> bool:
         return self.count.get(pid, 0) > 0
 
-    def eligible(self, role: str, group: str) -> list[int]:
-        """Slots a giver in `group` may take — same-household buckets are never offered."""
-        out: list[int] = []
+    def eligible(self, role: str, group: str, allow_same: bool = False) -> list[int]:
+        """Slots a giver in `group` may take — outsiders first, always.
+
+        `allow_same` only appends the giver's own group *after* every outside option, so a relaxed
+        draw stays as relaxed as the budget allows instead of scattering crossings through it.
+        """
+        outside: list[int] = []
+        inside: list[int] = []
         for (slot_role, slot_group), pids in self.by_group.items():
-            if slot_role == role and slot_group != group and pids:
-                out.extend(pids)
-        return out
+            if slot_role != role or not pids:
+                continue
+            (inside if slot_group == group else outside).extend(pids)
+        return outside + inside if allow_same else outside
 
     def dec(self, pid: int) -> None:
         self.count[pid] -= 1
@@ -484,68 +541,65 @@ def _feasible(
     quota: dict[str, tuple[int, int]],
     adults: list[dict[str, Any]],
     children: list[dict[str, Any]],
-    t_adult: int,
-    t_child: int,
 ) -> bool:
-    """Cheap necessary conditions.
+    """Cheap necessary conditions on the **hard** constraints only.
 
-    False means "stop now"; True does not prove a solution exists.
+    False means "stop now"; True does not prove a solution exists. Same-group exclusions are not part
+    of this on purpose: they are a soft constraint, so a giver boxed in by them is not unsolvable —
+    it only costs a crossing. What stays here is the arithmetic that cannot be negotiated: a giver
+    needs that many distinct receivers, and nobody can receive their own gift.
     """
-
-    def counts_of(members: list[dict[str, Any]]) -> dict[str, int]:
-        out: dict[str, int] = {}
-        for member in members:
-            key = norm_group(member["family_group"])
-            out[key] = out.get(key, 0) + 1
-        return out
-
-    adult_groups = counts_of(adults)
-    child_groups = counts_of(children)
-
-    # Every giver needs enough receivers outside their own household.
     for giver in givers:
         need_adult, need_child = quota[giver["role"]]
-        group = norm_group(giver["family_group"])
-        if need_adult > len(adults) - adult_groups.get(group, 0):
+        available_adults = len(adults) - (1 if giver["role"] == "ADULT" else 0)
+        available_children = len(children) - (1 if giver["role"] == "CHILD" else 0)
+        if need_adult > available_adults or need_child > available_children:
             return False
-        if need_child > len(children) - child_groups.get(group, 0):
-            return False
-
-    # Household supply/demand balance: slots located inside a household can only
-    # be filled by givers outside it, and givers inside it can only be served
-    # by slots outside it.
-    def balanced(
-        members: list[dict[str, Any]],
-        groups: dict[str, int],
-        total_slots: int,
-        slot_index: int,
-    ) -> bool:
-        if total_slots <= 0 or not members:
-            return True
-        base, _remainder = divmod(total_slots, len(members))
-        for group, size in groups.items():
-            slots_inside_at_least = base * size
-            demand_inside = sum(
-                quota[g["role"]][slot_index]
-                for g in givers
-                if norm_group(g["family_group"]) == group
-            )
-            demand_outside = sum(
-                quota[g["role"]][slot_index]
-                for g in givers
-                if norm_group(g["family_group"]) != group
-            )
-            if demand_inside > total_slots - slots_inside_at_least:
-                return False
-            if demand_outside < slots_inside_at_least:
-                return False
-        return True
-
-    if not balanced(adults, adult_groups, t_adult, 0):
-        return False
-    if not balanced(children, child_groups, t_child, 1):
-        return False
     return True
+
+
+def _min_crossings(
+    givers: list[dict[str, Any]],
+    quota: dict[str, tuple[int, int]],
+    adults: list[dict[str, Any]],
+    children: list[dict[str, Any]],
+    group_of: dict[int, str],
+    t_adult: int,
+    t_child: int,
+) -> int:
+    """Lower bound on how many gifts must cross a group.
+
+    Receivers of one role are owed `base` or `base+1` gifts each, so at least `base * size` of the
+    slots for that role sit inside any group of `size`, and those can only be filled by givers
+    outside it. Symmetrically, givers inside that group want `demand_inside` gifts and at most
+    `total - base * size` of them can come from outside. Whichever side comes up short, the
+    difference has to be paid with a same-group gift.
+
+    Only a bound, and a loose one. The search starts here so a roster that provably needs k crossings
+    does not spend its whole attempt budget trying k-1 impossible configurations.
+    """
+    total = 0
+    for members, index, slots_total in ((adults, 0, t_adult), (children, 1, t_child)):
+        if slots_total <= 0 or not members:
+            continue
+        base, _remainder = divmod(slots_total, len(members))
+        sizes: dict[str, int] = {}
+        for member in members:
+            key = group_of[int(member["id"])]
+            sizes[key] = sizes.get(key, 0) + 1
+        demand: dict[str, int] = {}
+        demand_total = 0
+        for giver in givers:
+            key = group_of[int(giver["id"])]
+            demand[key] = demand.get(key, 0) + quota[giver["role"]][index]
+            demand_total += quota[giver["role"]][index]
+        for key, size in sizes.items():
+            inside_slots = base * size
+            want_inside = demand.get(key, 0)
+            receivers_short = max(0, want_inside - (slots_total - inside_slots))
+            givers_short = max(0, inside_slots - (demand_total - want_inside))
+            total += max(receivers_short, givers_short)
+    return total
 
 
 def _solve_attempt(
@@ -554,14 +608,18 @@ def _solve_attempt(
     slots: _Slots,
     rng: random.Random,
     max_nodes: int = 50000,
+    same_budget: int = 0,
 ) -> Optional[list[tuple[int, int]]]:
     """Depth-first deal of every giver's slots, backtracking when boxed in.
 
-    Returns the assignment pairs, or None when this attempt (including its
-    backtracking budget) failed.
+    `same_budget` is how many gifts may land inside the giver's own group; 0 is the strict rule.
+    Returns the assignment pairs, or None when this attempt (including its backtracking budget)
+    failed.
     """
     pairs: list[tuple[int, int]] = []
     nodes = {"used": 0}
+    same_used = {"n": 0}
+    allow_same = same_budget > 0
 
     def assign(index: int) -> bool:
         """Deal for every giver from `index` on; leaves `slots` intact on failure."""
@@ -574,48 +632,35 @@ def _solve_attempt(
         giver = order[index]
         giver_id = int(giver["id"])
         need_adult, need_child = quota[giver["role"]]
-        group = norm_group(giver["family_group"])
+        group = slots.group_of[giver_id]
         chosen: list[int] = []
         used: set[int] = set()
 
-        def take_adult(remaining: int) -> bool:
+        def take(remaining: int, role: str, then) -> bool:
+            """Give this giver `remaining` receivers of `role`, then continue with `then`."""
             if nodes["used"] > max_nodes:
                 return False
             if remaining == 0:
-                return take_child(need_child)
-            candidates = slots.eligible("ADULT", group)
+                return then()
+            candidates = slots.eligible(role, group, allow_same)
             rng.shuffle(candidates)
             for pid in candidates:
-                if not slots.available(pid) or pid in used:
+                if not slots.available(pid) or pid in used or pid == giver_id:
+                    continue
+                crosses = slots.group_of[pid] == group
+                if crosses and same_used["n"] >= same_budget:
                     continue
                 used.add(pid)
                 slots.dec(pid)
+                if crosses:
+                    same_used["n"] += 1
                 chosen.append(pid)
                 nodes["used"] += 1
-                if take_adult(remaining - 1):
+                if take(remaining - 1, role, then):
                     return True
                 chosen.pop()
-                slots.inc(pid)
-                used.discard(pid)
-            return False
-
-        def take_child(remaining: int) -> bool:
-            if nodes["used"] > max_nodes:
-                return False
-            if remaining == 0:
-                return place()
-            candidates = slots.eligible("CHILD", group)
-            rng.shuffle(candidates)
-            for pid in candidates:
-                if not slots.available(pid) or pid in used:
-                    continue
-                used.add(pid)
-                slots.dec(pid)
-                chosen.append(pid)
-                nodes["used"] += 1
-                if take_child(remaining - 1):
-                    return True
-                chosen.pop()
+                if crosses:
+                    same_used["n"] -= 1
                 slots.inc(pid)
                 used.discard(pid)
             return False
@@ -628,7 +673,11 @@ def _solve_attempt(
             del pairs[start:]
             return False
 
-        return take_adult(need_adult)
+        def take_child() -> bool:
+            """Zero-arg on purpose: `then` callbacks are always called with no arguments."""
+            return take(need_child, "CHILD", place)
+
+        return take(need_adult, "ADULT", take_child)
 
     if assign(0) and slots.total() == 0:
         return pairs
@@ -640,16 +689,22 @@ def generate_draw(
     participants: list[dict[str, Any]],
     max_attempts: int = MAX_ATTEMPTS,
     seed: Optional[int] = None,
-) -> list[tuple[int, int]]:
-    """Produce (giver_id, receiver_id) pairs honouring every constraint.
+) -> tuple[list[tuple[int, int]], int]:
+    """Produce ((giver_id, receiver_id) pairs, same-group pairs used).
 
-    Raises HTTPException(400) for an empty target group and HTTPException(422)
-    when the constraints cannot be satisfied.
+    `avoid_same_group` is a preference, not an axiom: the solver spends its budget on a draw with no
+    crossings, and only when none exists does it allow crossings — starting at a proven lower bound
+    and going up one at a time, so the relaxation is as small as it can be. With the preference off,
+    groups are not consulted at all.
+
+    Raises HTTPException(400) for an empty target group and HTTPException(422) when the draw counts
+    themselves cannot be satisfied at all.
     """
     adult_draws_adult = int(config["adult_draws_adult"])
     adult_draws_child = int(config["adult_draws_child"])
     child_draws_adult = int(config["child_draws_adult"])
     child_draws_child = int(config["child_draws_child"])
+    respect_groups = bool(int(config.get("avoid_same_group", 1)))
 
     adults = [p for p in participants if p["role"] == "ADULT"]
     children = [p for p in participants if p["role"] == "CHILD"]
@@ -666,9 +721,9 @@ def generate_draw(
     adult_pool = _balanced_pool(adults, t_adult, rng)
     child_pool = _balanced_pool(children, t_child, rng)
     if not adult_pool and not child_pool:
-        return []
+        return [], 0
 
-    group_of = {int(p["id"]): norm_group(p["family_group"]) for p in participants}
+    group_of = {int(p["id"]): group_key_of(p, respect_groups) for p in participants}
     role_of = {int(p["id"]): p["role"] for p in participants}
 
     quota = {
@@ -677,33 +732,40 @@ def generate_draw(
     }
     givers = [p for p in participants if sum(quota[p["role"]]) > 0]
 
-    if not _feasible(givers, quota, adults, children, t_adult, t_child):
+    if not _feasible(givers, quota, adults, children):
         raise HTTPException(status_code=422, detail=UNSOLVABLE)
 
     def tightness(giver: dict[str, Any]) -> int:
         """Lower = fewer options, so it is dealt first."""
-        group = norm_group(giver["family_group"])
-        available_adults = sum(
-            1 for p in adults if norm_group(p["family_group"]) != group
-        )
-        available_children = sum(
-            1 for p in children if norm_group(p["family_group"]) != group
-        )
+        group = group_of[int(giver["id"])]
+        available_adults = sum(1 for p in adults if group_of[int(p["id"])] != group)
+        available_children = sum(1 for p in children if group_of[int(p["id"])] != group)
         need_adult, need_child = quota[giver["role"]]
         return min(need_adult + need_child, available_adults + available_children)
 
-    total_needed = len(adult_pool) + len(child_pool)
+    total_slots = len(adult_pool) + len(child_pool)
+    if respect_groups:
+        lower = _min_crossings(givers, quota, adults, children, group_of, t_adult, t_child)
+        budgets = list(range(lower, total_slots + 1))
+    else:
+        budgets = [0]
 
-    for _ in range(max(1, max_attempts)):
-        # most-constrained givers first; ties re-shuffled so attempts differ
-        order = sorted(givers, key=lambda g: (tightness(g), rng.random()))
-        slots = _Slots(adult_pool, child_pool, group_of, role_of)
-        pairs = _solve_attempt(order, quota, slots, rng)
-        if pairs is not None:
-            return pairs
+    for budget in budgets:
+        # A boxed-in roster is worth more attempts than a wide-open one, but the budget ladder must
+        # not multiply the worst case: the strict pass keeps the full budget, a relaxation a slice.
+        attempts = max(1, max_attempts) if budget == 0 else max(8, max_attempts // 10)
+        for _ in range(attempts):
+            # most-constrained givers first; ties re-shuffled so attempts differ
+            order = sorted(givers, key=lambda g: (tightness(g), rng.random()))
+            slots = _Slots(adult_pool, child_pool, group_of, role_of)
+            pairs = _solve_attempt(order, quota, slots, rng, same_budget=budget)
+            if pairs is not None:
+                # Counted from the deal, not from the budget: what the console reports is what the
+                # draw actually did, so the number always agrees with the assignments on disk.
+                crossed = sum(1 for giver, receiver in pairs if group_of[giver] == group_of[receiver])
+                return pairs, crossed
 
     raise HTTPException(status_code=422, detail=UNSOLVABLE)
-
 
 # --------------------------------------------------------------------------- #
 # Request models
@@ -721,6 +783,9 @@ class ConfigUpdate(BaseModel):
     adult_draws_child: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
     child_draws_adult: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
     child_draws_child: Optional[int] = Field(default=None, le=MAX_DRAW_QUOTA)
+    # Preference, not an axiom: when on, the solver avoids same-group picks and only uses them if no
+    # draw exists otherwise. When off, groups are not consulted at all.
+    avoid_same_group: Optional[bool] = None
 
     @field_validator("adult_draws_adult", "adult_draws_child", "child_draws_adult", "child_draws_child")
     @classmethod
@@ -735,6 +800,7 @@ class ParticipantCreate(BaseModel):
     name: str = Field(max_length=MAX_NAME)
     role: Literal["ADULT", "CHILD"]
     family_group: str = Field(max_length=MAX_FAMILY_GROUP)
+    group_key: str = Field(default="", max_length=MAX_GROUP_KEY)
     wishlist: str = Field(default="", max_length=MAX_WISHLIST)
 
     @field_validator("name", "family_group")
@@ -745,6 +811,13 @@ class ParticipantCreate(BaseModel):
             raise ValueError("must not be blank")
         return stripped
 
+    @field_validator("group_key")
+    @classmethod
+    def _strip_group(cls, value: str) -> str:
+        # Blank on purpose: a participant with no group is in no group, so the same-group preference
+        # never binds for them. This one is deliberately NOT _not_blank.
+        return value.strip()
+
 
 class WishlistUpdate(BaseModel):
     wishlist: str = Field(max_length=MAX_WISHLIST)
@@ -753,6 +826,7 @@ class WishlistUpdate(BaseModel):
 class LimitsOut(BaseModel):
     name: int
     family_group: int
+    group_key: int
     wishlist: int
     event_title: int
     budget_note: int
@@ -828,6 +902,7 @@ def _config_dict(row: sqlite3.Row) -> dict[str, Any]:
         "child_draws_adult": row["child_draws_adult"],
         "child_draws_child": row["child_draws_child"],
         "budget_note": row["budget_note"],
+        "avoid_same_group": row["avoid_same_group"],
         "is_locked": row["is_locked"],
     }
 
@@ -857,6 +932,7 @@ def limits() -> dict[str, Any]:
     return {
         "name": MAX_NAME,
         "family_group": MAX_FAMILY_GROUP,
+        "group_key": MAX_GROUP_KEY,
         "wishlist": MAX_WISHLIST,
         "event_title": MAX_EVENT_TITLE,
         "budget_note": MAX_BUDGET_NOTE,
@@ -905,23 +981,42 @@ def admin_state(
     conn: sqlite3.Connection = Depends(get_db),
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
-    """Config + roster. Never touches the assignments table (blind organizer)."""
+    """Config + roster.
+
+    The organizer stays blind: this reads no pairing. The one contact with the `assignments` table is
+    a single COUNT of same-group pairs, which says "N gifts crossed a group" and cannot name a single
+    one of them. That number is what lets the console admit a relaxed draw instead of hiding it.
+    """
     participants = [
         {
             "id": row["id"],
             "name": row["name"],
             "role": row["role"],
             "family_group": row["family_group"],
+            "group_key": row["group_key"],
             "wishlist": row["wishlist"],
             "token": row["token"],
             "viewed_at": row["viewed_at"],
         }
         for row in conn.execute(
-            "SELECT id, name, role, family_group, wishlist, token, viewed_at "
+            "SELECT id, name, role, family_group, group_key, wishlist, token, viewed_at "
             "FROM participants ORDER BY id"
         )
     ]
-    return {"config": _config_dict(_load_config(conn)), "participants": participants}
+    # A COUNT, never a pairing — and only while the preference is on. The number answers "how far did
+    # the rule have to bend", which has no meaning when the rule was switched off on purpose: counting
+    # same-group pairs then would report a relaxation that was never forced.
+    config = _config_dict(_load_config(conn))
+    crossed = 0
+    if config["avoid_same_group"]:
+        crossed = conn.execute(
+            "SELECT COUNT(*) FROM assignments a "
+            "JOIN participants g ON g.id = a.giver_id "
+            "JOIN participants r ON r.id = a.receiver_id "
+            "WHERE g.group_key <> '' AND lower(trim(g.group_key)) = lower(trim(r.group_key))"
+        ).fetchone()[0]
+    config["same_group_crossings"] = crossed
+    return {"config": config, "participants": participants}
 
 
 @app.put("/api/admin/config", dependencies=[Depends(enforce_api_limit)])
@@ -940,6 +1035,7 @@ def update_config(
         "child_draws_adult",
         "child_draws_child",
         "budget_note",
+        "avoid_same_group",
     )
     updates = {key: value for key, value in updates.items() if key in allowed}
     if updates:
@@ -958,18 +1054,19 @@ def add_participant(
 ) -> dict[str, Any]:
     _reject_if_locked(_load_config(conn))
     cursor = conn.execute(
-        "INSERT INTO participants (name, role, family_group, wishlist, token) "
-        "VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO participants (name, role, family_group, group_key, wishlist, token) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
         (
             payload.name,
             payload.role,
             payload.family_group,
+            payload.group_key,
             payload.wishlist,
             str(uuid.uuid4()),
         ),
     )
     row = conn.execute(
-        "SELECT id, name, role, family_group, wishlist, token, viewed_at "
+        "SELECT id, name, role, family_group, group_key, wishlist, token, viewed_at "
         "FROM participants WHERE id = ?",
         (cursor.lastrowid,),
     ).fetchone()
@@ -980,6 +1077,7 @@ def add_participant(
             "name": row["name"],
             "role": row["role"],
             "family_group": row["family_group"],
+            "group_key": row["group_key"],
             "wishlist": row["wishlist"],
             "token": row["token"],
             "viewed_at": row["viewed_at"],
@@ -1012,14 +1110,14 @@ def run_draw(
     if config_row["is_locked"]:
         raise HTTPException(status_code=409, detail=ALREADY_LOCKED)
     participants = [
-        {"id": row["id"], "role": row["role"], "family_group": row["family_group"]}
-        for row in conn.execute("SELECT id, role, family_group FROM participants ORDER BY id")
+        {"id": row["id"], "role": row["role"], "group_key": row["group_key"]}
+        for row in conn.execute("SELECT id, role, group_key FROM participants ORDER BY id")
     ]
     if not participants:
-        raise HTTPException(status_code=400, detail="Cannot run a draw with no participants")
+        raise HTTPException(status_code=400, detail=NO_PARTICIPANTS)
 
     # Matching runs before any write, so a rejected draw cannot corrupt state.
-    pairs = generate_draw(_config_dict(config_row), participants)
+    pairs, crossed = generate_draw(_config_dict(config_row), participants)
 
     with _draw_lock:
         conn.execute("BEGIN IMMEDIATE")
@@ -1033,8 +1131,9 @@ def run_draw(
         except Exception:
             conn.execute("ROLLBACK")
             raise
-    audit("draw_locked", ip=client_ip(request), assignments=len(pairs))
-    return {"status": "OK", "assignments_created": len(pairs), "is_locked": 1}
+    audit("draw_locked", ip=client_ip(request), assignments=len(pairs), same_group_crossings=crossed)
+    return {"status": "OK", "assignments_created": len(pairs), "same_group_crossings": crossed,
+            "is_locked": 1}
 
 
 @app.post("/api/admin/reset", dependencies=[Depends(enforce_api_limit)])
