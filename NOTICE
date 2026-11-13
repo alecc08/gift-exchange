@@ -1,0 +1,13 @@
+# Third-party notices
+
+The code and documentation in this repository are MIT-licensed (see [LICENSE](LICENSE)).
+Some bundled artwork has its own copyright holders:
+
+| Asset | Source | Licence |
+|---|---|---|
+| Outline icons in the inline SVG sprite of `static/index.html` (Christmas tree, gift, candy cane, star, bauble, link, refresh, check, alert) | [Tabler Icons](https://tabler.io/icons), © 2018–2026 the Tabler Icons authors | MIT |
+| Crystalline 6-fold snowflake, gift-box illustration (with `box` / `lid` / `steam` groups), snowfall and burst animations | original to this repository | MIT |
+| Fraunces (display) and Inter (UI) | loaded at runtime from Google Fonts | SIL Open Font License 1.1 |
+
+No font files, icon files or other third-party binaries are vendored in the repository — the
+icons are inlined as SVG paths and the fonts are fetched from the Google Fonts CDN.

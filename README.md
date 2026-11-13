@@ -192,6 +192,7 @@ python tools/build_docs_media.py
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE). The inline SVG sprite mixes original artwork with Tabler Icons
-(MIT); fonts (Fraunces, Inter) are loaded from Google Fonts under the SIL OFL and are not
-vendored. Contributions are welcome under the same licence.
+MIT — see [LICENSE](LICENSE) and the artwork attribution in [NOTICE](NOTICE). The inline SVG
+sprite mixes original artwork with Tabler Icons (MIT); fonts (Fraunces, Inter) are loaded from
+Google Fonts under the SIL OFL and are not vendored. Contributions are welcome under the same
+licence.
