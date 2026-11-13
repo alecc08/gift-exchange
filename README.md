@@ -191,6 +191,7 @@ delete and re-add the participant.
 | `ADMIN_PASSWORD` | `admin` (hardened file: required) | Organizer password. |
 | `SESSION_SECRET` | derived (hardened file: required) | HMAC key for session tokens. |
 | `TRUST_PROXY` | `0` | Trust `X-Forwarded-For` only behind your own proxy. |
+| `PUBLIC_BASE_URL` | unset | The absolute origin used in mailed links, mailed art and share tags. Unset, the request's own `Host` is used — and a loopback `Host` then *refuses* to send (503) rather than mail links nobody can open. Set it to the address the family types. |
 | `LOGIN_RATE_LIMIT` | `10` | Login attempts per minute per client. |
 | `LOGIN_LOCKOUT_THRESHOLD` / `LOGIN_LOCKOUT_SECONDS` | `5` / `300` | Failed logins before a temporary lockout, and its length. |
 | `DRAW_RATE_LIMIT` / `API_RATE_LIMIT` | `120` / `300` | Per-minute budgets for participant links / everything else. |
@@ -362,22 +363,34 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   `MAX_SUBJECT_NAMES` (3) the list becomes « A, B, C et 2 autre(s) » rather than pushing the words
   « vos liens » off the screen.
 * **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake, the big gift
-  and the gift strip served from `/static` as `<img>`. **They are PNG, and that is a measured fact,
-  not a style choice:** the first version referenced the site's SVGs, the files served fine (`200`,
-  `image/svg+xml`), and Gmail drew nothing at all — Google's image proxy does not serve SVG and has
-  said it has no plans to (cani.email lists SVG as non-Google-only). Inline `<svg>` markup is
-  stripped by Gmail too, so the art is `<img>`-referenced, never inline. The SVGs stay the source of
-  truth (they are what gets edited and what the site's own vectors match); `tools/build_email_art.py`
-  rasterizes the three the mail loads, at 2x the displayed size so a phone shows them sharp, and a
-  test asserts both the format and that the intrinsic pixels are 2x the `width`/`height` the mail
-  declares. Without an absolute base URL the art is simply omitted — a relative src in an email is a
-  broken image with extra steps.
+  and the gift strip served from `/static` as `<img>`. **They are PNG, not SVG.** Gmail serves every
+  image through its own proxy and that proxy does not serve SVG — Google has said so publicly, and
+  cani.email lists SVG as "partially supported, non-Google only". (What a real inbox actually proved
+  first was a different bug, below: the first test mails pointed at `127.0.0.1`. Both are worth
+  fixing, and only one of them was visible.) Inline `<svg>` markup is stripped by Gmail too, so the
+  art is `<img>`-referenced, never inline. The SVGs stay the source of truth (they are what gets
+  edited and what the site's own vectors match); `tools/build_email_art.py` rasterizes the three the
+  mail loads, at 2x the displayed size so a phone shows them sharp, and a test asserts both the
+  format and that the intrinsic pixels are 2x the `width`/`height` the mail declares. Without an
+  absolute base URL the art is simply omitted — a relative src in an email is a broken image with
+  extra steps.
   The big gift is the mail's whole idea in one picture: the box is shut, the lid has jumped off, and
   somebody inside is holding it open and looking up — the pairing is already in there, and only the
   reader can open it. It is drawn static on purpose: email clients disagree about CSS animation
   (Outlook ignores `@keyframes`, Gmail strips them), and art that silently freezes in half the
   family's inboxes is worse than no animation. The `<img>` carries a localized `alt`, because for a
   screen reader that picture *is* the pitch.
+* **The link's absolute origin: `PUBLIC_BASE_URL`, or the Host header, never a loopback host.** Every
+  URL in a mail — the participant's link and the art — is built from one base. Reading it off the
+  request is usually right and sometimes a disaster: an admin call scripted inside the container, a
+  health check or a port-forward carries `Host: 127.0.0.1:8000`, and the mail then invites the family
+  to open the server's own machine. That is exactly what happened to the first test sends on the real
+  deployment: the copy, the subject and the links were perfect and **every URL in the mail was
+  unreachable from outside**, which is why the images were blank and a click would have died. So:
+  set `PUBLIC_BASE_URL` to the address the family types (it wins outright, which also makes share
+  tags immune to a forged Host), and without it a loopback origin is **refused** — `503` naming the
+  variable, and in the auto-send report each person is listed as skipped with that reason. The draw
+  still commits: a mail that cannot be written correctly never rolls back a draw.
 * **Triggers:** « Envoyer » per row (which sends that row's whole *household*, and answers with
   `with: [names]` so the console can say what really left), « Envoyer les liens par courriel » for
   everyone with an address (per-person report, skipped addresses listed not hidden, plus
@@ -496,7 +509,7 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 177 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
+bash run_tests.sh          # 182 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
 #                  security, previews, email delivery
 ```
 
@@ -520,7 +533,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 177 tests
+├── tests/                        # 182 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution

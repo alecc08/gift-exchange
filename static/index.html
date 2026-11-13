@@ -1241,6 +1241,7 @@ const I18N = {
     'err.tooLarge': 'C’est trop long pour être enregistré.',
     'err.unconfiguredAdmin': 'Le mot de passe d’administration n’est pas réglé sur le serveur : l’espace organisateur est fermé.',
     'err.notConfigured': 'L’envoi de courriels n’est pas configuré sur le serveur.',
+    'err.badBaseUrl': 'Le serveur ne connaît pas son adresse publique : les liens du courriel seraient morts. Règle PUBLIC_BASE_URL dans sa configuration.',
     'err.noAddress': 'Cette personne n’a pas d’adresse courriel.',
     'err.sendFailed': 'Le service de courriel a refusé l’envoi : vérifie l’adresse.',
     'err.unknown': 'Quelque chose a brisé. Réessaie.',
@@ -1447,6 +1448,7 @@ const I18N = {
     'err.tooLarge': 'That text is too long to save.',
     'err.unconfiguredAdmin': 'The server has no admin password configured, so the organizer console is closed. Set ADMIN_PASSWORD before continuing.',
     'err.notConfigured': 'Email sending is not configured on the server.',
+    'err.badBaseUrl': 'This server does not know its own public address, so the links in the email would be dead. Set PUBLIC_BASE_URL in its configuration.',
     'err.noAddress': 'This person has no email address.',
     'err.sendFailed': 'The email provider refused the send: check the address.',
     'err.unknown': 'Something went wrong. Please try again.',
@@ -1775,12 +1777,17 @@ function giftExchange() {
         return this.t('err.rateLimited', { s: Number.isFinite(seconds) ? seconds : 30 });
       }
       if (response.status === 413) return this.t('err.tooLarge');
-      if (response.status === 503) return this.t('err.unconfiguredAdmin');
-      if (detail.includes('cannot be satisfied')) return this.t('err.unsolvable');
-      if (detail.includes('empty target group')) return this.t('err.emptyTarget');
+      // The two email 503s first: the generic one below would otherwise mask them and tell the
+      // organizer about the admin password when the problem is the mail setup.
       // 'not configured on this server' is the email feature's own 503; the admin-password 503 says
       // 'not configured on the server' — distinct on purpose so the two never mask each other.
       if (detail.includes('not configured on this server')) return this.t('err.notConfigured');
+      // The 503 for "I do not know my own public address" has to be distinguishable from the
+      // not-configured one: the fix is a different variable, and the organizer is the one who sets it.
+      if (detail.includes('public address')) return this.t('err.badBaseUrl');
+      if (response.status === 503) return this.t('err.unconfiguredAdmin');
+      if (detail.includes('cannot be satisfied')) return this.t('err.unsolvable');
+      if (detail.includes('empty target group')) return this.t('err.emptyTarget');
       if (detail.includes('no email address')) return this.t('err.noAddress');
       if (detail.includes('refused the send')) return this.t('err.sendFailed');
       if (detail.includes('locked')) return this.t('err.locked');

@@ -94,6 +94,11 @@ TOO_LARGE = "Request body too large"
 EMAIL_NOT_CONFIGURED = "Email sending is not configured on this server"
 EMAIL_NO_ADDRESS = "This participant has no email address"
 EMAIL_SEND_FAILED = "The email provider refused the send"
+# A mail whose links point at 127.0.0.1 is worse than no mail: it looks delivered, and every link in
+# it is dead for the person holding it. Seen for real — an admin call made from inside the container
+# carries `Host: 127.0.0.1:8000`, and that is what `public_base_url()` echoes into the links.
+EMAIL_BAD_BASE_URL = ("This server cannot name its own public address, so the links it would send "
+                      "are not reachable: set PUBLIC_BASE_URL")
 
 DEFAULT_ADMIN_PASSWORD = "admin"
 
@@ -263,6 +268,10 @@ def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], eve
     address = group["address"]
     if not email_enabled():
         return _skip_rows(people, EMAIL_NOT_CONFIGURED)
+    if not base_url:
+        # A mail whose links are relative or point at the server's own machine is a mail nobody can
+        # open, so it is not sent at all. The organizer sees why in the report.
+        return _skip_rows(people, EMAIL_BAD_BASE_URL)
     if not address or not _sendable_email(address):
         return _skip_rows(people, EMAIL_NO_ADDRESS)
 
@@ -574,6 +583,44 @@ def redacted_path(request: Request) -> str:
     """
     return "/".join("<token>" if TOKEN_SEGMENT.match(part) else part
                     for part in request.url.path.split("/"))
+
+
+def _loopback_host(host: str) -> bool:
+    """A host only the machine itself can open: localhost, 127.x, ::1, 0.0.0.0.
+
+    The port comes off first (`127.0.0.1:8000`, `[::1]:8000`), and only when what follows the last
+    colon is a port — an IPv6 address has more than one colon and no port at all.
+    """
+    name = host
+    if ":" in name:
+        head, _, tail = name.rpartition(":")
+        if tail.isdigit():
+            name = head
+    name = name.strip("[]").lower()
+    return name in {"localhost", "0.0.0.0", "::1", "::"} or name.startswith("127.")
+
+
+def mail_base_url(request: Request) -> str:
+    """The origin to build *mailed* links from, or "" when nothing reachable is known.
+
+    The Host header is a shakier answer than it looks: an admin call made from inside the container,
+    a health check, or a port-forward carries a host nobody outside can open — `Host:
+    127.0.0.1:8000` mailed the family an invitation to visit the server's own machine, which is what
+    happened to the first test sends here (and blank art in Gmail was the visible symptom of it, on
+    top of the SVG problem). `PUBLIC_BASE_URL` states the truth once, in one place; without it a
+    loopback host is refused rather than mailed, because a mail whose every link is dead on arrival is
+    worse than an error on the organizer's screen.
+    """
+    configured = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    base_url = public_base_url(request)
+    if not base_url:
+        return ""
+    if _loopback_host(base_url.partition("://")[2]):
+        audit("mail_base_url_refused", host=base_url[:80])
+        return ""
+    return base_url
 
 
 def participant_link(base_url: str, token: str) -> str:
@@ -2176,7 +2223,7 @@ def run_draw(
     # draw — the console response reports exactly who did not get mail.
     emailed = None
     if config_row["auto_email_on_draw"]:
-        base_url = public_base_url(request)
+        base_url = mail_base_url(request)
         with_email = [p for p in _all_participants(conn, target) if p["email"]]
         emailed = send_link_emails(conn, with_email, config_row, base_url)
         audit("auto_email_on_draw", ip=client_ip(request), draw_id=target, sent=emailed["sent"],
@@ -2245,7 +2292,10 @@ def _send_rows_or_422(request: Request, conn: sqlite3.Connection, people: list[d
         raise HTTPException(status_code=422, detail=EMAIL_NO_ADDRESS)
     if not email_enabled():
         raise HTTPException(status_code=503, detail=EMAIL_NOT_CONFIGURED)
-    return send_link_emails(conn, people, config_row, public_base_url(request))
+    base_url = mail_base_url(request)
+    if not base_url:
+        raise HTTPException(status_code=503, detail=EMAIL_BAD_BASE_URL)
+    return send_link_emails(conn, people, config_row, base_url)
 
 
 @app.post("/api/admin/participants/{participant_id}/email", dependencies=[Depends(enforce_api_limit)])
@@ -2276,8 +2326,8 @@ def email_participant_link(
     report = _send_rows_or_422(request, conn, household, _load_config(conn, target))
     outcome = next(item for item in report["results"] if item["id"] == participant_id)
     if not outcome["ok"]:
-        code = 503 if outcome["reason"] == EMAIL_NOT_CONFIGURED else 422
-        raise HTTPException(status_code=code, detail=outcome["reason"])
+        server_side = outcome["reason"] in (EMAIL_NOT_CONFIGURED, EMAIL_BAD_BASE_URL)
+        raise HTTPException(status_code=503 if server_side else 422, detail=outcome["reason"])
     return {"status": "OK", "sent": outcome, "messages": report["messages"],
             "with": [person["name"] for person in household if person["id"] != participant_id]}
 

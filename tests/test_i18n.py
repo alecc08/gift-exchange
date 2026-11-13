@@ -130,6 +130,35 @@ def test_every_label_the_markup_asks_for_exists():
     assert not broken, broken
 
 
+def test_every_i18n_entry_is_visible_to_the_parity_check():
+    """The dictionaries are read one entry per line, so a wrapped entry is invisible to every guard.
+
+    That is not hypothetical: a two-line FR entry plus a missing EN entry passed the whole suite —
+    the UI would have shown a raw key name in English. Counting the raw `'<key>':` starts against the
+    parsed keys is what makes a wrap impossible to hide.
+    """
+    for language in ("fr", "en"):
+        start = main.INDEX_HTML.index(f"  {language}: {{")
+        block = main.INDEX_HTML[start:main.INDEX_HTML.index("\n  },", start)]
+        declared = [match.group(1) for line in block.splitlines()
+                    if (match := ENTRY_RE.match(line))]
+        started = re.findall(r"^\s*'([a-z0-9.]+)':", block, re.IGNORECASE | re.MULTILINE)
+        assert len(started) == len(set(started)), f"{language}: duplicate keys"
+        assert set(started) == set(declared), (
+            f"{language}: entries the guards cannot see: {sorted(set(started) - set(declared))}")
+
+
+def test_the_email_errors_are_matched_before_the_generic_503():
+    """Two of the email failures are 503s, and the SPA used to answer 503 with « admin password not
+    configured » before it ever read the detail — so a mail problem was explained as a login problem.
+    """
+    markup = main.INDEX_HTML
+    generic = markup.index("response.status === 503")
+    for fragment in ("not configured on this server", "public address"):
+        matcher = markup.index(f"detail.includes('{fragment}')")
+        assert matcher < generic, f"detail.includes('{fragment}') is dead code behind the 503 fallback"
+
+
 def test_the_frontend_still_understands_the_servers_own_error_text():
     """`errorText()` recognises the API's sentences by substring. Reword one in main.py without
     touching the SPA and the organizer reads a bare English string instead of the explanation."""
@@ -137,6 +166,7 @@ def test_the_frontend_still_understands_the_servers_own_error_text():
     assert fragments
     server = (main.UNSOLVABLE, main.EMPTY_TARGET_GROUP, main.LOCKED_MSG, main.ALREADY_LOCKED, main.NO_PARTICIPANTS,
               main.EMAIL_NOT_CONFIGURED, main.EMAIL_NO_ADDRESS, main.EMAIL_SEND_FAILED,
+              main.EMAIL_BAD_BASE_URL,
               main.DRAW_NOT_FOUND, main.DRAW_ID_REQUIRED, main.DRAW_NONE)
     dead = [fragment for fragment in fragments if not any(fragment in text for text in server)]
     assert not dead, f"matchers that can never fire again: {dead}"
