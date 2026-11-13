@@ -23,7 +23,7 @@ MANIFEST = MEDIA / "manifest.json"
 CLIPS = {
     # gif name: (manifest entry, seconds before the action to start, seconds to keep, width, fps)
     "reveal.gif": ("reveal", 0.35, 3.4, 480, 10),
-    "organizer-flow.gif": ("flow", 0.0, 5.6, 620, 10),
+    "organizer-flow.gif": ("flow", 0.0, 7.6, 620, 10),   # login → draw list → console → copy toast
 }
 MAX_WIDTH = 1400
 MOBILE_MAX_WIDTH = 620
@@ -54,7 +54,10 @@ def size_kb(path):
 
 def shrink_stills():
     for path in sorted(SHOTS.glob("*.png")):
-        widest = MOBILE_MAX_WIDTH if "mobile" in path.name else MAX_WIDTH
+        # A phone still at 1400 px is a 390 px layout inflated four times: nobody reads it, and it
+        # costs the repository 800 KB. Anything shot at phone width goes out at phone size.
+        narrow = any(word in path.name for word in ("mobile", "phone"))
+        widest = MOBILE_MAX_WIDTH if narrow else MAX_WIDTH
         with Image.open(path) as image:
             image = image.convert("RGB")
             if image.width > widest:

@@ -2366,7 +2366,10 @@ def email_preview(
     """
     config_row = _load_config(conn, draw_id)
     language = payload.language or config_row["email_language"]
-    base_url = public_base_url(request) or "https://tirage-noel.alserv.org"
+    # The preview shows what a real send would contain, so it resolves its origin exactly the way a
+    # send does — `PUBLIC_BASE_URL` first. Otherwise the modal shows a caller-dependent URL (a Host of
+    # 127.0.0.1 while the mail itself carries the real hostname), and the preview stops being proof.
+    base_url = mail_base_url(request) or "https://tirage-noel.alserv.org"
     sample = "00000000-0000-0000-0000-000000000000"
     people = [{"name": name, "link": participant_link(base_url, sample)}
               for name in PREVIEW_NAMES[:max(1, payload.links)]]

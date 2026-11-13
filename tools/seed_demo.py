@@ -16,29 +16,33 @@ import urllib.request
 BASE = os.environ.get("GE_BASE", "http://127.0.0.1:8085").rstrip("/")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
 
-# name, family name, group (household), role, wishlist. Two households carry the same family name —
-# that is the situation the group field exists for, and the screenshots should show it.
+# name, family name, group (household), role, wishlist, email. Two households carry the same family
+# name — that is the situation the group field exists for, and the screenshots should show it.
+# One mailbox per household is the whole email design (one mail per boîte aux lettres), so the demo
+# has to carry addresses or the console's mail panel and the gallery say nothing. Children are listed
+# without one: their link travels in their household's mail. `example.com` is the RFC 2606 reserved
+# domain, so a demo left configured can never mail a real person by accident.
 ROSTER = [
     ("Mario", "Tremblay", "Tremblay (chez Gaétan)", "ADULT",
-     "Une tuque en laine, un bon bourbon, des gants de vélo"),
+     "Une tuque en laine, un bon bourbon, des gants de vélo", "chez.gaetan@example.com"),
     ("Julie", "Tremblay", "Tremblay (chez Gaétan)", "ADULT",
-     "Des plantes vivaces, une couple de casseroles en fonte, un foulard"),
+     "Des plantes vivaces, une couple de casseroles en fonte, un foulard", "chez.gaetan@example.com"),
     ("Florent", "Tremblay", "Tremblay (chez Gaétan)", "CHILD",
-     "Un maillot du Canadien, des cartes Pokémon, des raquettes"),
+     "Un maillot du Canadien, des cartes Pokémon, des raquettes", ""),
     ("Lise", "Tremblay", "Tremblay (chez Réjean)", "ADULT",
-     "Un cours de poterie, une bougie au sapin baumier, un bon vin rouge"),
+     "Un cours de poterie, une bougie au sapin baumier, un bon vin rouge", "chez.rejean@example.com"),
     ("Marc", "Tremblay", "Tremblay (chez Réjean)", "ADULT",
-     "Des cannes à pêche, un sac de jour, des vinyles de jazz"),
+     "Des cannes à pêche, un sac de jour, des vinyles de jazz", "chez.rejean@example.com"),
     ("Steven", "Gagnon", "Gagnon", "ADULT",
-     "Un jeu de société, un abonnement au cinéma, un cours de menuiserie"),
+     "Un jeu de société, un abonnement au cinéma, un cours de menuiserie", "gagnon@example.com"),
     ("Carole", "Gagnon", "Gagnon", "ADULT",
-     "Une couple de chaussures de marche, un livre de recettes d’ici"),
+     "Une couple de chaussures de marche, un livre de recettes d’ici", "gagnon@example.com"),
     ("Magalie", "Gagnon", "Gagnon", "CHILD",
-     "Des patins, un livre de fantasy, le jeu de société Tabou"),
+     "Des patins, un livre de fantasy, le jeu de société Tabou", ""),
     ("Rosalie", "Roy", "Roy", "CHILD",
-     "Un appareil photo enfant, des feutres, des chaussettes à orignaux"),
+     "Un appareil photo enfant, des feutres, des chaussettes à orignaux", "famille.roy@example.com"),
     ("Charlie", "Roy", "Roy", "CHILD",
-     "Un football, un jeu Pokémon, des briques de construction"),
+     "Un football, un jeu Pokémon, des briques de construction", "famille.roy@example.com"),
 ]
 
 
@@ -83,7 +87,7 @@ def seed(auth):
         auth,
     )
 
-    for name, family, group, role, wishlist in ROSTER:
+    for name, family, group, role, wishlist, email in ROSTER:
         call(
             "/api/admin/participants",
             "POST",
@@ -93,6 +97,7 @@ def seed(auth):
                 "family_group": family,
                 "group_key": group,
                 "wishlist": wishlist,
+                "email": email,
             },
             auth,
         )

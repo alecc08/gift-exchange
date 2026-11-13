@@ -6,8 +6,12 @@ Writes PNG stills to docs/screenshots/, two .webm recordings to a temp directory
 and docs/media/manifest.json describing where the animations start inside each video
 (tools/build_docs_media.py turns those into the README GIFs).
 
-The instance may hold any state: the last stage rebuilds the demo roster from seed_demo.py,
-so the gallery is reproducible from a bare database.
+The demo roster is rebuilt from seed_demo.py at both ends of the run, so the gallery is reproducible
+from any state — the stills are described against those names, households and wishlists.
+
+**Set `PUBLIC_BASE_URL` on the instance you capture** (e.g. `http://127.0.0.1:8085`). The mail
+preview builds its art URLs from it; unset, the modal shows empty boxes where the gift should be and
+the still documents a bug instead of the design.
 
 Requires Playwright (`uv pip install playwright && playwright install chromium`). This is a
 docs-only tool: the app itself has no test/docs dependencies.
@@ -19,6 +23,7 @@ import pathlib
 import re
 import sys
 import time
+import urllib.error
 import urllib.request
 
 from playwright.sync_api import sync_playwright
@@ -53,7 +58,13 @@ def admin_api(path, headers, method="GET", body=None):
         data = None
     request = urllib.request.Request(BASE + path, data=data, method=method,
                                      headers={"Content-Type": "application/json", **headers})
-    return json.loads(urllib.request.urlopen(request).read())
+    try:
+        return json.loads(urllib.request.urlopen(request).read())
+    except urllib.error.HTTPError as error:
+        # the server's `detail` is the whole explanation; without it a failed call is a stack trace
+        # and a status code.
+        raise RuntimeError(f"{method} {path} -> {error.code}: "
+                           f"{error.read().decode('utf-8', 'replace')}") from None
 
 
 def open_link(token):
@@ -67,16 +78,51 @@ def shot(page, name, full=False):
     print("  still:", name)
 
 
-def enter_console(page):
+def enter_console(page, shoot_list=True):
     """Login now lands on the draw list; open the first draw to reach the console.
 
     Also shoots the list itself, since it is the first thing an organizer sees.
     """
     page.wait_for_selector("#draw-cards article")
     time.sleep(0.8)
-    shot(page, "18-draw-list.png", full=True)
+    if shoot_list:
+        shot(page, "18-draw-list.png", full=True)
     page.locator("#draw-cards article").first.get_by_role("button", name="Ouvrir").click()
     page.wait_for_selector("text=Copier tous les liens")
+
+
+def capture_email_console(page):
+    """The mail panel and the mail itself — one email per mailbox, art included.
+
+    Taken while the draw is locked, which is the state where the panel offers the links mail. The
+    second still is the multi-link preview: one household's message, with every person's link
+    labelled, and the gift art that only appears because the PNGs are served as rasters from an
+    absolute origin (see README.md, the email section).
+    """
+    page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
+    time.sleep(0.6)
+    # 08-draw-locked.png is taken at this same scroll position, so this one moves down to the mail
+    # block: the two stills have to say different things.
+    page.evaluate("window.scrollBy({top: 330, behavior: 'instant'})")
+    time.sleep(0.6)
+    shot(page, "20-email-panel.png")
+
+    # Taller than the rest of the gallery on purpose: the modal only grows as far as its iframe, whose
+    # height comes from a min-height, and the point of this still is the labelled links — which sit
+    # under the art. So the iframe is stretched and the modal follows (it is capped at 90% of the
+    # viewport, hence the tall viewport).
+    page.set_viewport_size({"width": 1100, "height": 1500})
+    time.sleep(0.6)
+    page.get_by_role("button", name="Aperçu à plusieurs liens").click()
+    page.wait_for_selector("#preview-frame")
+    time.sleep(1.4)                       # the srcdoc iframe paints and pulls its art over HTTP
+    page.eval_on_selector("#preview-frame", "el => { el.style.minHeight = '1180px'; }")
+    time.sleep(0.8)
+    shot(page, "21-email-preview.png")
+    page.get_by_role("button", name="Fermer", exact=True).click()
+    page.wait_for_selector("#preview-frame", state="hidden")
+    page.set_viewport_size({"width": 1440, "height": 900})
+    time.sleep(0.4)
 
 
 def capture_admin_page(page):
@@ -103,6 +149,10 @@ def capture_admin_page(page):
     time.sleep(0.4)
 
     page.locator("h2", has_text="Les participants").scroll_into_view_if_needed()
+    time.sleep(0.4)
+    # and one screen further: this still is about the roster, and the add-a-person form is not it —
+    # the rows are, including the address column the mail panel groups by
+    page.evaluate("window.scrollBy({top: 430, behavior: 'instant'})")
     time.sleep(0.6)
     shot(page, "04-roster.png")
     page.get_by_role("button", name=re.compile(r"^Tremblay")).first.click()
@@ -112,10 +162,16 @@ def capture_admin_page(page):
     time.sleep(0.4)
 
     # the same roster at phone width: below 900 px each person becomes a card, which is the whole
-    # answer to "the console hides the excess on a phone"
+    # answer to "the console hides the excess on a phone". Viewport-sized, not full page: the console
+    # is long, and a 14 000 px strip is not something a reader can look at.
     page.set_viewport_size({"width": 390, "height": 844})
     time.sleep(0.8)
-    shot(page, "19-roster-phone.png", full=True)
+    # scroll AFTER the resize: the breakpoint re-lays-out the page, so the position from the wide
+    # viewport is meaningless. And aim at the first labelled cell, not the heading — `td[data-label]`
+    # is what makes the cards cards, and the heading sits above a tall add-a-person form.
+    page.locator("td[data-label]").first.evaluate("el => el.scrollIntoView({block: 'start'})")
+    time.sleep(0.6)
+    shot(page, "19-roster-phone.png")
     page.set_viewport_size({"width": 1440, "height": 900})
     time.sleep(0.6)
 
@@ -157,7 +213,7 @@ def capture_relaxed_draw(browser, auth):
     page.wait_for_selector("#pw")
     page.fill("#pw", PASSWORD)
     page.press("#pw", "Enter")
-    enter_console(page)
+    enter_console(page, shoot_list=False)     # 18-draw-list.png belongs to the demo roster, not this one
     page.wait_for_function("Alpine.$data(document.querySelector('[x-data]')).busy === false")
     time.sleep(1.0)
     shot(page, "16-group-note.png", full=True)  # the console predicts the crossing
@@ -169,12 +225,55 @@ def capture_relaxed_draw(browser, auth):
     context.close()
 
 
+# The draw list is the first thing an organizer sees, so the gallery needs more than one card on it.
+# Copied from the demo roster (people only, fresh tokens) and locked, so the two cards really show
+# different statuses. Removed again at the end of the run: everything else in this tool talks to
+# "the only draw there is".
+SECOND_DRAW = {"event_title": "Tirage du bureau — décembre", "budget_note": "15 $, n'importe quoi de drôle"}
+
+
+def ensure_second_draw(auth, first_id: int) -> int:
+    created = admin_api("/api/admin/draws", auth, "POST",
+                        {**SECOND_DRAW, "copy_participants_from": first_id})
+    draw_id = created["draw"]["id"]
+    # `copy_participants_from` copies the *people*; the rules are the new draw's own business. Set the
+    # quotas before drawing, or the copy sits on the server defaults and the draw is refused. From
+    # here on there are two draws, so every call has to say which one it means.
+    rules = admin_api(f"/api/admin/state?draw_id={first_id}", auth)["config"]
+    admin_api(f"/api/admin/config?draw_id={draw_id}", auth, "PUT", {
+        "event_title": SECOND_DRAW["event_title"], "budget_note": SECOND_DRAW["budget_note"],
+        "adult_draws_adult": rules["adult_draws_adult"], "adult_draws_child": rules["adult_draws_child"],
+        "child_draws_adult": rules["child_draws_adult"], "child_draws_child": rules["child_draws_child"],
+        "avoid_same_group": rules["avoid_same_group"],
+    })
+    admin_api(f"/api/admin/draw?draw_id={draw_id}", auth, "POST")   # locked: the list shows both states
+    return draw_id
+
+
+def remove_draw(auth, draw_id: int) -> None:
+    admin_api(f"/api/admin/reset?draw_id={draw_id}", auth, "POST")  # a locked draw is refused, not forced
+    admin_api(f"/api/admin/draws/{draw_id}", auth, "DELETE")
+
+
+def cleanup_extra_draws(auth) -> None:
+    """Delete every draw but the first. Idempotent, and needed at both ends of the run: everything
+    else in this tool talks to "the only draw there is", and an interrupted previous run can leave
+    one behind."""
+    for extra in admin_api("/api/admin/draws", auth)["draws"][1:]:
+        remove_draw(auth, extra["id"])
+
+
 def main():
     SHOTS.mkdir(parents=True, exist_ok=True)
     MEDIA.mkdir(parents=True, exist_ok=True)
     VIDEOS.mkdir(parents=True, exist_ok=True)
 
     auth = bearer_headers()
+    cleanup_extra_draws(auth)         # an interrupted earlier run must not leave a second draw behind
+    # Rebuild the demo roster first: every still in the gallery is described against those names,
+    # groups and wishlists, so the run has to start from them and not from whatever the instance
+    # happens to hold. (The same seed runs again at the end, to leave the instance demo-ready.)
+    seed_demo.seed(auth)
     snapshot = admin_api("/api/admin/state", auth)
     if snapshot["config"]["is_locked"]:
         admin_api("/api/admin/reset", auth, "POST")      # the open-state shots need an open draw
@@ -193,6 +292,9 @@ def main():
     hero = (givers or snapshot["participants"])[0]["name"]
     hero_url = f"{BASE}/?t={tokens[hero]}"
     print(f"target {BASE}: {len(tokens)} participants, draw locked={locked}, hero={hero}")
+
+    first_draw = admin_api("/api/admin/draws", auth)["draws"][0]["id"]
+    second_draw = ensure_second_draw(auth, first_draw)   # so 18-draw-list.png shows the real thing
 
     manifest = {}
     with sync_playwright() as playwright:
@@ -231,6 +333,8 @@ def main():
             page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
             time.sleep(0.6)
             shot(page, "08-draw-locked.png")
+
+        capture_email_console(page)
 
         page.get_by_role("button", name="EN", exact=True).click()
         page.wait_for_selector("text=Rules & draw quotas")
@@ -281,7 +385,7 @@ def main():
         typed_at = time.monotonic() - started
         flow.type("#pw", PASSWORD, delay=90)
         flow.press("#pw", "Enter")
-        flow.wait_for_selector("text=Copier tous les liens")
+        enter_console(flow, shoot_list=False)      # login lands on the draw list now
         time.sleep(1.6)
         flow.evaluate("window.scrollTo({top: 260, behavior: 'smooth'})")
         time.sleep(1.2)
@@ -308,10 +412,13 @@ def main():
         mob2.goto(BASE, wait_until="networkidle")
         mob2.fill("#pw", PASSWORD)
         mob2.press("#pw", "Enter")
-        mob2.wait_for_selector("text=Copier tous les liens")
+        enter_console(mob2, shoot_list=False)
         time.sleep(1.2)
         shot(mob2, "15-mobile-admin.png")
         mobile.close()
+
+        # back to a single draw: the stages below talk to "the only draw there is"
+        remove_draw(auth, second_draw)
 
         # ---- the group rule bent on purpose (last, because it rewrites the roster) ----
         capture_relaxed_draw(browser, auth)
