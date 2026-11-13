@@ -1,0 +1,48 @@
+# Hardened variant: same app, locked-down container. Use it instead of docker-compose.yml:
+#
+#   docker compose -f docker-compose.hardened.yml up -d
+#
+# What it changes and why:
+#   * the port is published on 127.0.0.1 only  -> the app is reachable exclusively through your
+#     reverse proxy (TLS, and ideally basic-auth/IP allowlist on /api/admin)
+#   * the process runs as an unprivileged uid, on a read-only root filesystem, with every Linux
+#     capability dropped and no setuid allowed -> a compromised process cannot write to its own
+#     code, escalate, or mount things
+#   * tmpfs for /tmp, memory/pid caps, log rotation -> blunt the loud failure modes
+# The only writable path is ./data (the SQLite file and its WAL sidecars), so prepare it once:
+#
+#   mkdir -p data && chown -R 1000:1000 data
+
+services:
+  gift-exchange:
+    build: .
+    image: gift-exchange:latest
+    container_name: gift-exchange
+    user: "1000:1000"
+    ports:
+      - "127.0.0.1:8085:8000"
+    volumes:
+      - ./data:/app/data
+    environment:
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?refusing to start with an unset ADMIN_PASSWORD}
+      DB_PATH: /app/data/exchange.db
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env (openssl rand -hex 32)}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 384m
+    memswap_limit: 384m
+    cpus: 1.0
+    init: true
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"

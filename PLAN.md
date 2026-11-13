@@ -452,3 +452,26 @@ reveal animation, 3 recipient cards).
   `Unauthorized` detail). Mobile (390 px) still has no horizontal overflow:
   `documentElement.scrollWidth == window.innerWidth == 390` on both the participant and the
   organizer views.
+
+### Hardened deployment verified — 2026-11-13
+
+`docker-compose.hardened.yml` + `.env` (generated `ADMIN_PASSWORD`, generated `SESSION_SECRET`)
+was actually brought up and inspected, not just written:
+
+```
+docker compose -f docker-compose.hardened.yml up -d
+GET  /api/health           -> {"status":"ok"}
+GET  /api/limits           -> "default_password": false
+POST /api/admin/login {"password":"admin"}                -> 401
+POST /api/admin/login {"password":"<the .env passphrase>"} -> 200
+docker inspect             -> CapDrop=[ALL], SecurityOpt=[no-new-privileges:true],
+                              ReadonlyRootfs=true, PidsLimit=128, published on 127.0.0.1:8085
+inside the container       -> id -u = 1000;  touch /app/hack.txt -> Read-only file system
+ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py     -> ACCEPTANCE: PASS
+ADMIN_PASSWORD=<pw> python3 tools/seed_demo.py --draw      -> 18 assignments, is_locked 1
+```
+
+The read-only-filesystem requirement is why the file runs as uid `1000` and documents the
+one-time `chown -R 1000:1000 data`: with every capability dropped, the process needs to own the
+only writable path (`./data`, where SQLite keeps its WAL sidecars). `.env` is git-ignored;
+`.env.example` carries the documented defaults and the optional tuning knobs.
