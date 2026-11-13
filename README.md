@@ -275,6 +275,40 @@ The organizer still learns nothing about who drew whom. The one thing read out o
 table for `/api/admin/state` is a single `COUNT` of same-group pairs, exposed as
 `config.same_group_crossings` — a number, never a name.
 
+## Link emails (Resend)
+
+The console can mail each participant their own link instead of the organizer copy-pasting twelve
+URLs into WhatsApp. Off by default at the *server* level: no `RESEND_API_KEY`, no emails — the
+buttons stay visible but disabled with a clear "not configured" note, and every send endpoint
+answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
+
+* **The field is free text.** `participants.email` is normalized (trim, lowercase) and never
+  format-rejected at save time — a typo is flagged softly in the cell, and only the send-time
+  check (`EMAIL_RE`) refuses to spend an API call on it. Fixing an address after the draw is the
+  one roster edit allowed *while locked*: `PUT /api/admin/participants/{id}` accepts `email` only,
+  and editing it clears `email_sent_at` because the old mail went somewhere else.
+* **What a mail contains:** the event name, the participant's own name, and their own link —
+  never a pairing, never anyone else's name. Names are escaped before they touch the HTML.
+  `X-Entity-Ref-ID` is the participant id, so repeats thread into one conversation.
+* **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake and the
+  gift strip served from `/static` as `<img>` — Gmail strips inline `<svg>` markup but renders
+  SVG files through its image proxy. Without an absolute base URL the art is simply omitted.
+* **Triggers:** « Envoyer » per row, « Envoyer les liens par courriel » for everyone with an
+  address (per-row report, skipped addresses listed not hidden), and an opt-in
+  `auto_email_on_draw` config switch that mails *after* the draw commits — a dead Resend can
+  never leave a half-drawn event.
+* **Preview:** `POST /api/admin/emails/preview` renders the template with a sample name and a
+  sample all-zeros link, so the modal is screenshot-able and cannot leak the roster.
+* **Transport:** stdlib `urllib`, one POST to `api.resend.com/emails`. The `User-Agent` header is
+  load-bearing: Cloudflare in front of Resend answers `403 / error code 1010` to Python's default
+  agent. The key is never logged — participant id + Resend message id is the audit trail.
+* **Deliverability:** verified for `alserv.org` — Resend's DKIM (`resend._domainkey`), aligned SPF
+  (`send.alserv.org`), and now a DMARC record (`v=DMARC1; p=none`). If your domain has no DMARC,
+  expect Gmail to spam a first send; add the TXT record before blaming the template.
+  Resend also offers SMTP (`smtp.resend.com`, user `resend`, password = your API key); this app
+  uses the API instead: structured errors per send, a message id per participant, and a
+  `RESEND_BASE_URL` test hook that SMTP has no equivalent of.
+
 ## The participant view
 
 <table>
@@ -355,7 +389,8 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 102 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract, security, previews
+bash run_tests.sh          # 128 tests: engine invariants (incl. per-person fairness), grouping bounds, API contract,
+#                  security, previews, email delivery
 ```
 
 `run_tests.sh` creates its own virtualenv (`uv` if present) and adds `httpx` + `pytest` there only,
@@ -378,7 +413,7 @@ gift-exchange/
 ├── static/index.html             # SPA: organizer console + participant view (FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 102 tests
+├── tests/                        # 128 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution

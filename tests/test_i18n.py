@@ -92,7 +92,10 @@ def test_no_two_different_controls_share_a_label():
     click-anyone hazard, it breaks anything that selects a control by its text (the docs capture
     tool clicked "Lancer le tirage" and found the logout button first). Keys that name the same
     thing in two places are allowlisted."""
-    SAME_THING_TWICE = {frozenset({"admin.title", "login.title"})}
+    SAME_THING_TWICE = {frozenset({"admin.title", "login.title"}),
+                        # The preview modal is named after the button that opens it: two controls,
+                        # one thing — exactly what the allowlist is for.
+                        frozenset({"rules.preview", "mail.preview_title"})}
     for language in ("fr", "en"):
         by_value: dict[str, list[str]] = {}
         for key, value in dictionary(language).items():
@@ -132,7 +135,8 @@ def test_the_frontend_still_understands_the_servers_own_error_text():
     touching the SPA and the organizer reads a bare English string instead of the explanation."""
     fragments = INCLUDE_RE.findall(main.INDEX_HTML)
     assert fragments
-    server = (main.UNSOLVABLE, main.EMPTY_TARGET_GROUP, main.LOCKED_MSG, main.ALREADY_LOCKED, main.NO_PARTICIPANTS)
+    server = (main.UNSOLVABLE, main.EMPTY_TARGET_GROUP, main.LOCKED_MSG, main.ALREADY_LOCKED, main.NO_PARTICIPANTS,
+              main.EMAIL_NOT_CONFIGURED, main.EMAIL_NO_ADDRESS, main.EMAIL_SEND_FAILED)
     dead = [fragment for fragment in fragments if not any(fragment in text for text in server)]
     assert not dead, f"matchers that can never fire again: {dead}"
     untranslated = [text for text in server if not any(fragment in text for fragment in fragments)]

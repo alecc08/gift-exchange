@@ -210,6 +210,10 @@
       <path d="M4 13a8 8 0 0 1 14.287 -5.181l1.713 1.181"/>
       <path d="M4 18v-5h5"/><path d="M20 6v5h-5"/>
     </symbol>
+    <symbol id="i-mail" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 7a2 2 0 0 1 2 -2h14a2 2 0 0 1 2 2v10a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2z"/>
+      <path d="M3 7l9 6l9 -6"/>
+    </symbol>
   </defs>
 </svg>
 
@@ -412,6 +416,35 @@
             </label>
           </div>
 
+          <div class="mt-7">
+            <p class="label mb-2" x-text="t('rules.email_policy')"></p>
+            <div class="rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3.5 space-y-3.5">
+              <div class="flex flex-wrap items-center gap-3">
+                <span class="text-sm text-pine-800" x-text="t('rules.email_lang')"></span>
+                <select class="field w-36 py-1.5 text-sm" x-model="cfg.email_language" :disabled="locked">
+                  <option value="fr">Français</option>
+                  <option value="en">English</option>
+                </select>
+                <button @click="previewEmail()" :disabled="busy" class="btn btn-quiet px-3 py-1.5 text-xs ml-auto">
+                  <svg class="w-3.5 h-3.5"><use href="#i-mail"/></svg>
+                  <span x-text="t('rules.preview')"></span>
+                </button>
+              </div>
+              <label class="flex items-start gap-3 cursor-pointer">
+                <input type="checkbox" class="mt-0.5 w-4 h-4 accent-pine-700 shrink-0"
+                       x-model="cfg.auto_email_on_draw" :disabled="locked">
+                <span>
+                  <span class="text-sm text-pine-800" x-text="t('rules.autoSend')"></span>
+                  <span class="block text-xs text-pine-600/75 mt-1" x-text="t('rules.autoSendHelp')"></span>
+                </span>
+              </label>
+              <p x-show="!emailEnabled" x-cloak class="text-xs text-gold-600 flex items-center gap-1.5">
+                <svg class="w-3.5 h-3.5 shrink-0"><use href="#i-alert"/></svg>
+                <span x-text="t('rules.email_off')"></span>
+              </p>
+            </div>
+          </div>
+
           <div class="flex flex-wrap items-center gap-3 mt-6">
             <button @click="saveConfig()" :disabled="locked || busy || !rulesDirty" class="btn btn-primary px-5 py-2.5 text-sm">
               <svg class="w-3.5 h-3.5"><use href="#i-check"/></svg>
@@ -469,6 +502,12 @@
                 </template>
               </datalist>
             </div>
+            <div>
+              <label class="label" for="p-email" x-text="t('roster.email')"></label>
+              <input id="p-email" type="text" class="field mt-1.5" x-model.trim="draft.email" :disabled="locked"
+                     :placeholder="t('roster.emailPlaceholder')" :maxlength="limits.email" autocomplete="off"
+                     inputmode="email" spellcheck="false">
+            </div>
             <div class="sm:col-span-2 lg:col-span-2">
               <label class="label" for="p-wish" x-text="t('roster.wishlist')"></label>
               <div class="flex gap-2 mt-1.5">
@@ -504,13 +543,14 @@
                   <th class="py-2.5 px-3 text-left label" x-text="t('roster.role')"></th>
                   <th class="py-2.5 px-3 text-left label" x-text="t('roster.family')"></th>
                   <th class="py-2.5 px-3 text-left label" x-text="t('roster.group')"></th>
+                  <th class="py-2.5 px-3 text-left label" x-text="t('roster.email')"></th>
                   <th class="py-2.5 px-3 text-left label" x-text="t('roster.status')"></th>
                   <th class="py-2.5 pl-3 text-right label" x-text="t('roster.actions')"></th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-black/5">
                 <tr x-show="visibleParticipants.length === 0">
-                  <td colspan="6" class="py-8 text-center text-pine-600/70" x-text="t('roster.empty')"></td>
+                  <td colspan="7" class="py-8 text-center text-pine-600/70" x-text="t('roster.empty')"></td>
                 </tr>
                 <template x-for="p in visibleParticipants" :key="p.id">
                   <tr class="hover:bg-pine-50/40 transition">
@@ -533,6 +573,26 @@
                             x-text="t('roster.noGroup')"></span>
                     </td>
                     <td class="py-3 px-3 align-top">
+                      <!-- Free text on purpose (the organizer asked): a typo is flagged here, refused
+                           only at send time by the server. -->
+                      <input type="text" class="field text-xs py-1.5 px-2 w-44"
+                             x-model.trim="p.email" :disabled="emailBusyId === p.id"
+                             :placeholder="t('roster.emailPlaceholder')" :maxlength="limits.email"
+                             inputmode="email" spellcheck="false" autocomplete="off"
+                             :aria-label="t('roster.email') + ' · ' + p.name"
+                             @change="saveEmail(p)"
+                             :class="p.email && !looksLikeEmail(p.email) ? 'ring-1 ring-gold-500/60' : ''">
+                      <p x-show="p.email && !looksLikeEmail(p.email)" x-cloak
+                         class="text-[11px] text-gold-600 mt-1 max-w-[11rem]" x-text="t('roster.email_weird')"></p>
+                      <p x-show="p.email_sent_at" x-cloak class="mt-1">
+                        <span class="chip bg-pine-100 text-pine-700" :title="formatDate(p.email_sent_at)">
+                          <svg class="w-3 h-3"><use href="#i-mail"/></svg>
+                          <span x-text="t('roster.mailed')"></span>
+                          <span class="font-normal opacity-75" x-text="relative(p.email_sent_at)"></span>
+                        </span>
+                      </p>
+                    </td>
+                    <td class="py-3 px-3 align-top">
                       <span x-show="p.viewed_at" x-cloak class="chip bg-pine-100 text-pine-700" :title="formatDate(p.viewed_at)">
                         <svg class="w-3 h-3"><use href="#i-check"/></svg>
                         <span x-text="t('roster.viewed')"></span>
@@ -544,6 +604,11 @@
                       <button @click="copyLink(p)" :disabled="!p.token" class="btn btn-quiet px-3 py-1.5 text-xs">
                         <svg class="w-3 h-3"><use href="#i-link"/></svg>
                         <span x-text="copiedId === p.id ? t('roster.copied') : t('roster.copy')"></span>
+                      </button>
+                      <button @click="sendEmail(p)" :disabled="busy || !p.email" class="btn btn-quiet px-3 py-1.5 text-xs ml-2"
+                              :title="p.email ? t('roster.sendHelp') : t('roster.sendNeedsEmail')">
+                        <svg class="w-3 h-3"><use href="#i-mail"/></svg>
+                        <span x-text="emailBusyId === p.id ? t('roster.sending') : t('roster.send')"></span>
                       </button>
                       <button x-show="!locked" x-cloak @click="removeParticipant(p)" :aria-label="t('roster.delete') + ' ' + p.name"
                               class="btn btn-danger px-3 py-1.5 text-xs ml-2" x-text="t('roster.delete')"></button>
@@ -593,6 +658,22 @@
             <p class="text-sm text-pine-700" x-text="t('draw.crossingsNone')"></p>
           </div>
 
+          <div class="mt-6 rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3.5">
+            <div class="flex flex-wrap items-center gap-3">
+              <button @click="sendAllEmails()" :disabled="busy || sendingAll || !emailEnabled"
+                      class="btn btn-primary px-5 py-2.5 text-sm">
+                <svg class="w-4 h-4"><use href="#i-mail"/></svg>
+                <span x-text="sendingAll ? t('roster.sending') : t('roster.send_all')"></span>
+              </button>
+              <button @click="previewEmail()" :disabled="busy" class="btn btn-quiet px-3 py-1.5 text-xs"
+                      x-text="t('rules.preview')"></button>
+              <span class="text-xs text-pine-600/75" x-text="t('roster.send_all_help')"></span>
+              <span class="chip" :class="mailedCount ? 'bg-pine-100 text-pine-700' : 'bg-black/5 text-pine-600/70'"
+                    x-text="t('roster.mailed') + ' · ' + mailedCount + '/' + emailReadyCount"></span>
+            </div>
+            <p x-show="!emailEnabled" x-cloak class="text-xs text-gold-600 mt-2" x-text="t('rules.email_off')"></p>
+          </div>
+
           <div x-show="locked" x-cloak class="flex flex-wrap items-center gap-3 mt-6">
             <button @click="resetDraw()" class="btn btn-danger px-5 py-2.5 text-sm" x-text="t('draw.reset')"></button>
             <span class="text-xs text-pine-600/75" x-text="t('draw.resetHint')"></span>
@@ -600,6 +681,25 @@
                   x-text="t('draw.openedCount', { n: openedCount, total: participants.length })"></span>
           </div>
         </section>
+
+        <!-- Email preview modal: srcdoc iframe so the mail's inline styles cannot fight the
+             console's Tailwind, and nothing from the template runs in this document. -->
+        <div x-show="previewOpen" x-cloak x-on:keydown.escape.window="previewOpen = false"
+             class="fixed inset-0 z-50 bg-pine-900/60 backdrop-blur-sm flex items-center justify-center p-4"
+             @click.self="previewOpen = false" role="dialog" aria-modal="true">
+          <div class="bg-white rounded-3xl ring-1 ring-black/10 shadow-lift w-full max-w-2xl max-h-[90vh] flex flex-col pop-in">
+            <div class="flex items-start justify-between gap-4 p-6 pb-4">
+              <div>
+                <p class="label" x-text="t('mail.subject')"></p>
+                <h3 class="font-display text-xl text-pine-800" x-text="previewBody && previewBody.subject ? previewBody.subject : ''"></h3>
+                <p class="text-xs text-pine-600/70 mt-1" x-text="t('mail.preview_sub') + ' ' + t('mail.sample')"></p>
+              </div>
+              <button @click="previewOpen = false" class="btn btn-quiet px-3 py-1.5 text-xs" x-text="t('mail.close')"></button>
+            </div>
+            <iframe x-show="previewBody" x-cloak :srcdoc="previewBody ? previewBody.html : ''" frameborder="0"
+                    class="w-full grow min-h-[420px]" :title="t('mail.preview_title')"></iframe>
+          </div>
+        </div>
       </div>
     </div>
   </template>
@@ -836,6 +936,13 @@ const I18N = {
     'rules.lockedHint': 'Le tirage est verrouillé : recommence-le avant de toucher aux règles.',
     'rules.saved': 'Règles enregistrées.',
 
+    'rules.email_policy': 'Courriels',
+    'rules.email_lang': 'Langue des courriels',
+    'rules.autoSend': 'Envoyer automatiquement au verrouillage',
+    'rules.autoSendHelp': 'Sinon, envoie les liens toi-même avec le bouton du Panel 3.',
+    'rules.email_off': 'L’envoi de courriels n’est pas configuré sur le serveur : les liens restent à envoyer à la main.',
+    'rules.preview': 'Aperçu du courriel',
+
     'roster.kicker': 'Panel 2',
     'roster.title': 'Les participants',
     'roster.name': 'Nom',
@@ -850,6 +957,20 @@ const I18N = {
     'roster.wishlist': 'Liste d’idées (facultatif)',
     'roster.wishlistPlaceholder': 'Ex. des mitaines, un livre…',
     'roster.wishlistIs': 'Ses idées :',
+    'roster.email': 'Courriel',
+    'roster.emailPlaceholder': 'Ex. prenom@exemple.ca',
+    'roster.email_weird': 'Ça ne ressemble pas à une adresse : l’envoi sera refusé.',
+    'roster.email_saved': 'Courriel de {name} enregistré.',
+    'roster.send': 'Envoyer',
+    'roster.sending': 'Envoi…',
+    'roster.sent': 'Lien envoyé à {name}.',
+    'roster.sendHelp': 'Envoyer le lien secret par courriel',
+    'roster.sendNeedsEmail': 'Pas d’adresse courriel pour cette personne',
+    'roster.mailed': 'Lien envoyé',
+    'roster.send_all': 'Envoyer les liens par courriel',
+    'roster.send_all_help': 'Une personne par courriel : personne ne voit le lien d’un autre.',
+    'roster.bulk_done': '{sent} courriel(s) envoyé(s).',
+    'roster.bulk_failed': 'Pas envoyé à : {names}',
     'roster.add': 'Ajouter',
     'roster.status': 'Statut',
     'roster.actions': 'Actions',
@@ -884,6 +1005,14 @@ const I18N = {
     'draw.confirmReset': 'Recommencer le tirage ? Les résultats et les marques « ouvert » s’en vont.',
     'draw.resetDone': 'Tirage recommencé. Tu peux changer les règles et la liste.',
     'draw.forecast': '{gifts} cadeau(s) en tout : {toAdults} pour des adultes, {toChildren} pour des enfants',
+    'draw.auto_email_done': '{sent} courriel(s) envoyé(s) automatiquement.',
+    'draw.auto_email_failed': 'Pas envoyé à : {names}',
+
+    'mail.preview_title': 'Aperçu du courriel',
+    'mail.preview_sub': 'C’est un modèle : rien n’a été envoyé et le lien est un exemple.',
+    'mail.subject': 'Sujet',
+    'mail.close': 'Fermer',
+    'mail.sample': 'Nom d’exemple : « Aline ».',
 
     'p.hello': 'Bonjour',
     'p.pending': 'le tirage n’est pas encore fait. Ça s’en vient, repasse plus tard !',
@@ -921,6 +1050,9 @@ const I18N = {
     'err.rateLimitedTitle': 'Trop de demandes',
     'err.tooLarge': 'C’est trop long pour être enregistré.',
     'err.unconfiguredAdmin': 'Le mot de passe d’administration n’est pas réglé sur le serveur : l’espace organisateur est fermé.',
+    'err.notConfigured': 'L’envoi de courriels n’est pas configuré sur le serveur.',
+    'err.noAddress': 'Cette personne n’a pas d’adresse courriel.',
+    'err.sendFailed': 'Le service de courriel a refusé l’envoi : vérifie l’adresse.',
     'err.unknown': 'Quelque chose a brisé. Réessaie.',
     'err.copy': 'La copie n’a pas fonctionné : souligne et copie le lien à la main.',
     'notice.defaultPassword': 'Le mot de passe d’administration est encore celui de départ : change ADMIN_PASSWORD avant d’envoyer les liens au monde.',
@@ -978,6 +1110,13 @@ const I18N = {
     'rules.lockedHint': 'Draw locked: reset it before editing the rules.',
     'rules.saved': 'Rules saved.',
 
+    'rules.email_policy': 'Emails',
+    'rules.email_lang': 'Email language',
+    'rules.autoSend': 'Send automatically when the draw locks',
+    'rules.autoSendHelp': 'Otherwise send the links yourself with the Panel 3 button.',
+    'rules.email_off': 'Email sending is not configured on the server: links stay manual.',
+    'rules.preview': 'Email preview',
+
     'roster.kicker': 'Panel 2',
     'roster.title': 'Participant roster',
     'roster.name': 'Name',
@@ -992,6 +1131,20 @@ const I18N = {
     'roster.wishlist': 'Wishlist (optional)',
     'roster.wishlistPlaceholder': 'e.g. felt pens, a novel…',
     'roster.wishlistIs': 'Wishlist:',
+    'roster.email': 'Email',
+    'roster.emailPlaceholder': 'e.g. name@example.ca',
+    'roster.email_weird': 'That does not look like an address: sending will refuse it.',
+    'roster.email_saved': 'Saved {name}’s email.',
+    'roster.send': 'Send',
+    'roster.sending': 'Sending…',
+    'roster.sent': 'Link emailed to {name}.',
+    'roster.sendHelp': 'Email the secret link',
+    'roster.sendNeedsEmail': 'No email address for this person',
+    'roster.mailed': 'Link emailed',
+    'roster.send_all': 'Email the links',
+    'roster.send_all_help': 'One email per person: nobody sees anyone else’s link.',
+    'roster.bulk_done': '{sent} email(s) sent.',
+    'roster.bulk_failed': 'Not sent to: {names}',
     'roster.add': 'Add',
     'roster.status': 'Status',
     'roster.actions': 'Actions',
@@ -1026,6 +1179,14 @@ const I18N = {
     'draw.confirmReset': 'Reset the draw? Pairings and “viewed” markers will be cleared.',
     'draw.resetDone': 'Draw reset. Rules and roster are editable again.',
     'draw.forecast': '{gifts} gift(s) in total: {toAdults} to adults, {toChildren} to children',
+    'draw.auto_email_done': '{sent} email(s) sent automatically.',
+    'draw.auto_email_failed': 'Not sent to: {names}',
+
+    'mail.preview_title': 'Email preview',
+    'mail.preview_sub': 'This is a template: nothing was sent and the link is a sample.',
+    'mail.subject': 'Subject',
+    'mail.close': 'Close',
+    'mail.sample': 'Sample name: “Aline”.',
 
     'p.hello': 'Hi',
     'p.pending': 'the draw hasn’t been finalized yet. Check back soon!',
@@ -1063,6 +1224,9 @@ const I18N = {
     'err.rateLimitedTitle': 'Too many requests',
     'err.tooLarge': 'That text is too long to save.',
     'err.unconfiguredAdmin': 'The server has no admin password configured, so the organizer console is closed. Set ADMIN_PASSWORD before continuing.',
+    'err.notConfigured': 'Email sending is not configured on the server.',
+    'err.noAddress': 'This person has no email address.',
+    'err.sendFailed': 'The email provider refused the send: check the address.',
     'err.unknown': 'Something went wrong. Please try again.',
     'err.copy': 'Copy failed: select and copy the link manually.',
     'notice.defaultPassword': 'The admin password is still the default one: change ADMIN_PASSWORD before sending links out.',
@@ -1070,13 +1234,17 @@ const I18N = {
 };
 
 /* ------------------------------- app ------------------------------- */
-const DEFAULT_LIMITS = { name: 80, family_group: 60, group_key: 60, wishlist: 1000, event_title: 120, budget_note: 500, max_quota: 10, default_password: false };
+const DEFAULT_LIMITS = { name: 80, family_group: 60, group_key: 60, wishlist: 1000, email: 320, event_title: 120, budget_note: 500, max_quota: 10, default_password: false };
 
-/* SQLite hands back 0/1 for the group preference and the checkbox wants a real boolean. Coerced on
-   the way in, for both the live copy and the saved copy, otherwise rulesDirty compares true to 1
-   and the panel reads "unsaved changes" forever. */
+/* SQLite hands back 0/1 for the checkbox preferences and the checkboxes want real booleans.
+   Coerced on the way in, for both the live copy and the saved copy, otherwise rulesDirty
+   compares true to 1 and the panel reads "unsaved changes" forever. */
 function asAdminConfig(config) {
-  return { ...config, avoid_same_group: !!config.avoid_same_group };
+  return {
+    ...config,
+    avoid_same_group: !!config.avoid_same_group,
+    auto_email_on_draw: !!config.auto_email_on_draw,
+  };
 }
 
 function giftExchange() {
@@ -1088,11 +1256,12 @@ function giftExchange() {
 
     authed: false, busy: false, loginError: '', pwDraft: '',
     adminError: '', adminErrorTitle: '', securityNotice: '',
-    cfg: { event_title: '', budget_note: '', adult_draws_adult: 1, adult_draws_child: 2, child_draws_adult: 0, child_draws_child: 0, avoid_same_group: true },
+    cfg: { event_title: '', budget_note: '', adult_draws_adult: 1, adult_draws_child: 2, child_draws_adult: 0, child_draws_child: 0, avoid_same_group: true, email_language: 'fr', auto_email_on_draw: false },
     savedCfg: null,
     participants: [], locked: false, groupFilter: '',
-    draft: { name: '', role: 'ADULT', family_group: '', group_key: '', wishlist: '' },
+    draft: { name: '', role: 'ADULT', family_group: '', group_key: '', wishlist: '', email: '' },
     copiedId: null, copiedAll: false,
+    emailEnabled: false, emailBusyId: null, sendingAll: false, previewOpen: false, previewBody: null,
 
     participant: null, data: { status: '', assignments: [] }, pError: false,
     revealed: false, burstOn: false, wishlistDraft: '', savedWishlist: '', savedAt: null,
@@ -1153,6 +1322,15 @@ function giftExchange() {
       return this.participants.filter(p => p.group_key.trim().toLowerCase() === wanted);
     },
     get openedCount() { return this.participants.filter(p => p.viewed_at).length; },
+    /* Delivery counters for the bulk button chip. emailReadyCount counts addresses that would
+       actually pass the server's send-time check — the "12/12" you want before clicking. */
+    get mailedCount() { return this.participants.filter(p => p.email_sent_at).length; },
+    get emailReadyCount() { return this.participants.filter(p => this.looksLikeEmail(p.email)).length; },
+    looksLikeEmail(value) {
+      // Mirrors the server's EMAIL_RE intent: something @ something.tld, no spaces. Deliberately
+      // only used for the soft warning — the server, not this regex, is the authority.
+      return typeof value === 'string' && /^[^@\s]{1,120}@[^\s@]+\.[^\s@]{2,}$/.test(value);
+    },
     get rulesDirty() {
       return this.savedCfg && JSON.stringify(this.savedCfg) !== JSON.stringify(this.cfg);
     },
@@ -1351,6 +1529,11 @@ function giftExchange() {
       if (response.status === 503) return this.t('err.unconfiguredAdmin');
       if (detail.includes('cannot be satisfied')) return this.t('err.unsolvable');
       if (detail.includes('empty target group')) return this.t('err.emptyTarget');
+      // 'not configured on this server' is the email feature's own 503; the admin-password 503 says
+      // 'not configured on the server' — distinct on purpose so the two never mask each other.
+      if (detail.includes('not configured on this server')) return this.t('err.notConfigured');
+      if (detail.includes('no email address')) return this.t('err.noAddress');
+      if (detail.includes('refused the send')) return this.t('err.sendFailed');
       if (detail.includes('locked')) return this.t('err.locked');
       if (detail.includes('no participants')) return this.t('err.noParticipants');
       return detail || this.t(fallbackKey || 'err.unknown');
@@ -1393,6 +1576,7 @@ function giftExchange() {
       this.cfg = asAdminConfig(response.body.config);
       this.savedCfg = { ...this.cfg };
       this.participants = response.body.participants;
+      this.emailEnabled = !!response.body.email_enabled;
       this.locked = !!response.body.config.is_locked;
       if (response.body.config.event_title) document.title = response.body.config.event_title;
     },
@@ -1403,6 +1587,8 @@ function giftExchange() {
       const body = { event_title: this.cfg.event_title, budget_note: this.cfg.budget_note };
       for (const key of numeric) body[key] = Math.max(0, Math.min(this.limits.max_quota, Number(this.cfg[key]) || 0));
       body.avoid_same_group = !!this.cfg.avoid_same_group;
+      body.email_language = this.cfg.email_language === 'en' ? 'en' : 'fr';
+      body.auto_email_on_draw = !!this.cfg.auto_email_on_draw;
       const response = await this.api('/api/admin/config', { method: 'PUT', body: JSON.stringify(body) }, true);
       this.busy = false;
       if (response.ok) this.toast(this.t('rules.saved'));
@@ -1417,7 +1603,7 @@ function giftExchange() {
       this.busy = false;
       if (!response.ok) { this.showAdminError(response); return; }
       this.draft = { name: '', role: this.draft.role, family_group: this.draft.family_group,
-                     group_key: this.draft.group_key, wishlist: '' };
+                     group_key: this.draft.group_key, wishlist: '', email: '' };
       await this.loadState();
       const field = document.getElementById('p-name');
       if (field) field.focus();
@@ -1468,8 +1654,52 @@ function giftExchange() {
       clearTimeout(this._copyAllTimer);
       this._copyAllTimer = setTimeout(() => { this.copiedAll = false; }, 2200);
     },
-    async runDraw() {
-      if (this.warnings.length) return;
+
+    /* ---------- email ---------- */
+    async saveEmail(person) {
+      // Fires on change (blur/Enter), not per keystroke: free text in, normalized by the server.
+      this.clearAdminError();
+      const response = await this.api(`/api/admin/participants/${person.id}`,
+        { method: 'PUT', body: JSON.stringify({ email: person.email || '' }) }, true);
+      if (!response.ok) this.showAdminError(response);
+      else this.toast(this.t('roster.email_saved', { name: person.name }));
+      await this.loadState();
+    },
+    async sendEmail(person) {
+      this.emailBusyId = person.id;
+      this.clearAdminError();
+      const response = await this.api(`/api/admin/participants/${person.id}/email`,
+        { method: 'POST', body: '{}' }, true);
+      this.emailBusyId = null;
+      if (!response.ok) { this.showAdminError(response); await this.loadState(); return; }
+      this.toast(this.t('roster.sent', { name: person.name }));
+      await this.loadState();
+    },
+    async sendAllEmails() {
+      if (!window.confirm(this.t('roster.send_all_help'))) return;
+      this.sendingAll = true;
+      this.clearAdminError();
+      const response = await this.api('/api/admin/emails', { method: 'POST', body: '{}' }, true);
+      this.sendingAll = false;
+      if (!response.ok) { this.showAdminError(response); return; }
+      this.toast(this.t('roster.bulk_done', { sent: response.body.sent }));
+      const failed = (response.body.results || []).filter(r => !r.ok).map(r => r.name);
+      if (failed.length) this.toast(this.t('roster.bulk_failed', { names: failed.join(', ') }), 'warn');
+      await this.loadState();
+    },
+    async previewEmail() {
+      this.clearAdminError();
+      const response = await this.api('/api/admin/emails/preview', {
+        method: 'POST',
+        body: JSON.stringify({ language: this.cfg.email_language,
+                               state: this.locked ? 'ready' : 'pending' }),
+      }, true);
+      if (!response.ok) { this.showAdminError(response); return; }
+      this.previewBody = response.body;
+      this.previewOpen = true;
+    },
+
+    async runDraw() {      if (this.warnings.length) return;
       if (!window.confirm(this.t('draw.confirmGenerate', { gifts: this.totals.gifts }))) return;
       this.busy = true;
       this.clearAdminError();
@@ -1484,6 +1714,12 @@ function giftExchange() {
       this.toast(this.t('draw.done'));
       if (response.body?.same_group_crossings > 0) {
         this.toast(this.t('draw.crossings', { n: response.body.same_group_crossings }), 'warn');
+      }
+      /* The draw locks first and mails after, so these toasts describe mail that really went out. */
+      if (response.body?.emails) {
+        this.toast(this.t('draw.auto_email_done', { sent: response.body.emails.sent }));
+        const failed = (response.body.emails.results || []).filter(r => !r.ok).map(r => r.name);
+        if (failed.length) this.toast(this.t('draw.auto_email_failed', { names: failed.join(', ') }), 'warn');
       }
       await this.loadState();
     },

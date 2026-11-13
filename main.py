@@ -31,6 +31,8 @@ import secrets
 import sqlite3
 import threading
 import time
+import urllib.error
+import urllib.request
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -65,6 +67,16 @@ MAX_GROUP_KEY = 60
 MAX_WISHLIST = 1000
 MAX_EVENT_TITLE = 120
 MAX_BUDGET_NOTE = 500
+MAX_EMAIL = 320
+
+# Deliberately permissive on the local part (unicode allowed) and strict on the shape: the typos a
+# family roster actually produces are a missing @, a stray space and a domain with no dot. Real
+# deliverability is answered by Resend's send response and by bounces, not by a stronger regex.
+EMAIL_RE = re.compile(
+    r"^[^@\s]{1,120}@[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?"
+    r"(\.[A-Za-z0-9]([A-Za-z0-9\-]{0,61}[A-Za-z0-9])?)+$",
+    re.UNICODE,
+)
 
 EMPTY_TARGET_GROUP = "Cannot assign gifts to an empty target group"
 UNSOLVABLE = (
@@ -75,6 +87,9 @@ LOCKED_MSG = "The draw is locked. Reset it before making changes."
 ALREADY_LOCKED = "The draw is already locked. Reset it before drawing again."
 NO_PARTICIPANTS = "Cannot run a draw with no participants"
 TOO_LARGE = "Request body too large"
+EMAIL_NOT_CONFIGURED = "Email sending is not configured on this server"
+EMAIL_NO_ADDRESS = "This participant has no email address"
+EMAIL_SEND_FAILED = "The email provider refused the send"
 
 DEFAULT_ADMIN_PASSWORD = "admin"
 
@@ -121,6 +136,57 @@ API_LIMIT = env_int("API_RATE_LIMIT", 300)           # everything else / minute 
 MAX_BODY_BYTES = env_int("MAX_BODY_BYTES", 16_384)
 SESSION_TTL_SECONDS = env_int("SESSION_TTL_SECONDS", 12 * 3600)
 
+# --------------------------------------------------------------------------- #
+# Email delivery (Resend)
+# --------------------------------------------------------------------------- #
+#
+# Read per call, like db_path(), so tests (and a container restart with new env) are honest.
+# A blank RESEND_API_KEY means the feature is OFF: every send fails closed with a clear message,
+# the same shape as a blank ADMIN_PASSWORD closing the console. The key is read here and in
+# send_email only — it never reaches a log line, an API response or a git-managed file.
+
+def resend_api_key() -> str:
+    return os.environ.get("RESEND_API_KEY", "").strip()
+
+
+def email_enabled() -> bool:
+    return bool(resend_api_key())
+
+
+def resend_from() -> str:
+    return os.environ.get("RESEND_FROM", "").strip()
+
+
+def resend_base_url() -> str:
+    """Resend's API root. RESEND_BASE_URL exists so tests can point sends at a local stub
+    instead of the internet; the default is the real API."""
+    return os.environ.get("RESEND_BASE_URL", "https://api.resend.com").rstrip("/")
+
+
+EMAIL_TIMEOUT = env_int("RESEND_TIMEOUT", 15)
+EMAIL_SEND_LIMIT = env_int("EMAIL_RATE_LIMIT", 60)   # sends / minute / organizer client
+
+# Resend sits behind Cloudflare, and that edge answers `403 / error code: 1010` to Python's
+# default `Python-urllib` agent — measured, not folklore. A real User-Agent is not cosmetic:
+# without it every send fails.
+EMAIL_USER_AGENT = os.environ.get(
+    "RESEND_USER_AGENT", "gift-exchange/1.0 (family gift exchange; tirage-noel.alserv.org)")
+
+
+def _clean_email_value(value: str) -> str:
+    """Normalize one address: trim, lowercase, cap the length. Blank stays blank — the field is
+    opt-out. No format rejection: the organizer asked for free-text, a weird address is not a
+    reason to 422 a parent mid-typing. It stays weird in the cell and the UI flags it softly;
+    deliver_link_email only refuses to spend an API call on it at send time.
+    (Lowercasing is still worth it: no provider people actually use honors case, and
+    "same person, two spellings" is how a relative gets two invites.)"""
+    return value.strip().lower()[:MAX_EMAIL]
+
+
+def _sendable_email(value: str) -> bool:
+    """Does this look like it can carry mail? Checked only at send time — see _clean_email_value."""
+    return bool(EMAIL_RE.match(value or ""))
+
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -132,7 +198,7 @@ SECURITY_HEADERS = {
         "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net 'unsafe-inline' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com; "
-        "img-src 'self' data:; "
+        "img-src 'self' data: https://tirage-noel.alserv.org; "
         "connect-src 'self'; "
         "base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
     ),
@@ -169,6 +235,8 @@ CREATE TABLE IF NOT EXISTS config (
     child_draws_child INTEGER NOT NULL DEFAULT 0,
     budget_note TEXT NOT NULL DEFAULT '',
     avoid_same_group INTEGER NOT NULL DEFAULT 1,
+    email_language TEXT NOT NULL DEFAULT 'fr',
+    auto_email_on_draw INTEGER NOT NULL DEFAULT 0,
     is_locked INTEGER NOT NULL DEFAULT 0
 );
 
@@ -181,8 +249,10 @@ CREATE TABLE IF NOT EXISTS participants (
     family_group TEXT NOT NULL,
     group_key TEXT NOT NULL DEFAULT '',
     wishlist TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
     token TEXT UNIQUE NOT NULL,
-    viewed_at TEXT DEFAULT NULL
+    viewed_at TEXT DEFAULT NULL,
+    email_sent_at TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS assignments (
@@ -204,6 +274,16 @@ MIGRATIONS = (
      "UPDATE participants SET group_key = family_group WHERE group_key = ''"),
     ("config", "avoid_same_group",
      "ALTER TABLE config ADD COLUMN avoid_same_group INTEGER NOT NULL DEFAULT 1", None),
+    # The email round: an address and a delivery stamp per participant, a language and an
+    # auto-send switch per event. No backfill for `email` on purpose — an address nobody typed
+    # is nobody's address, and guessing one is how family feuds start.
+    ("participants", "email", "ALTER TABLE participants ADD COLUMN email TEXT NOT NULL DEFAULT ''", None),
+    ("participants", "email_sent_at",
+     "ALTER TABLE participants ADD COLUMN email_sent_at TEXT DEFAULT NULL", None),
+    ("config", "email_language",
+     "ALTER TABLE config ADD COLUMN email_language TEXT NOT NULL DEFAULT 'fr'", None),
+    ("config", "auto_email_on_draw",
+     "ALTER TABLE config ADD COLUMN auto_email_on_draw INTEGER NOT NULL DEFAULT 0", None),
 )
 
 
@@ -785,6 +865,247 @@ def generate_draw(
     raise HTTPException(status_code=422, detail=UNSOLVABLE)
 
 # --------------------------------------------------------------------------- #
+# Email delivery: transport (Resend) + themed FR/EN templates
+# --------------------------------------------------------------------------- #
+
+
+class EmailSendError(Exception):
+    """One failed send. `status` is Resend's HTTP code; 0 means network failure or the feature
+    being unconfigured, which the caller must not paper over with a generic 500."""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
+def send_email(*, to: str, subject: str, html_body: str, text_body: str, ref_id: str) -> str:
+    """POST /emails on Resend; returns the message id ("" when the response carried none).
+
+    Stdlib urllib on purpose: the image ships fastapi+uvicorn only, and a send is one POST.
+    The API key goes into a header and nowhere else — not into a log line, not into an error
+    message, not into a response.
+    """
+    key, sender = resend_api_key(), resend_from()
+    if not key or not sender:
+        raise EmailSendError(0, EMAIL_NOT_CONFIGURED)
+
+    payload = {
+        "from": sender,
+        "to": [to],
+        "subject": subject,
+        "html": html_body,
+        "text": text_body,
+        # Lets the receiver's mail client thread repeats of the same link together; keyed by
+        # participant id, so a resend after a reset stays recognizably the same thread.
+        "headers": {"X-Entity-Ref-ID": ref_id},
+    }
+    request = urllib.request.Request(
+        resend_base_url() + "/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + key,
+            # See EMAIL_USER_AGENT: Cloudflare 403/1010s the default Python-urllib agent.
+            "User-Agent": EMAIL_USER_AGENT,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=EMAIL_TIMEOUT) as response:
+            body = json.loads(response.read() or b"{}")
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace")[:400]
+        try:
+            detail = json.loads(detail).get("message") or detail
+        except (ValueError, AttributeError):
+            pass
+        raise EmailSendError(error.code, detail or error.reason) from None
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        reason = getattr(error, "reason", None) or error.__class__.__name__
+        raise EmailSendError(0, str(reason)) from None
+    return str(body.get("id") or "")
+
+
+# The mail follows the site: pine header, ivory card, gold rules, Fraunces/Inter with the same
+# serif/sans fallbacks the CSS uses (mail clients rarely have the webfonts, the fallbacks are the
+# plan, not the excuse). Inline styles only — that is the only CSS email clients agree on.
+# Copy rule: plain Quebec French, the words the interface already uses (« liste d'idées »,
+# « qui gâtes », « jamais dans la même famille »), never the caricature version.
+EMAIL_STRINGS = {
+    "fr": {
+        "kicker": "Tirage de Noël · Père Noël secret",
+        "title_ready": "Ton lien secret est prêt",
+        "title_pending": "Ton lien pour le tirage de Noël",
+        "hello": "Salut {name},",
+        "body_ready": ("Le tirage est fait. Ouvre ton lien pour voir qui tu gâtes. "
+                       "Personne d’autre ne le voit, pas même l’organisateur."),
+        "body_pending": ("Le tirage n’a pas encore été fait. Ton lien fonctionne déjà : ajoute ta "
+                         "liste d’idées, et tu verras qui tu gâtes dès que le tirage sera lancé."),
+        "button": "Ouvrir mon lien",
+        "link_note": "Si le bouton ne s’affiche pas, copie ce lien dans ton navigateur :",
+        "privacy": "Garde ton lien pour toi : celui qui le tient voit ton tirage.",
+        "footer": "❄ Échange de cadeaux · tirage automatique, jamais dans la même famille",
+        "subject_ready": "{event} — ton lien secret",
+        "subject_pending": "{event} — ton lien pour l’échange de cadeaux",
+    },
+    "en": {
+        "kicker": "Secret Santa draw · Family gift exchange",
+        "title_ready": "Your secret link is ready",
+        "title_pending": "Your link for the gift exchange",
+        "hello": "Hi {name},",
+        "body_ready": ("The draw is done. Open your link to see who you are shopping for. "
+                       "Nobody else can see it — not even the organizer."),
+        "body_pending": ("The draw has not happened yet. Your link already works: add your "
+                         "wishlist, and you will see who you are shopping for as soon as the "
+                         "organizer runs the draw."),
+        "button": "Open my link",
+        "link_note": "If the button does not show up, copy this link into your browser:",
+        "privacy": "Keep your link to yourself: whoever holds it sees your draw.",
+        "footer": "❄ Gift exchange · automatic draw, never within the same household",
+        "subject_ready": "{event} — your secret link",
+        "subject_pending": "{event} — your link for the gift exchange",
+    },
+}
+
+# Site palette, repeated here because inline email styles cannot read the SPA's Tailwind config.
+_PINE_DARK, _PINE, _PINE_SOFT, _GOLD, _GOLD_SOFT, _IVORY = (
+    "#143c2e", "#2f6b52", "#b3d0c2", "#d4af62", "#e6c98a", "#faf7f2")
+_EMAIL_SANS = "Inter,'Segoe UI',Helvetica,Arial,sans-serif"
+_EMAIL_SERIF = "Fraunces,Georgia,'Times New Roman',serif"
+
+
+def build_email(name: str, event_title: str, link: str, language: str, ready: bool,
+                assets_base: str = "") -> dict[str, str]:
+    """Render one link email. Returns {"subject", "html", "text"}.
+
+    Every interpolated value is escaped before it touches the HTML: names are free text the
+    organizer typed, and a name containing markup would otherwise style — or script — the mail.
+    The email never contains a pairing: only the participant's own link.
+
+    The Christmas art is <img>-referenced from the site's own /static (the flake and the gift
+    strip, same shapes as the interface), never inline <svg>: Gmail strips inline SVG markup but
+    renders SVG files through its image proxy. Without an absolute `assets_base` there is no art
+    at all — a relative src in an email is just a broken image with extra steps.
+    """
+    copy = EMAIL_STRINGS.get((language or "fr").strip().lower(), EMAIL_STRINGS["fr"])
+    title = event_title or (copy["kicker"])
+    subject = copy["subject_ready" if ready else "subject_pending"].format(event=title)
+    hello = copy["hello"].format(name=name)
+    body = copy["body_ready" if ready else "body_pending"]
+    link_note = copy["link_note"]
+    safe_link = html.escape(link, quote=True)
+
+    art = assets_base.rstrip("/")
+    flake = f'<img src="{html.escape(art + "/static/email-flake.svg", quote=True)}" width="56" ' \
+            'height="56" alt="" style="display:block">' if art else ""
+    strip = f'<div style="padding:4px 28px 20px"><img src="\
+{html.escape(art + "/static/email-gift-strip.svg", quote=True)}" width="504" alt="" \
+style="display:block;width:100%;max-width:504px"></div>' if art else ""
+
+    header_text = f"""\
+<div style="font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:{_GOLD}">\
+{html.escape(copy['kicker'])}</div>
+      <div style="font-family:{_EMAIL_SERIF};font-size:26px;line-height:1.25;margin-top:8px">\
+{html.escape(copy['title_ready' if ready else 'title_pending'])}</div>
+      <div style="font-size:13px;color:{_PINE_SOFT};margin-top:6px">{html.escape(title)}</div>"""
+
+    html_body = f"""\
+<div style="background:#eef5f1;padding:28px 16px;font-family:{_EMAIL_SANS}">
+  <div style="max-width:560px;margin:0 auto;background:{_IVORY};border:1px solid #d7e7de;\
+border-radius:20px;overflow:hidden">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" \
+style="background:{_PINE_DARK}">
+      <tr>
+        <td style="padding:24px 12px 24px 28px;color:#ffffff">{header_text}</td>
+        <td width="84" align="right" valign="top" style="padding:20px 22px 0 0">{flake}</td>
+      </tr>
+    </table>
+    <div style="padding:28px;color:#1f5340;font-size:15px;line-height:1.65">
+      <p style="margin:0 0 14px">{html.escape(hello)}</p>
+      <p style="margin:0 0 24px">{html.escape(body)}</p>
+      <p style="margin:0 0 24px">
+        <a href="{safe_link}" style="display:inline-block;background:{_PINE_DARK};color:#ffffff;\
+text-decoration:none;padding:13px 24px;border-radius:999px;font-weight:600;font-size:15px">\
+{html.escape(copy['button'])}</a>
+      </p>
+      <p style="margin:0 0 6px;color:{_PINE};font-size:13px">{html.escape(link_note)}</p>
+      <p style="margin:0;font-size:13px;word-break:break-all;color:{_PINE}">\
+<a href="{safe_link}" style="color:{_PINE}">{html.escape(link)}</a></p>
+    </div>
+    {strip}
+    <div style="padding:16px 28px;border-top:1px solid {_GOLD_SOFT};color:{_PINE};\
+font-size:12px;line-height:1.7">{html.escape(copy['privacy'])}<br>{html.escape(copy['footer'])}</div>
+  </div>
+</div>"""
+
+    text_body = (
+        f"{copy['kicker']}\n\n{copy['title_ready' if ready else 'title_pending']}\n{title}\n\n"
+        f"{hello}\n\n{body}\n\n{copy['button']}: {link}\n\n{link_note}\n{link}\n\n"
+        f"{copy['privacy']}\n{copy['footer']}\n"
+    )
+    return {"subject": subject, "html": html_body, "text": text_body}
+
+
+def deliver_link_email(conn: sqlite3.Connection, participant: dict[str, Any], event_title: str,
+                       language: str, base_url: str) -> dict[str, Any]:
+    """Send one participant their link, and stamp email_sent_at when Resend accepted it.
+
+    Never raises: the caller gets a per-participant result row. A batch of twelve must not die on
+    the fourth address, and the organizer console needs to see exactly which ones failed."""
+    if not email_enabled():
+        return {"id": participant["id"], "name": participant["name"], "ok": False,
+                "reason": EMAIL_NOT_CONFIGURED, "message_id": None}
+    address = (participant.get("email") or "").strip()
+    if not address or not EMAIL_RE.match(address):
+        return {"id": participant["id"], "name": participant["name"], "ok": False,
+                "reason": EMAIL_NO_ADDRESS, "message_id": None}
+
+    ready = bool(conn.execute("SELECT is_locked FROM config WHERE id = 1").fetchone()["is_locked"])
+    link = f"{base_url}/draw/{participant['token']}"
+    content = build_email(participant["name"], event_title, link, language, ready,
+                          assets_base=base_url)
+    try:
+        message_id = send_email(to=address, subject=content["subject"], html_body=content["html"],
+                                text_body=content["text"], ref_id=f"gift-exchange-{participant['id']}")
+    except EmailSendError as error:
+        audit("email_send_failed", participant_id=participant["id"], status=error.status,
+              error=error.message[:120])
+        return {"id": participant["id"], "name": participant["name"], "ok": False,
+                "reason": EMAIL_SEND_FAILED, "message_id": None}
+
+    conn.execute("UPDATE participants SET email_sent_at = ? WHERE id = ?",
+                 (utc_now(), participant["id"]))
+    # The address itself stays out of the log: participant id + provider message id is enough
+    # to trace a send through Resend's own event feed.
+    audit("email_sent", participant_id=participant["id"], message_id=message_id or None)
+    return {"id": participant["id"], "name": participant["name"], "ok": True, "reason": None,
+            "message_id": message_id or None}
+
+
+def _all_participants(conn: sqlite3.Connection) -> list[dict[str, Any]]:
+    return [
+        _participant_dict(row)
+        for row in conn.execute(f"SELECT {PARTICIPANT_COLUMNS} FROM participants ORDER BY id")
+    ]
+
+
+def send_link_emails(conn: sqlite3.Connection, participants: list[dict[str, Any]],
+                     config_row: sqlite3.Row, base_url: str) -> dict[str, Any]:
+    """Send a set of participants their links. One entry per participant in the report — including
+    the ones with no address, so the console can show who was skipped instead of silently omitting
+    an uncle."""
+    results = [deliver_link_email(conn, person, config_row["event_title"],
+                                  config_row["email_language"], base_url)
+               for person in participants]
+    return {
+        "sent": sum(1 for r in results if r["ok"]),
+        "failed": sum(1 for r in results if not r["ok"]),
+        "results": results,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Request models
 # --------------------------------------------------------------------------- #
 
@@ -803,6 +1124,11 @@ class ConfigUpdate(BaseModel):
     # Preference, not an axiom: when on, the solver avoids same-group picks and only uses them if no
     # draw exists otherwise. When off, groups are not consulted at all.
     avoid_same_group: Optional[bool] = None
+    # One language for the whole event, not per participant: at a family event the organizer picks
+    # once. Unknown values are rejected by the Literal, so the template lookup can never miss.
+    email_language: Optional[Literal["fr", "en"]] = None
+    # Off by default: an accidental click should not mail the whole family.
+    auto_email_on_draw: Optional[bool] = None
 
     @field_validator("adult_draws_adult", "adult_draws_child", "child_draws_adult", "child_draws_child")
     @classmethod
@@ -819,6 +1145,8 @@ class ParticipantCreate(BaseModel):
     family_group: str = Field(max_length=MAX_FAMILY_GROUP)
     group_key: str = Field(default="", max_length=MAX_GROUP_KEY)
     wishlist: str = Field(default="", max_length=MAX_WISHLIST)
+    # Optional: plenty of relatives get their link the old way, on the kitchen table.
+    email: str = Field(default="", max_length=MAX_EMAIL)
 
     @field_validator("name", "family_group")
     @classmethod
@@ -835,9 +1163,53 @@ class ParticipantCreate(BaseModel):
         # never binds for them. This one is deliberately NOT _not_blank.
         return value.strip()
 
+    @field_validator("email")
+    @classmethod
+    def _clean_email(cls, value: str) -> str:
+        return _clean_email_value(value)
+
+
+class ParticipantUpdate(BaseModel):
+    """Edit a roster row. Every field is optional; omitted fields keep their value.
+
+    While the draw is locked only `email` is accepted — see update_participant.
+    """
+    name: Optional[str] = Field(default=None, max_length=MAX_NAME)
+    role: Optional[Literal["ADULT", "CHILD"]] = None
+    family_group: Optional[str] = Field(default=None, max_length=MAX_FAMILY_GROUP)
+    group_key: Optional[str] = Field(default=None, max_length=MAX_GROUP_KEY)
+    email: Optional[str] = Field(default=None, max_length=MAX_EMAIL)
+
+    @field_validator("name", "family_group")
+    @classmethod
+    def _not_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("must not be blank")
+        return stripped
+
+    @field_validator("group_key")
+    @classmethod
+    def _strip_group(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else value.strip()
+
+    @field_validator("email")
+    @classmethod
+    def _clean_email(cls, value: Optional[str]) -> Optional[str]:
+        return None if value is None else _clean_email_value(value)
+
 
 class WishlistUpdate(BaseModel):
     wishlist: str = Field(max_length=MAX_WISHLIST)
+
+
+class EmailPreviewRequest(BaseModel):
+    """Sample-render the template. There is deliberately no participant field: the preview is
+    meant to be screenshot-able, and real names should not end up in one."""
+    language: Optional[Literal["fr", "en"]] = None
+    state: Literal["pending", "ready"] = "ready"
 
 
 class LimitsOut(BaseModel):
@@ -845,6 +1217,7 @@ class LimitsOut(BaseModel):
     family_group: int
     group_key: int
     wishlist: int
+    email: int
     event_title: int
     budget_note: int
     max_quota: int
@@ -920,7 +1293,30 @@ def _config_dict(row: sqlite3.Row) -> dict[str, Any]:
         "child_draws_child": row["child_draws_child"],
         "budget_note": row["budget_note"],
         "avoid_same_group": row["avoid_same_group"],
+        "email_language": row["email_language"],
+        "auto_email_on_draw": row["auto_email_on_draw"],
         "is_locked": row["is_locked"],
+    }
+
+
+# One projection for every admin-facing participant read (state, create, update). Three copies of
+# the column list is how group_key nearly drifted when it was added.
+PARTICIPANT_COLUMNS = ("id, name, role, family_group, group_key, wishlist, email, token, "
+                       "viewed_at, email_sent_at")
+
+
+def _participant_dict(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "role": row["role"],
+        "family_group": row["family_group"],
+        "group_key": row["group_key"],
+        "wishlist": row["wishlist"],
+        "email": row["email"],
+        "token": row["token"],
+        "viewed_at": row["viewed_at"],
+        "email_sent_at": row["email_sent_at"],
     }
 
 
@@ -951,6 +1347,7 @@ def limits() -> dict[str, Any]:
         "family_group": MAX_FAMILY_GROUP,
         "group_key": MAX_GROUP_KEY,
         "wishlist": MAX_WISHLIST,
+        "email": MAX_EMAIL,
         "event_title": MAX_EVENT_TITLE,
         "budget_note": MAX_BUDGET_NOTE,
         "max_quota": MAX_DRAW_QUOTA,
@@ -1005,19 +1402,9 @@ def admin_state(
     one of them. That number is what lets the console admit a relaxed draw instead of hiding it.
     """
     participants = [
-        {
-            "id": row["id"],
-            "name": row["name"],
-            "role": row["role"],
-            "family_group": row["family_group"],
-            "group_key": row["group_key"],
-            "wishlist": row["wishlist"],
-            "token": row["token"],
-            "viewed_at": row["viewed_at"],
-        }
+        _participant_dict(row)
         for row in conn.execute(
-            "SELECT id, name, role, family_group, group_key, wishlist, token, viewed_at "
-            "FROM participants ORDER BY id"
+            f"SELECT {PARTICIPANT_COLUMNS} FROM participants ORDER BY id"
         )
     ]
     # A COUNT, never a pairing — and only while the preference is on. The number answers "how far did
@@ -1033,7 +1420,10 @@ def admin_state(
             "WHERE g.group_key <> '' AND lower(trim(g.group_key)) = lower(trim(r.group_key))"
         ).fetchone()[0]
     config["same_group_crossings"] = crossed
-    return {"config": config, "participants": participants}
+    # The console needs to know whether emailing is even possible before offering the buttons —
+    # a deployment without RESEND_API_KEY shows a clear "not configured" note instead of twelve
+    # buttons that all fail.
+    return {"config": config, "participants": participants, "email_enabled": email_enabled()}
 
 
 @app.put("/api/admin/config", dependencies=[Depends(enforce_api_limit)])
@@ -1053,6 +1443,8 @@ def update_config(
         "child_draws_child",
         "budget_note",
         "avoid_same_group",
+        "email_language",
+        "auto_email_on_draw",
     )
     updates = {key: value for key, value in updates.items() if key in allowed}
     if updates:
@@ -1071,35 +1463,68 @@ def add_participant(
 ) -> dict[str, Any]:
     _reject_if_locked(_load_config(conn))
     cursor = conn.execute(
-        "INSERT INTO participants (name, role, family_group, group_key, wishlist, token) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO participants (name, role, family_group, group_key, wishlist, email, token) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
         (
             payload.name,
             payload.role,
             payload.family_group,
             payload.group_key,
             payload.wishlist,
+            payload.email,
             str(uuid.uuid4()),
         ),
     )
     row = conn.execute(
-        "SELECT id, name, role, family_group, group_key, wishlist, token, viewed_at "
-        "FROM participants WHERE id = ?",
+        f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE id = ?",
         (cursor.lastrowid,),
     ).fetchone()
-    return {
-        "status": "OK",
-        "participant": {
-            "id": row["id"],
-            "name": row["name"],
-            "role": row["role"],
-            "family_group": row["family_group"],
-            "group_key": row["group_key"],
-            "wishlist": row["wishlist"],
-            "token": row["token"],
-            "viewed_at": row["viewed_at"],
-        },
-    }
+    return {"status": "OK", "participant": _participant_dict(row)}
+
+
+@app.put("/api/admin/participants/{participant_id}", dependencies=[Depends(enforce_api_limit)])
+def update_participant(
+    participant_id: int,
+    payload: ParticipantUpdate,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Fix a roster row without delete-and-recreate — which would burn the participant's token.
+
+    The locked case is the one this endpoint exists for: the draw has run, an email comes back
+    wrong, and the address is the only thing that can still be fixed. Changing name/role/group
+    while locked would rewrite what an existing pairing means, so those stay locked too, with
+    LOCKED_MSG the UI already explains. Editing an email clears email_sent_at: a correction means
+    the old send went somewhere else.
+    """
+    config_row = _load_config(conn)
+    if config_row["is_locked"]:
+        updates = payload.model_dump(exclude_unset=True, exclude_none=True)
+        if set(updates) - {"email"}:
+            raise HTTPException(status_code=400, detail=LOCKED_MSG)
+    else:
+        updates = {key: value for key, value in
+                   payload.model_dump(exclude_unset=True).items() if value is not None}
+        # group_key may be cleared deliberately; role/name/family_group cannot, see ParticipantUpdate.
+    if not updates:
+        raise HTTPException(status_code=422, detail="No fields to update")
+
+    existed = conn.execute("SELECT id, email FROM participants WHERE id = ?",
+                           (participant_id,)).fetchone()
+    if existed is None:
+        raise HTTPException(status_code=404, detail="Participant not found")
+
+    clauses = ", ".join(f"{key} = ?" for key in updates)
+    values = list(updates.values())
+    if "email" in updates and updates["email"] != (existed["email"] or ""):
+        clauses += ", email_sent_at = NULL"
+    conn.execute(f"UPDATE participants SET {clauses} WHERE id = ?", values + [participant_id])
+    audit("participant_updated", ip=client_ip(request), participant_id=participant_id,
+          fields=sorted(updates))
+    row = conn.execute(f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE id = ?",
+                       (participant_id,)).fetchone()
+    return {"status": "OK", "participant": _participant_dict(row)}
 
 
 @app.delete("/api/admin/participants/{participant_id}", dependencies=[Depends(enforce_api_limit)])
@@ -1149,8 +1574,23 @@ def run_draw(
             conn.execute("ROLLBACK")
             raise
     audit("draw_locked", ip=client_ip(request), assignments=len(pairs), same_group_crossings=crossed)
-    return {"status": "OK", "assignments_created": len(pairs), "same_group_crossings": crossed,
-            "is_locked": 1}
+
+    # Opt-in auto-delivery (the config checkbox). It runs strictly after the lock committed: a
+    # slow or dead Resend can never leave a half-drawn event, and a failed send never undoes the
+    # draw — the console response reports exactly who did not get mail.
+    emailed = None
+    if config_row["auto_email_on_draw"]:
+        base_url = public_base_url(request)
+        with_email = [p for p in _all_participants(conn) if p["email"]]
+        emailed = send_link_emails(conn, with_email, config_row, base_url)
+        audit("auto_email_on_draw", ip=client_ip(request), sent=emailed["sent"],
+              failed=emailed["failed"])
+
+    response = {"status": "OK", "assignments_created": len(pairs), "same_group_crossings": crossed,
+                "is_locked": 1}
+    if emailed is not None:
+        response["emails"] = emailed
+    return response
 
 
 @app.post("/api/admin/reset", dependencies=[Depends(enforce_api_limit)])
@@ -1163,7 +1603,10 @@ def reset_draw(
         conn.execute("BEGIN IMMEDIATE")
         try:
             conn.execute("DELETE FROM assignments")
-            conn.execute("UPDATE participants SET viewed_at = NULL")
+            # Both stamps describe the current draw, not the person: a re-draw means the links
+            # reveal something new AND the old mail quotes an obsolete draw. The addresses
+            # themselves survive — only the "this draw went out" stamps reset.
+            conn.execute("UPDATE participants SET viewed_at = NULL, email_sent_at = NULL")
             conn.execute("UPDATE config SET is_locked = 0 WHERE id = 1")
             conn.execute("COMMIT")
         except Exception:
@@ -1171,6 +1614,88 @@ def reset_draw(
             raise
     audit("draw_reset", ip=client_ip(request))
     return {"status": "OK"}
+
+
+# --------------------------------------------------------------------------- #
+# Email endpoints (admin) — send one, send all, preview the template
+# --------------------------------------------------------------------------- #
+
+
+def _email_rate_check(request: Request, attempts: int) -> None:
+    """Sends are the one admin action with a blast radius (twelve relatives, one mis-click),
+    so they get their own budget on top of the general API limit."""
+    ip = client_ip(request)
+    for _ in range(attempts):
+        allowed, retry = LIMITER.hit("email", ip, EMAIL_SEND_LIMIT)
+        if not allowed:
+            audit("email_rate_limited", ip=ip)
+            raise _too_many(retry)
+
+
+def _send_rows_or_422(request: Request, conn: sqlite3.Connection, people: list[dict[str, Any]],
+                      config_row: sqlite3.Row) -> dict[str, Any]:
+    _email_rate_check(request, max(1, sum(1 for p in people if p["email"])))
+    if not people:
+        raise HTTPException(status_code=422, detail=EMAIL_NO_ADDRESS)
+    if not email_enabled():
+        raise HTTPException(status_code=503, detail=EMAIL_NOT_CONFIGURED)
+    return send_link_emails(conn, people, config_row, public_base_url(request))
+
+
+@app.post("/api/admin/participants/{participant_id}/email", dependencies=[Depends(enforce_api_limit)])
+def email_participant_link(
+    participant_id: int,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Send one participant their link. Works locked or unlocked: before the draw the mail says
+    "the draw has not happened yet, here is your link to add ideas" — the token is already
+    theirs to keep."""
+    row = conn.execute(f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE id = ?",
+                       (participant_id,)).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Participant not found")
+    result = _send_rows_or_422(request, conn, [_participant_dict(row)], _load_config(conn))
+    outcome = result["results"][0]
+    if not outcome["ok"]:
+        code = 503 if outcome["reason"] == EMAIL_NOT_CONFIGURED else 422
+        raise HTTPException(status_code=code, detail=outcome["reason"])
+    return {"status": "OK", "sent": outcome}
+
+
+@app.post("/api/admin/emails", dependencies=[Depends(enforce_api_limit)])
+def email_all_links(
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Send every participant who has an address. Participants with no address are skipped and
+    listed, not failed: the point is a per-row report the console can show, not one error that
+    hides who got mail."""
+    report = _send_rows_or_422(request, conn, _all_participants(conn), _load_config(conn))
+    audit("emails_bulk", ip=client_ip(request), sent=report["sent"], failed=report["failed"])
+    return {"status": "OK", **report}
+
+
+@app.post("/api/admin/emails/preview", dependencies=[Depends(enforce_api_limit)])
+def email_preview(
+    payload: EmailPreviewRequest,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Render the template with a sample name and a sample link. No participant data goes into
+    the response, so the preview is safe to screenshot and cannot leak a roster."""
+    config_row = _load_config(conn)
+    language = payload.language or config_row["email_language"]
+    base_url = public_base_url(request) or "https://tirage-noel.alserv.org"
+    link = f"{base_url}/draw/00000000-0000-0000-0000-000000000000"
+    content = build_email("Aline", config_row["event_title"], link, language,
+                          ready=payload.state == "ready", assets_base=base_url)
+    audit("email_previewed", ip=client_ip(request), language=language, state=payload.state)
+    return {"status": "OK", "language": language, "state": payload.state,
+            "email_enabled": email_enabled(), **content}
 
 
 # --------------------------------------------------------------------------- #
