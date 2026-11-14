@@ -559,11 +559,14 @@ What makes "two locales" a fact rather than a claim:
 * Labels are collision-checked: two different controls may not answer to one label. That guard paid for
   itself during a rename, when the sign-out button briefly carried the draw button's label and a capture
   script clicked the wrong control.
-* One honest gap: the card's title is fixed French in both locales — `SHARE_TITLE` is
+* One honest gap, narrowed: the share card's title is fixed French in both locales — `SHARE_TITLE` is
   "Échange de cadeaux · Père Noël secret", and *Père Noël secret* is what the family calls the game.
-  The same name opens the browser tab before the SPA switches to the localized brand, and it is the
-  kicker above the greeting in the mail. The card itself is generic — no name, no event title, no
-  token — so this is cosmetic, not a leak.
+  That string is also the `<title>` the server sends, so it is what a browser tab shows before the SPA
+  runs; the SPA replaces it immediately — the localized brand on the family's landing card, the event
+  title wherever an event has been loaded — and the language switch moves it with the rest of the
+  copy. The mail kicker is written twice too: "Tirage de Noël · Père Noël secret" in French, "Secret
+  Santa draw · Family gift exchange" in English. What stays fixed is only the card, which is generic —
+  no name, no event title, no token — so this is cosmetic, not a leak.
 
 And how the copy sounds, since it is the part a family actually reads: the French is ordinary Québec
 French rather than the stage version — the words people really use for the game (*piger*, *gâter*) and

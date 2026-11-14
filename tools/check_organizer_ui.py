@@ -287,8 +287,11 @@ def main() -> int:
             page.wait_for_timeout(200)
             assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z_.]+/").count(), \
                 f"{path}: a raw i18n key on the family's page in English"
+            title_en = page.title()
             page.get_by_role("button", name="FR", exact=True).click()
             page.wait_for_timeout(200)
+            assert title_en and page.title() != title_en, \
+                f"{path}: the tab title ignores the language switch ({title_en!r} / {page.title()!r})"
         browser.close()
 
     for problem in dict.fromkeys(problems.problems):

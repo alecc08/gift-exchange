@@ -1751,6 +1751,11 @@ function giftExchange() {
           await this.enterAdmin();
         }
       }
+      // The <title> the server sends is the generic share card, which is the right thing before this
+      // script knows anything and the wrong thing afterwards: on the family's landing card an English
+      // reader should not be left holding a French tab. The other two screens name the tab after the
+      // event once the event is loaded; this one has no event, so it takes the localized brand.
+      if (this.mode === 'landing') document.title = this.t('brand');
     },
 
     /* Where an organizer lands: the draw in the URL if it still exists, otherwise the list. A
@@ -1769,6 +1774,7 @@ function giftExchange() {
       this.lang = lang;
       localStorage.setItem('ge_lang', lang);
       document.documentElement.lang = this.locale();
+      if (this.mode === 'landing') document.title = this.t('brand');
     },
 
     async loadLimits() {

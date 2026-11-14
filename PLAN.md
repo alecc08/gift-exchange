@@ -1241,6 +1241,12 @@ against the code. What that found, in the order that mattered:
   throttle but not `PUBLIC_BASE_URL`, the one variable that decides whether a mailed link opens for
   anybody, nor `DB_PATH`; the README's tuning table was missing the same variables plus `RESEND_FROM`,
   `RESEND_TIMEOUT`, `RESEND_USER_AGENT` and the mail knobs that only existed inside prose.
+* **The landing card's tab title ignored the language switch.** The server sends `SHARE_TITLE` as the
+  `<title>`, which is right before the SPA knows anything and wrong after: an English reader on the
+  family's landing card was left holding a French tab, because only the participant and console paths
+  renamed it (after an event title). The landing screen now takes the localized brand, in boot and on
+  every language switch, and `tools/check_organizer_ui.py` asserts the title actually moves — copy
+  changes, the tab title following it should not.
 * **Punctuation.** One hundred and thirty quoted phrases across seven files used guillemets — the
   plan mostly, five comments in `main.py`, six UI strings (`Tirage « {title} » créé.`), and the
   reasons list in the French-style guard. They are gone: the repository quotes with straight `"`, the
