@@ -68,6 +68,9 @@ MAX_NAME = 80
 MAX_FAMILY_GROUP = 60
 MAX_GROUP_KEY = 60
 MAX_WISHLIST = 1000
+# A coordination note between gift givers ("je prends le jeu de société"), not an essay: the shorter
+# the cap, the more likely a relative actually reads all of them.
+MAX_NOTE = 300
 MAX_EVENT_TITLE = 120
 MAX_BUDGET_NOTE = 500
 MAX_EMAIL = 320
@@ -92,6 +95,10 @@ NO_PARTICIPANTS = "Cannot run a draw with no participants"
 DRAW_NOT_FOUND = "This draw does not exist"
 DRAW_ID_REQUIRED = "No draw selected"
 DRAW_NONE = "There is no draw yet"
+# Coordination notes exist inside a result: nobody can say what they are buying for a person until
+# the draw has named that person as their pick.
+NOTE_TOO_EARLY = "Notes open once the draw has been run"
+NOTE_NOT_A_PICK = "That note handle is not one of your picks"
 TOO_LARGE = "Request body too large"
 EMAIL_NOT_CONFIGURED = "Email sending is not configured on this server"
 EMAIL_NO_ADDRESS = "This participant has no email address"
@@ -418,9 +425,31 @@ CREATE TABLE IF NOT EXISTS assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     giver_id INTEGER NOT NULL,
     receiver_id INTEGER NOT NULL,
+    -- Which pick a note was written about, without handing a participant a participant id. It is a
+    -- lookup handle, not a credential: it only resolves through *your own* assignment row (see
+    -- save_note), so a note key leaked to a cousin buys them nothing. Minted per draw with the
+    -- pairings, which is what makes it expire: re-draw, new keys, old notes gone.
+    note_key TEXT,
     FOREIGN KEY (giver_id) REFERENCES participants(id) ON DELETE CASCADE,
     FOREIGN KEY (receiver_id) REFERENCES participants(id) ON DELETE CASCADE,
     UNIQUE(giver_id, receiver_id)
+);
+
+-- One coordination note per giver per receiver, anonymous to whoever reads it.
+--
+-- The note hangs off the two people, not off the pairing row, because the reason it exists is that
+-- several givers can land on the same person: ten adults each drawing two children, ten children,
+-- means a child gets gift money from three households who have no way of talking to each other
+-- except through the draw. "Je prends le livre de cuisine" written once has to reach the other two.
+-- So the row is (author, receiver), and `author_id` is stored for exactly two jobs: the one-note
+-- uniqueness, and letting the author overwrite their own line. No read path names the author.
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    receiver_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    UNIQUE(author_id, receiver_id)
 );
 """
 
@@ -467,6 +496,15 @@ MIGRATIONS = (
     # NULL on a draw that was already locked before this column existed: the console then says
     # "verrouillé" without inventing a date it never recorded.
     ("draws", "drawn_at", "ALTER TABLE draws ADD COLUMN drawn_at TEXT DEFAULT NULL", None),
+    # The handle a coordination note is written against (see the `notes` table). Pairings that already
+    # exist on a live database get a key here, so a family mid-draw gets the feature without a
+    # re-draw — their links, results and "already opened" stamps all stay exactly as they were.
+    # SQLite cannot attach UNIQUE in an ALTER, so the uniqueness is an index in _ensure_indexes,
+    # which runs after the backfill. The backfilled shape is plain hex rather than a uuid because
+    # `randomblob` is what SQLite has on hand and nothing in the app parses this field's shape —
+    # new pairings mint uuid4s like every other token in the system.
+    ("assignments", "note_key", "ALTER TABLE assignments ADD COLUMN note_key TEXT",
+     "UPDATE assignments SET note_key = lower(hex(randomblob(16))) WHERE note_key IS NULL"),
 )
 
 
@@ -527,6 +565,10 @@ def _ensure_default_draw(conn: sqlite3.Connection) -> None:
 def _ensure_indexes(conn: sqlite3.Connection) -> None:
     """Indexes that depend on migrated columns have to be created after the migrations."""
     conn.execute("CREATE INDEX IF NOT EXISTS participants_draw_id ON participants(draw_id)")
+    # The note handle is a lookup key on a write path, so it has to be unique: two picks answering the
+    # same handle would make "which pick did this cousin mean" a coin flip. Has to be an index rather
+    # than a column constraint, because SQLite will not add a UNIQUE column by ALTER.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS assignments_note_key ON assignments(note_key)")
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
@@ -1680,6 +1722,29 @@ class WishlistUpdate(BaseModel):
     wishlist: str = Field(max_length=MAX_WISHLIST)
 
 
+class NoteUpdate(BaseModel):
+    """One gift giver's note about one of their picks.
+
+    `to` is the note handle the participant payload carried on that pick — never a participant id,
+    because the participant API has never handed out ids and there is no reason to start. Its shape is
+    not validated on purpose: it is used only as a bound parameter in a lookup that also names the
+    caller, so a wrong or borrowed handle answers 404 the same way a typo would, and inventing a
+    pattern for it would mean legacy backfilled handles (plain hex, see MIGRATIONS) failing their own
+    feature after an upgrade.
+
+    Empty `text` is not "a blank note": it clears the note, which is what a relative pressing
+    "Effacer" means. It has no default on purpose — a client that forgets the field must not be able
+    to erase somebody's note by accident, so "clear" has to be said out loud.
+    """
+    to: str = Field(min_length=1, max_length=64)
+    text: str = Field(max_length=MAX_NOTE)
+
+    @field_validator("to", "text")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        return value.strip()
+
+
 class EmailPreviewRequest(BaseModel):
     """Sample-render the template. There is deliberately no participant field: the preview is
     meant to be screenshot-able, and real names should not end up in one. `links` picks the
@@ -1876,13 +1941,26 @@ def draw_transaction(conn: sqlite3.Connection):
             raise
 
 
-def _clear_assignments(conn: sqlite3.Connection, draw_id: int) -> int:
-    """Delete one draw's pairings and say how many went.
+def _clear_draw_results(conn: sqlite3.Connection, draw_id: int) -> int:
+    """Delete one draw's pairings, and the coordination notes written about them.
 
     `assignments` has no draw_id column — a pairing hangs off two participant ids — so the scope is a
     subquery, and it is not cosmetic: re-drawing the office exchange must not erase the family's
     results, and a reset on one draw must not clear another one's delivery stamps.
+
+    The notes go with the pairings on purpose, and it is a privacy call rather than tidy-ups: every
+    note is "here is what I am buying for this person", and the only people it was ever written for
+    are the co-givers of a draw that no longer exists. Keeping them through a reset would also break
+    the handle — the new pairings carry fresh note keys, so the old notes would be attached to nobody.
+
+    No transaction of its own: all three callers already hold one, and a nested BEGIN in SQLite is an
+    error, not a no-op.
     """
+    conn.execute(
+        "DELETE FROM notes WHERE author_id IN (SELECT id FROM participants WHERE draw_id = ?) "
+        "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
+        (draw_id, draw_id),
+    )
     return conn.execute(
         "DELETE FROM assignments WHERE giver_id IN "
         "(SELECT id FROM participants WHERE draw_id = ?) "
@@ -1927,6 +2005,7 @@ def limits() -> dict[str, Any]:
         "family_group": MAX_FAMILY_GROUP,
         "group_key": MAX_GROUP_KEY,
         "wishlist": MAX_WISHLIST,
+        "note": MAX_NOTE,
         "email": MAX_EMAIL,
         "event_title": MAX_EVENT_TITLE,
         "budget_note": MAX_BUDGET_NOTE,
@@ -2059,7 +2138,10 @@ def create_draw(
     rows get brand new tokens and no `viewed_at` / `email_sent_at`, because a link that already went
     out to last year's pairing must not silently become this year's credential. Two draws sharing a
     token would also break the one property the participant URL relies on: whoever holds a token
-    holds exactly one draw.
+    holds exactly one draw. The same reasoning keeps the coordination notes out of the copy: they are
+    new rows with new ids, so nothing points at them, and last year's "le livre de cuisine est pris"
+    is not this year's conversation. That is a consequence of how the rows are written, so
+    tests/test_notes.py pins it rather than trusting it.
     """
     created = conn.execute(
         "INSERT INTO draws (event_title, budget_note, created_at) VALUES (?, ?, ?)",
@@ -2104,7 +2186,7 @@ def delete_draw(
     row = _draw_row(conn, draw_id)
     _reject_if_locked(row)
     with draw_transaction(conn):
-        _clear_assignments(conn, draw_id)
+        _clear_draw_results(conn, draw_id)
         gone = conn.execute("DELETE FROM participants WHERE draw_id = ?", (draw_id,)).rowcount
         conn.execute("DELETE FROM draws WHERE id = ?", (draw_id,))
     audit("draw_deleted", ip=client_ip(request), draw_id=draw_id, participants_removed=gone)
@@ -2236,8 +2318,13 @@ def run_draw(
     pairs, crossed = generate_draw(_config_dict(config_row), participants)
 
     with draw_transaction(conn):
-        _clear_assignments(conn, target)
-        conn.executemany("INSERT INTO assignments (giver_id, receiver_id) VALUES (?, ?)", pairs)
+        _clear_draw_results(conn, target)
+        # A note handle per pairing: uuid4 like every other token here, so a note key is redacted by
+        # `redacted_path` if it ever shows up in a path, and it cannot be guessed.
+        conn.executemany(
+            "INSERT INTO assignments (giver_id, receiver_id, note_key) VALUES (?, ?, ?)",
+            [(giver, receiver, str(uuid.uuid4())) for giver, receiver in pairs],
+        )
         conn.execute("UPDATE draws SET is_locked = 1, drawn_at = ? WHERE id = ?", (utc_now(), target))
     audit("draw_locked", ip=client_ip(request), draw_id=target, assignments=len(pairs),
           same_group_crossings=crossed)
@@ -2277,7 +2364,7 @@ def reset_draw(
 ) -> dict[str, Any]:
     target = select_draw_id(conn, draw_id)
     with draw_transaction(conn):
-        _clear_assignments(conn, target)
+        _clear_draw_results(conn, target)
         # Both stamps describe the current draw, not the person: a re-draw means the links reveal
         # something new AND the old mail quotes an obsolete draw. The addresses themselves survive —
         # only the "this draw went out" stamps reset.
@@ -2419,6 +2506,45 @@ def _participant_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row:
     return row
 
 
+def _notes_map(conn: sqlite3.Connection, receiver_ids: list[int],
+               reader_id: int) -> dict[int, list[dict[str, Any]]]:
+    """Every note about these people, as a participant may see them.
+
+    One query, keyed by receiver, so a giver with three picks pays one read instead of three. What
+    comes out is deliberately two fields: the text and whether the reader wrote it. Not the author's
+    name, not their id, not a timestamp — the point of the note is that a household can say "the
+    gift card is mine" without that being traceable to a household, and a timestamp would let two
+    co-givers work out who is who from the order the notes arrived in.
+    """
+    if not receiver_ids:
+        return {}
+    marks = ", ".join("?" * len(receiver_ids))
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for note in conn.execute(
+            f"SELECT receiver_id, author_id, text FROM notes WHERE receiver_id IN ({marks}) "
+            "ORDER BY id", receiver_ids):
+        grouped.setdefault(note["receiver_id"], []).append(
+            {"text": note["text"], "mine": note["author_id"] == reader_id}
+        )
+    return grouped
+
+
+def _giver_counts(conn: sqlite3.Connection, receiver_ids: list[int]) -> dict[int, int]:
+    """How many people each of these participants is a gift for.
+
+    A count, never a list: the page has to know whether the note box is worth showing at all — one
+    giver means nobody would ever read what was written there — and the family does not need to learn
+    who the other households are. It is the only piece of draw structure the participant page is
+    given, and a number says nothing about who pige qui.
+    """
+    if not receiver_ids:
+        return {}
+    marks = ", ".join("?" * len(receiver_ids))
+    return {row["receiver_id"]: row["givers"] for row in conn.execute(
+        f"SELECT receiver_id, COUNT(*) AS givers FROM assignments "
+        f"WHERE receiver_id IN ({marks}) GROUP BY receiver_id", receiver_ids)}
+
+
 @app.get("/api/draw/{token}", dependencies=[Depends(enforce_draw_limit)])
 def get_draw(
     token: str,
@@ -2453,11 +2579,15 @@ def get_draw(
         audit("link_opened", participant_id=participant["id"])
 
     rows = conn.execute(
-        "SELECT p.name, p.role, p.wishlist FROM assignments a "
+        "SELECT p.id AS receiver_id, p.name, p.role, p.wishlist, a.note_key FROM assignments a "
         "JOIN participants p ON p.id = a.receiver_id "
         "WHERE a.giver_id = ? ORDER BY p.id",
         (participant["id"],),
     ).fetchall()
+    receiver_ids = [row["receiver_id"] for row in rows]
+    notes = _notes_map(conn, receiver_ids, participant["id"])
+    # Who else is giving to each of my picks — see _giver_counts for why that is a number.
+    givers = _giver_counts(conn, receiver_ids)
     return {
         "status": "READY",
         "event_title": config["event_title"],
@@ -2468,10 +2598,74 @@ def get_draw(
             "wishlist": participant["wishlist"],
         },
         "assignments": [
-            {"name": row["name"], "role": row["role"], "wishlist": row["wishlist"]}
+            {
+                "name": row["name"],
+                "role": row["role"],
+                "wishlist": row["wishlist"],
+                # The handle this pick's note is written against. Not an id, and not a credential:
+                # save_note resolves it only among the caller's own pairings.
+                "note_key": row["note_key"],
+                "co_givers": givers.get(row["receiver_id"], 1),
+                "notes": notes.get(row["receiver_id"], []),
+            }
             for row in rows
         ],
     }
+
+
+@app.put("/api/draw/{token}/note", dependencies=[Depends(enforce_draw_limit)])
+def save_note(
+    token: str,
+    payload: NoteUpdate,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Write (or clear) this participant's one note about one of their picks.
+
+    Three checks, in this order, and each one is a different mistake:
+
+    * the draw has to have run — a note is "what I am buying for the person I got", and before the
+      draw there is no person they got;
+    * the handle has to resolve through *this* participant's pairing, which is what stops a note being
+      written about anybody in the family, and stops one cousin submitting another cousin's handle:
+      the handle is looked up with `giver_id = me` in the WHERE clause, so a key from someone else's
+      card is simply not found;
+    * an empty text deletes the note rather than leaving a blank line on a relative's card.
+
+    The response is the note list for that person, so the page can repaint without a round trip. The
+    other household sees it on their next load; there is no push, and a family coordinating gift money
+    over an afternoon will reload. Nothing about the note's author is ever returned, so this endpoint
+    cannot be used to ask "did Mario write something?" — the answer is always the same anonymous list.
+    """
+    participant = _participant_by_token(conn, token)
+    if not conn.execute("SELECT is_locked FROM draws WHERE id = ?",
+                        (participant["draw_id"],)).fetchone()["is_locked"]:
+        raise HTTPException(status_code=409, detail=NOTE_TOO_EARLY)
+
+    picked = conn.execute(
+        "SELECT receiver_id FROM assignments WHERE note_key = ? AND giver_id = ?",
+        (payload.to, participant["id"]),
+    ).fetchone()
+    if picked is None:
+        raise HTTPException(status_code=404, detail=NOTE_NOT_A_PICK)
+
+    if payload.text:
+        conn.execute(
+            "INSERT INTO notes (author_id, receiver_id, text, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(author_id, receiver_id) DO UPDATE SET text = excluded.text, "
+            "updated_at = excluded.updated_at",
+            (participant["id"], picked["receiver_id"], payload.text, utc_now()),
+        )
+    else:
+        conn.execute("DELETE FROM notes WHERE author_id = ? AND receiver_id = ?",
+                     (participant["id"], picked["receiver_id"]))
+    # The note's text never reaches the log: it is family conversation, and the journal on a real
+    # host is readable by anyone who can read the database.
+    audit("note_saved", ip=client_ip(request), participant_id=participant["id"],
+          draw_id=participant["draw_id"], cleared=not payload.text)
+    return {"status": "OK",
+            "notes": _notes_map(conn, [picked["receiver_id"]], participant["id"])
+                     .get(picked["receiver_id"], [])}
 
 
 @app.put("/api/draw/{token}/wishlist", dependencies=[Depends(enforce_draw_limit)])

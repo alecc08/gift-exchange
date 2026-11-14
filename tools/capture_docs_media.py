@@ -97,6 +97,68 @@ def open_link(token):
         return response.status
 
 
+def participant_view(token):
+    """What a relative sees: their picks, wishlists and the notes the other givers left."""
+    with urllib.request.urlopen(f"{BASE}/api/draw/{token}") as response:
+        return json.loads(response.read())
+
+
+def participant_note(token, handle, text):
+    """Write one giver's note about one of their picks (no admin token involved: their link is the key)."""
+    return admin_api(f"/api/draw/{token}/note", {}, "PUT", {"to": handle, "text": text})
+
+
+def seed_notes(draw_id):
+    """Two households leave each other a note about the same child, for 24-co-giver-notes.png.
+
+    The pairing is the engine's, so the shared person is found the way a relative could find it: read
+    every participant's own payload and look for a name that shows up on two different cards. Returns
+    (token, person_name) for the card to shoot, or None when nobody drew the same person — in which
+    case the still would document a feature that is not in use, so it is skipped rather than staged.
+
+    `draw_id` is explicit because the run has a second draw by this point, and an unscoped admin call
+    would be the server refusing to guess which family is meant.
+    """
+    auth = bearer_headers()
+    people = admin_api(f"/api/admin/state?draw_id={draw_id}", auth)["participants"]
+    views = {person["token"]: participant_view(person["token"]) for person in people}
+    givers: dict[str, list[dict]] = {}
+    for person in people:
+        for card in views[person["token"]].get("assignments", []):
+            givers.setdefault(card["name"], []).append(person)
+    shared = [(name, group) for name, group in givers.items() if len(group) >= 2]
+    if not shared:
+        print("  notes: nobody drew the same person — 24-co-giver-notes.png skipped")
+        return None
+    # A child with the most households on it: that is the case the feature exists for.
+    name, group = max(shared, key=lambda item: (len(item[1]), item[0]))
+    texts = ("Je prends le livre de cuisine", "Le jeu de société est déjà pris de mon côté")
+    for person, text in zip(group[:2], texts):
+        card = next(card for card in views[person["token"]]["assignments"] if card["name"] == name)
+        participant_note(person["token"], card["note_key"], text)
+    print(f"  notes: {len(group[:2])} households around {name}")
+    return group[0]["token"], name
+
+
+def capture_notes_page(browser, token, person_name):
+    """One giver's card for a person three households are shopping for.
+
+    Shot at a width where the card, its wishlist and the notes under it fit in one frame: the still is
+    worth nothing if the reader cannot see that the note belongs to the person above it.
+    """
+    context = browser.new_context(viewport={"width": 860, "height": 900},
+                                  device_scale_factor=2, locale="fr-FR")
+    page = context.new_page()
+    page.goto(f"{BASE}/?t={token}", wait_until="networkidle")
+    page.wait_for_selector("#reveal-btn")
+    page.click("#reveal-btn")
+    page.wait_for_selector("text=Anonyme")
+    page.locator("article", has_text=person_name).scroll_into_view_if_needed()
+    time.sleep(0.8)
+    shot(page, "24-co-giver-notes.png")
+    context.close()
+
+
 def shot(page, name, full=False):
     page.screenshot(path=str(SHOTS / name), full_page=full, animations="allow")
     print("  still:", name)
@@ -418,6 +480,11 @@ def main():
         manifest["reveal"] = {"video": str(reveal.video.path()), "click_at": round(click_at, 2)}
         reveal.close()
         view.close()
+
+        # ---- the co-givers' notes: one card, several households (24-co-giver-notes.png) ----
+        shared = seed_notes(first_draw)
+        if shared:
+            capture_notes_page(browser, *shared)
 
         # ---- the page behind the hostname (before any login touches the state) ----
         # Its own context, with the viewport named: this page runs long, and a two-still set of it

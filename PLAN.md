@@ -1344,3 +1344,65 @@ created.`) while every French twin used straight ones. The repository quotes wit
 
 Gallery: `18-draw-list.jpg` re-shot — one drawn card, one copied-and-undrawn card, so the still shows
 both the button and what it produces. **235 tests.**
+
+## Notes between the households that drew the same person (addendum, 2026-11-14)
+
+**Why this exists is arithmetic, not a feature request.** Ten adults each drawing one adult and two
+children, ten children: every child ends up being shopped for by **three households**. Nothing in the
+product let those three talk to each other, so three people buy the same cookbook and each child gets
+three of them. The fix is the smallest channel that answers the question — a sentence per giver, on the
+receiver's card, visible to the other givers.
+
+**The note hangs off (author, receiver), not off the pairing.** `UNIQUE(author_id, receiver_id)`: one
+line per person, overwritten as plans change. A thread is more keys, more UI and nothing to maintain
+it; a family that has to moderate a conversation about gift money is a family that stops using the
+feature. An empty `text` deletes the line rather than leaving a blank one.
+
+**Anonymous is a data decision, not a CSS one.** The participant payload carries
+`{text, mine}` and nothing else: no author name, no author id, no timestamp. The timestamp is the one
+people forget — with two co-givers, the order the notes arrived in *is* the pairing, and the pairing is
+the thing this app keeps from everybody including the organizer. The author's own row is marked
+"Ta note", which is the only attribution the page makes, and the only one a relative needs to know
+which sentence they already wrote.
+
+**Two privacy rules that are easy to get wrong and are therefore tested separately.**
+The person the note is about never sees it — three households planning a child's gift do not plan it in
+front of the child, and the same argument holds for an adult. And the organizer never sees notes at
+all: `admin_state` has been pairing-blind since the beginning, and a note names its receiver to whoever
+can list them, so an admin endpoint over `notes` would be the leak. Both tests check the *whole*
+payload for the sentence, because the leak that would matter is a helpful future field.
+
+**A handle, not an id.** `PUT /api/draw/{token}/note` takes `{to, text}` where `to` is the note key the
+reader's own card carried. The participant API has never handed out participant ids and there is no
+reason to start; and the handle is resolved with `giver_id = me` in the `WHERE` clause, so a key copied
+off a cousin's card, a key for somebody you did not draw, and nonsense all answer the same `404`. It is
+a lookup key, not a credential — alone it buys nothing, and a re-draw mints new ones. The column arrives
+by `ALTER TABLE` (SQLite cannot attach `UNIQUE` that way, so the uniqueness is an index in
+`_ensure_indexes`), and the migration **backfills existing pairings**: the household that is mid-event
+right now gets the feature without resetting their draw or mailing new links.
+
+**Notes belong to one draw's result.** `_clear_assignments` became `_clear_draw_results` and deletes
+the notes with the pairings: they were written for the co-givers of a draw that no longer exists, and
+their handles point at nothing anyway. A copied roster (`copy_participants_from`) brings people, never
+last season's conversation — that one is a consequence of how the rows are written, so it is pinned by
+a test instead of by a line of code.
+
+**One number, because the alternative is lying.** The help line used to read "more than one household is
+gâting this person" — which was false on every one-to-one pick. So the payload says `co_givers`, the
+count of people giving to that person, and the whole block is rendered only when it is above 1: with one
+giver there is nobody to warn and the box is a box nobody reads. It is a count rather than a list, which
+keeps it the only piece of draw structure the participant page gets.
+
+**And a poll that survives the draw.** The page already re-read itself while the draw was pending; that
+stopped at READY, which is exactly when two households coordinating need it. Polling now runs in both
+states, with the tab-hidden case skipping requests — and it surfaced an older bug on the way: `loadDraw`
+overwrote the wishlist box from the server, so a poll landing mid-sentence used to wipe what somebody
+was typing. It now only paints the box when it is not dirty.
+
+**Breakpoints, because this page is read on a phone at a kitchen table.** `tools/check_organizer_ui.py`
+now walks the whole note round trip in two browser contexts — write on a card at 1440 px, see it arrive
+on the co-giver's page at 390 px labelled *Anonyme*, switch to EN and fail on a raw key, clear it and
+watch it disappear from the other screen, keep the sentence off the person it is about, and hold the
+revealed card at 360, 390, 768, 1024 and 1440 px. The overflow check learned a second rule while doing
+that: an element that a parent clips cannot hang off the screen, which is what the family card's corner
+flakes have always been doing behind `overflow-hidden`. **248 tests.**

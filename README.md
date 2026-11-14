@@ -190,7 +190,7 @@ delete and re-add the participant.
   the social-image crawler have to be able to load the art from another origin — and nothing personal is in
   `/static`. |
 | Private-link leakage | `Referrer-Policy: no-referrer` + `<meta name="referrer" content="no-referrer">`, so `/?t=<uuid>` never rides out in a Referer. |
-| Unbounded input | Pydantic length caps on every text field (name 80, family name 60, group 60, wishlist 1000, title 120, budget 500); the SPA mirrors them via `GET /api/limits`. |
+| Unbounded input | Pydantic length caps on every text field (name 80, family name 60, group 60, wishlist 1000, note 300, title 120, budget 500); the SPA mirrors them via `GET /api/limits`. |
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
 | Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` ("already locked, reset first") instead of silently invalidating links people already opened. |
 | Organizer blindness | No admin route ever returns a pairing. The one thing read out of the `assignments` table is a single `COUNT` of same-group pairs for `/api/admin/state` — enough to admit a draw had to relax a rule, never enough to name one. |
@@ -536,6 +536,54 @@ UX details worth knowing:
 * **Field limits come from the server** (`GET /api/limits`) and are applied as `maxlength` with
   counters, so the frontend can never drift from the API's Pydantic caps.
 * **Reveal is sticky per link** (`sessionStorage`): a refresh does not replay the surprise.
+* **The page keeps re-reading itself every 25 s, before *and* after the draw.** Before, that is how a
+  relative waiting on the draw sees the gift appear without hunting for a button; after, it is how two
+  households coordinating gift money in one house see each other's note arrive. A hidden tab stops
+  asking, and a re-read never overwrites a wishlist box somebody is still typing in.
+
+### Notes between the people who drew the same person
+
+The rules make this normal: ten adults each drawing one adult **and two children**, ten children, means
+every child is being shopped for by **three households** who have no other channel to compare plans.
+Without a line between them, three people buy the same cookbook. So each giver's card carries a note
+box, and the notes show up on the other givers' cards.
+
+<table>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/24-co-giver-notes.jpg" alt="One child's gift card with the note the reader already wrote and an anonymous note from another household"><br><b>Three households, one child, one conversation</b> — the pick, their ideas, then the notes the givers leave each other: the reader's own marked <i>Ta note</i>, the other household's marked <i>Anonyme</i>. The server never says who wrote a line, so the page has nothing to name.</td>
+  </tr>
+</table>
+
+The shape, and why it is this small:
+
+* **One note per giver per person**, overwritten as plans change — not a thread. `UNIQUE(author_id,
+  receiver_id)`, and an empty `text` deletes it ("Effacer") rather than leaving a blank line.
+* **The block only appears when it is true.** Each pick's card carries `co_givers`, the number of
+  people giving to that person, and the note box is rendered when it is above 1: with one giver there is
+  nobody to warn, and a box that can only be read by nobody is a box that gets filled with a joke. It is
+  a count rather than a list — the one piece of draw structure the participant page is given, and it
+  cannot name anybody.
+* **Anonymous on purpose, and enforced rather than promised.** The API returns only `{text, mine}`: no
+  author name, no author id, no timestamp. A timestamp is the subtlest leak of the three — two
+  co-givers could work out who wrote what from the order the notes arrived in, and that order *is* the
+  pairing. `tests/test_notes.py` asserts the payload carries none of those fields and never names a
+  person who is not one of the reader's own picks.
+* **The person the note is about never sees it.** Three households planning a child's gift do not plan
+  it in front of the child, and a note about an adult would spoil their own gift. The read path is
+  keyed by the reader's own picks, so their own row can never come back with notes attached; the test
+  checks the whole payload for the sentence, not one field.
+* **The organizer cannot read them either.** `GET /api/admin/state` has never carried a pairing, and
+  notes name their receiver to whoever can list them — so an admin endpoint over them would be the
+  leak. No admin route touches the `notes` table.
+* **`PUT /api/draw/{token}/note`** takes `{to, text}`, where `to` is the note handle that pick's card
+  carried — not a participant id, because the participant API has never handed out ids. The handle is
+  resolved with `giver_id = me` in the `WHERE` clause, so a handle copied off a cousin's card, a
+  handle for someone you did not draw, and nonsense all answer the same `404`. It is a lookup key, not
+  a credential: on its own it buys nothing, and re-drawing the event mints new ones.
+* **Notes belong to one draw's result.** `POST /api/admin/reset` and a re-draw delete them along with
+  the pairings — they were written for co-givers of a draw that no longer exists, and their handles
+  are dead anyway. A roster copied into a new draw (`copy_participants_from`) brings the people, never
+  last season's conversation, and deleting a person cascades.
 
 ### Languages: French and English
 
@@ -554,7 +602,7 @@ Québec family wants.
 
 What makes "two locales" a fact rather than a claim:
 
-* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **221 keys each** — and
+* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **236 keys each** — and
   `tests/test_i18n.py` fails on a key that exists in one and not the other. A missing key would render
   its raw name on screen, which is exactly how a half-translated UI gets born. The same test fails when
   the README quotes a different number, because that count is the sentence a translator checks.
