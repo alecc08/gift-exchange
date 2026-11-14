@@ -439,6 +439,50 @@ def test_auto_email_on_draw_is_off_by_default_and_sends_when_on(client, monkeypa
     assert all(m["to"] in {"ghislaine@exemple.ca", "rejean@exemple.ca"} for m in stub.sent)
 
 
+def test_the_auto_send_after_a_draw_mails_the_ready_copy_not_the_pending_one(client, monkeypatch):
+    """A mail sent by "draw and send" has to say the draw is done — and this failed once.
+
+    The copy choice is `ready=bool(config_row["is_locked"])`, and `run_draw` reads its settings row
+    *before* it locks. So the one send that always launches immediately after a draw carried the
+    pending copy: "Le tirage n’a pas encore été fait", in a mail whose link opens straight onto the
+    reveal. Reading the row once and passing it along is right everywhere except for the single column
+    that caller just changed.
+
+    The first half matters as much as the second: a send *before* the draw must still say "not yet",
+    otherwise a green test here would only prove the flag is stuck on.
+    """
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    roster(client)
+
+    set_config(client, **FESTIVE, auto_email_on_draw=False)
+    before = client.post("/api/admin/emails", headers=ADMIN)
+    assert before.status_code == 200 and before.json()["sent"] == 2
+    assert stub.sent, "the pre-draw send mailed nothing, so the direction below proves nothing"
+    for mail in stub.sent:
+        assert "Le tirage n’a pas encore été fait" in mail["html"], mail["subject"]
+
+    stub.sent.clear()
+    set_config(client, **FESTIVE, auto_email_on_draw=True)
+    drawn = client.post("/api/admin/draw", headers=ADMIN)
+    assert drawn.status_code == 200 and drawn.json()["emails"]["sent"] == 2
+    assert stub.sent, "auto-email on draw mailed nothing"
+    for mail in stub.sent:
+        assert "ton lien secret" in mail["subject"], mail["subject"]
+        assert "Ton lien secret est prêt" in mail["html"]
+        assert "Le tirage est fait." in mail["html"]
+        assert "Le tirage n’a pas encore été fait" not in mail["html"]
+
+    # Scope of the bug, pinned: the manual send button always read its settings at send time, so it
+    # said "ready" on this same locked draw all along. Only the auto-send inherited the stale row.
+    stub.sent.clear()
+    someone = client.get("/api/admin/state", headers=ADMIN).json()["participants"][0]["id"]
+    single = client.post(f"/api/admin/participants/{someone}/email", headers=ADMIN)
+    assert single.status_code == 200
+    assert stub.sent and "ton lien secret" in stub.sent[0]["subject"]
+
+
 def test_email_language_is_one_event_wide_choice(client, monkeypatch):
     configure_emails(monkeypatch)
     stub = StubTransport()
