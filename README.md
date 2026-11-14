@@ -6,8 +6,8 @@ that keeps a household out of its own draw, one private link per person, and an 
 
 FastAPI + SQLite · single-page frontend (Tailwind CDN + Alpine.js, no build step) · **two locales —
 Québec French (`fr-CA`) and English — every string in both**, one click to switch · amounts in
-Canadian dollars. This README is English; [Languages](#languages-french-and-english) says what each locale
-actually says.
+Canadian dollars. This README is English, on purpose: [Languages](#languages-french-and-english)
+covers what each locale does.
 
 | The gift-box reveal | Unlock → snowfall → copy every link |
 |---|---|
