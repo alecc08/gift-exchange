@@ -339,10 +339,10 @@ untouched; everything below is additive and lives in `static/index.html` plus `G
 | Feedback | Toast stack (`#toasts`, `aria-live="polite"`) for saves, copies, draw results and rate limits; the inline notice/banner pair was replaced by one persistent, dismissible `adminError` block so a failure is never lost when the view re-renders. |
 | Login | Busy state ("Vérification…"), disabled until a password is typed, and the server's `429`/lockout is shown as the remaining wait instead of a bare "wrong password". |
 | Rules | Live "total gifts to prepare" row per target group; Save disabled until something actually changed (`rulesDirty` chip); character counters on title/budget; quota `max` read from the server. |
-| Feasibility | The engine's necessary conditions are mirrored client-side (`warnings`), so an impossible quota is explained **before** the draw is attempted, and "Generate" is blocked with « Régle les alertes en haut avant ». The server still validates independently. |
+| Feasibility | The engine's necessary conditions are mirrored client-side (`warnings`), so an impossible quota is explained **before** the draw is attempted, and "Generate" is blocked with "Régle les alertes en haut avant". The server still validates independently. |
 | Draw | `confirm()` before locking (states the gift count and that it locks the rules), `409` handled as "already locked", and the locked panel counts opened links (`3/10 lien(s) ouvert(s)`). |
-| Roster | Family-group `datalist` + clickable household filter chips with counts; per-row « {n} cadeau(s) à acheter » / « tire pas de cadeau »; wishlist preview truncated with `title`; relative « Consulté · il y a 5 minutes » (`fr-CA`, full timestamp in `title`); empty-roster guidance; **Copy all links** (name, role, household, URL) with a fallback for insecure origins. |
-| Participant | PENDING page checks again automatically (25 s) and offers a manual « Vérifier encore »; a toast announces the switch to READY; the reveal is remembered per link in `sessionStorage` so a refresh doesn't replay the surprise; "Copier ma liste"; wishlist autosave (1.2 s debounce) with a « Pas enregistré » chip and Ctrl/⌘+Enter to save now. |
+| Roster | Family-group `datalist` + clickable household filter chips with counts; per-row "{n} cadeau(s) à acheter" / "tire pas de cadeau"; wishlist preview truncated with `title`; relative "Consulté · il y a 5 minutes" (`fr-CA`, full timestamp in `title`); empty-roster guidance; **Copy all links** (name, role, household, URL) with a fallback for insecure origins. |
+| Participant | PENDING page checks again automatically (25 s) and offers a manual "Vérifier encore"; a toast announces the switch to READY; the reveal is remembered per link in `sessionStorage` so a refresh doesn't replay the surprise; "Copier ma liste"; wishlist autosave (1.2 s debounce) with a "Pas enregistré" chip and Ctrl/⌘+Enter to save now. |
 | Limits | `GET /api/limits` publishes the Pydantic caps; the SPA binds `maxlength` and counters to them, and surfaces `default_password: true` as a visible organizer warning. |
 | Auth UX | The browser keeps the **session token** (`sessionStorage.ge_admin_token`) rather than the password; a `401` anywhere clears it and drops back to the gate with an "expired" toast. |
 | i18n | Every new string exists in FR and EN (the two tables stay key-symmetric; audited by script on each pass). FR remains the default. |
@@ -356,23 +356,23 @@ key-symmetric (119 keys each) by `tests/test_i18n.py`.
 **Register, revised 2026-11-13.** The first pass leaned on spoken Québécois to prove it was
 Québécois, and it read as costume. The current rule is *ordinary Quebec French*: the words a
 Quebecer actually uses in an interface, without the phonetic spelling or the caricature markers.
-« pis » → « et », « toé/moé » → « toi/moi », « frette » → « verrouillé », « binômes » → « qui pige
-qui », « liste de souhaits » → « liste d'idées », « astheure » → « maintenant », « capoté » →
-« brisé / n'a pas fonctionné », « souhaite » → « idée », « pu » → « plus ». What stays Quebec and
-plain: *piger*, *gâter*, *tuque*, *mitaines*, *raquette*, « correct », the `tu` address, and the
+"pis" → "et", "toé/moé" → "toi/moi", "frette" → "verrouillé", "binômes" → "qui pige
+qui", "liste de souhaits" → "liste d'idées", "astheure" → "maintenant", "capoté" →
+"brisé / n'a pas fonctionné", "souhaite" → "idée", "pu" → "plus". What stays Quebec and
+plain: *piger*, *gâter*, *tuque*, *mitaines*, *raquette*, "correct", the `tu` address, and the
 `fr-CA` date/currency formatting. The banned forms are a list in `tests/test_i18n.py`, because a
 style rule that lives only in a human's head comes back the first time someone adds one string.
 
 | Aspect | What changed |
 |---|---|
-| Register | Ordinary Quebec French, warm but not costumised (see the revision above): « Règles et quotas », « Les participants », « Les personnes que tu vas gâter », « Ouvre ton lien », « garde-le pour toi », « Ça s'en vient, repasse plus tard ! ». |
-| Lock vocabulary | `state.locked` → « Tirage verrouillé », the draw button → « Lancer le tirage », reset → « Recommencer le tirage ». The top-bar control is `admin.signout` → « Fermer la session » / "Sign out": it calls `POST /api/admin/logout`, and it was briefly labelled « Lancer le tirage » during the rename, which put two different actions under one label — the capture tool clicked the wrong one, which is how it was caught. `tests/test_i18n.py` now refuses duplicate labels except an allowlist. |
-| Softened errors | « Le tirage n'a pas fonctionné », « Ce n'est pas possible avec les familles et les quotas actuels », « Mot de passe pas correct. », « Réessaie dans {s} seconde(s). » |
-| Removed Gallicisms | « Liste d'envies » → « liste d'idées »; « pull bleu marine » → « tuque en laine / patins / jeu de société »; « groupe familial » → « Famille »; household example « Martin » → « Tremblay ». |
-| Locale | `locale()` returns `fr-CA` (and `en-CA`), so timestamps and the relative chip format as « il y a 5 minutes » with the 24-hour clock; `<html lang>` is `fr-CA`. |
-| Currency | No amount field exists in the schema — money only lives in the free-text `budget_note`. Every default, placeholder and demo value now uses CAD: « Ex. 25 $ par personne, taxes incluses », demo note « 25 $ par personne, taxes incluses — les cadeaux maison, c'est correct », EN placeholder « e.g. $25 CAD each, taxes included ». `€` no longer appears anywhere in the repo. |
-| Tooling | `tools/seed_demo.py` seeds a Quebec family (Tremblay / Gagnon / Bouchard / Roy, wishlists with tuques, mitaines, raquettes, chaussettes à orignaux); `tools/verify_acceptance.py` uses Quebec households (Tremblay, Gagnon, Bouchard, Roy, Ouellet) and a « 25 $ par personne » budget; `tests/test_api.py` fixtures use `25 $ maximum`. |
-| Deliberate limit | Error copy stays explicit and unambiguous — « mais il y en a seulement {available} en dehors de sa famille » — with no phonetic spelling and no vulgarisms: an error message has to be readable by the person who is about to be locked out. |
+| Register | Ordinary Quebec French, warm but not costumised (see the revision above): "Règles et quotas", "Les participants", "Les personnes que tu vas gâter", "Ouvre ton lien", "garde-le pour toi", "Ça s'en vient, repasse plus tard !". |
+| Lock vocabulary | `state.locked` → "Tirage verrouillé", the draw button → "Lancer le tirage", reset → "Recommencer le tirage". The top-bar control is `admin.signout` → "Fermer la session" / "Sign out": it calls `POST /api/admin/logout`, and it was briefly labelled "Lancer le tirage" during the rename, which put two different actions under one label — the capture tool clicked the wrong one, which is how it was caught. `tests/test_i18n.py` now refuses duplicate labels except an allowlist. |
+| Softened errors | "Le tirage n'a pas fonctionné", "Ce n'est pas possible avec les familles et les quotas actuels", "Mot de passe pas correct.", "Réessaie dans {s} seconde(s)." |
+| Removed Gallicisms | "Liste d'envies" → "liste d'idées"; "pull bleu marine" → "tuque en laine / patins / jeu de société"; "groupe familial" → "Famille"; household example "Martin" → "Tremblay". |
+| Locale | `locale()` returns `fr-CA` (and `en-CA`), so timestamps and the relative chip format as "il y a 5 minutes" with the 24-hour clock; `<html lang>` is `fr-CA`. |
+| Currency | No amount field exists in the schema — money only lives in the free-text `budget_note`. Every default, placeholder and demo value now uses CAD: "Ex. 25 $ par personne, taxes incluses", demo note "25 $ par personne, taxes incluses — les cadeaux maison, c'est correct", EN placeholder "e.g. $25 CAD each, taxes included". `€` no longer appears anywhere in the repo. |
+| Tooling | `tools/seed_demo.py` seeds a Quebec family (Tremblay / Gagnon / Bouchard / Roy, wishlists with tuques, mitaines, raquettes, chaussettes à orignaux); `tools/verify_acceptance.py` uses Quebec households (Tremblay, Gagnon, Bouchard, Roy, Ouellet) and a "25 $ par personne" budget; `tests/test_api.py` fixtures use `25 $ maximum`. |
+| Deliberate limit | Error copy stays explicit and unambiguous — "mais il y en a seulement {available} en dehors de sa famille" — with no phonetic spelling and no vulgarisms: an error message has to be readable by the person who is about to be locked out. |
 
 ## Verification log
 
@@ -469,11 +469,11 @@ reveal animation, 3 recipient cards).
 * i18n audit script: FR and EN tables are key-symmetric (118 keys each), every `t('…')` used in
   the markup exists in both, and no `€` byte remains in the repository.
 * Playwright re-shoot of the whole gallery (15 stills + the two GIFs) against the container, so
-  the README media shows the Québécois copy — header « TEMPS DES FÊTES », « Règles pis quotas »,
-  « Le monde participant », « Fretter », participant card « Bonjour Mario » /
-  « Le monde que tu vas gâter » / « Ses souhaits » with « 25 $ par personne, taxes incluses ».
-* Repeated wrong password in the browser now reads « Mot de passe pas correct. » and, once the
-  limiter trips, « Trop de demandes. Réessa dans 300 seconde(s). » (previously the raw
+  the README media shows the Québécois copy — header "TEMPS DES FÊTES", "Règles pis quotas",
+  "Le monde participant", "Fretter", participant card "Bonjour Mario" /
+  "Le monde que tu vas gâter" / "Ses souhaits" with "25 $ par personne, taxes incluses".
+* Repeated wrong password in the browser now reads "Mot de passe pas correct." and, once the
+  limiter trips, "Trop de demandes. Réessa dans 300 seconde(s)." (previously the raw
   `Unauthorized` detail). Mobile (390 px) still has no horizontal overflow:
   `documentElement.scrollWidth == window.innerWidth == 390` on both the participant and the
   organizer views.
@@ -590,9 +590,9 @@ docs gallery                             -> re-shot against the new copy (15 sti
 ```
 
 The rename that produced the duplicate-label test: `admin.lock` (top bar) calls
-`POST /api/admin/logout`; during the plain-French pass it was labelled « Lancer le tirage », the
+`POST /api/admin/logout`; during the plain-French pass it was labelled "Lancer le tirage", the
 same text as the real draw button, and `tools/capture_docs_media.py` failed with a Playwright
-strict-mode violation naming both buttons. Fixed by `admin.signout` → « Fermer la session » /
+strict-mode violation naming both buttons. Fixed by `admin.signout` → "Fermer la session" /
 "Sign out", and `test_no_two_different_controls_share_a_label` now guards it.
 
 ## Grouping: a household is not a surname (addendum, 2026-11-13)
@@ -601,7 +601,7 @@ Reported from the real event: everyone was being classified by `family_group`, b
 appears in several households, so the surname could not be the unit of the exclusion rule. Two
 changes follow, and they are separable — one is data, one is policy.
 
-**Data.** `participants.group_key` (label « Groupe ») is the constraint unit; `family_group` is
+**Data.** `participants.group_key` (label "Groupe") is the constraint unit; `family_group` is
 demoted to a display surname and is never read by the engine. `group_key` may be blank, meaning *in
 no group*, and two blanks are not one group: `group_key_of()` hands anybody with no group a private
 key (`#solo:<id>`), which makes the exclusion a no-op without a second code path — and is also what
@@ -640,11 +640,11 @@ tools/check_organizer_ui.py              -> organizer console OK: no console err
                                              checkbox off -> save -> reload -> still off, panel not
                                              falsely dirty (asAdminConfig coerces the 0/1 on BOTH
                                              the live and the saved copy); filter by
-                                             « Roy (chez Gaétan) » -> 2 of 3 rows; tight roster ->
+                                             "Roy (chez Gaétan)" -> 2 of 3 rows; tight roster ->
                                              note predicts 1 crossing, button stays enabled, draw
-                                             locks, panel says « Le tirage a pigé 1 fois … »; add a
+                                             locks, panel says "Le tirage a pigé 1 fois …"; add a
                                              person -> prediction disappears and the notice flips to
-                                             « Personne a pigé dans son propre groupe. »; EN switch
+                                             "Personne a pigé dans son propre groupe."; EN switch
                                              resolves every new label
 i18n audit                               -> 131 fr / 131 en keys, symmetric, placeholders match,
                                             banned forms none, duplicate labels none; new guards:
@@ -783,7 +783,8 @@ API's path shape, not the SPA's. `/draw/<uuid>` is not a route (the token endpoi
 ever *followed* a link out of a mail: the test asserted the link's text, and the text was wrong.
 Fixed in three parts: one builder (`participant_link()`) for the console, the mail and the preview;
 `GET /draw/<uuid>` → 302 → `/?t=<uuid>` so the links already sitting in inboxes work without a
-resend; and a test that extracts the href from the mail body and requires `200 text/html`. Measured
+resend *(this third part was removed on 2026-11-14 — see "The console moves off the site root")*;
+and a test that extracts the href from the mail body and requires `200 text/html`. Measured
 on prod after the deploy: the old URL bounces and lands, the new URL is served directly.
 
 Subject order changed from `{event} — ton lien secret` to `{name} — ton lien secret · {event}`. The
@@ -795,17 +796,17 @@ a mailbox sorts and scans by; the event goes last so it is the part that gets cu
 
 ## Multiple draws, a console that fits a phone, and a gift in the mail (addendum, 2026-11-13)
 
-**The ask.** « L'admin peut créer MULTIPLE tirages, pas juste un seul… la vue admin permet
+**The ask.** "L'admin peut créer MULTIPLE tirages, pas juste un seul… la vue admin permet
 d'ouvrir un tirage précis, ou d'en créer un nouveau. Ça veut dire un écran de plus qui liste tous
-les tirages avec leur statut. » And: « la UI est trop chargée et pas vraiment responsive — « pas
-encore ouvert », « lien envoyé il y a … »… il faut que ça se voie sur mobile; là je pense que ça
-cache juste le surplus quand la page est trop étroite. » Bundled into one branch, verified in a
+les tirages avec leur statut." And: "la UI est trop chargée et pas vraiment responsive — 'pas
+encore ouvert', 'lien envoyé il y a …'… il faut que ça se voie sur mobile; là je pense que ça
+cache juste le surplus quand la page est trop étroite." Bundled into one branch, verified in a
 browser, shipped as an unmerged PR.
 
 **Data model.** `config` (one row, one event) becomes `draws` (one row per event) and
 `participants.draw_id` (`NOT NULL DEFAULT 1`). Two columns come with it: `created_at`, and
 `drawn_at` — NULL on a draw that was locked before the column existed, which the UI renders as
-« Tiré » with no invented date.
+"Tiré" with no invented date.
 
 *Rebuild, not rename.* The original table was `id INTEGER PRIMARY KEY CHECK (id = 1)`. An
 `ALTER TABLE config RENAME TO draws` carries that CHECK along, and then creating a second draw —
@@ -836,14 +837,14 @@ the old participant links still answer `200 READY` with the right event title, d
 (the `CHECK (id = 1)` trap avoided), zero token overlap between a draw and its copy, a cross-draw
 delete refused `404`, and the locked draw refusing its own deletion.
 
-**The list screen.** « Choisis un tirage »: one card per draw — status, and the counts an organizer
+**The list screen.** "Choisis un tirage": one card per draw — status, and the counts an organizer
 actually scans (people / links sent / links opened). Counts only: `assignments` is touched as a
 `COUNT`, never read, so the list cannot leak a pairing. Opening a draw writes `?draw=` into the URL
 so a reload or a bookmark comes back to the same event; a bookmark to a draw that no longer exists
 falls back to the list instead of showing a console pointed at nothing.
 
 **Responsive.** There were no breakpoints at all: at phone width the roster's seven columns
-overflowed their container and the chips (« Pas encore ouvert », « Lien envoyé il y a 2 h ») ran into
+overflowed their container and the chips ("Pas encore ouvert", "Lien envoyé il y a 2 h") ran into
 the neighbouring cell. Now: ≤900 px the roster is one card per person with each field labelled by its
 own column name (`td[data-label]`, same strings as the headers, so they translate); ≤640 px 40 px
 button targets and 16 px inputs (below that Mobile Safari zooms on focus and does not give the zoom
@@ -853,7 +854,7 @@ preview modal and toasts reflow.
 **Mail art.** A big gift between the header and the copy: box shut, lid jumped off, four mittened
 paws holding it open, two eyes looking up at it, motion arcs and escaped sparkles — the mail's whole
 promise (the pairing is already in the box, only you can open it) in one picture. Static on the
-organizer's explicit call (« keep it non-animated, let's play it safe »): Outlook ignores
+organizer's explicit call ("keep it non-animated, let's play it safe"): Outlook ignores
 `@keyframes`, Gmail strips them, and art that freezes in half the family's inboxes is worse than a
 still frame. Localized `alt`, because for a screen reader that image *is* the pitch. A guard test
 asserts neither the mail nor the SVG carries `@keyframes`/`<animate>` — checked on the parsed SVG
@@ -867,7 +868,7 @@ tree, because the art's own comment contains the word "animation" to explain why
   locked draw — came back as a 400 the organizer could only read in the devtools console. It now
   sits above both screens, and a guard asserts exactly one copy, before both.
 
-The i18n label guard paid for itself too: with a second « Supprimer » (delete a draw) the English
+The i18n label guard paid for itself too: with a second "Supprimer" (delete a draw) the English
 pair `draws.delete` / `roster.delete` both read "Delete", so the roster's became **Remove** — two
 unrelated controls sharing a label is what broke the docs capture tool last time.
 
@@ -901,7 +902,7 @@ Two older pieces were deleted rather than kept as insurance:
 - `_interleave_by_address()` — the previous mitigation (spread the repeats out). Grouping makes the
   repeat impossible, so a scheduler is now dead weight.
 - `deliver_link_email()` — one person, one mail. `deliver_household_email()` replaces it and stamps
-  `email_sent_at` on the whole group: two relatives "mailed" and a third showing « Jamais envoyé »
+  `email_sent_at` on the whole group: two relatives "mailed" and a third showing "Jamais envoyé"
   is the failure mode this had to avoid. `ready` (drawn yet?) is passed in as an argument instead of
   being re-read from a settings row, because with several draws on one server there is no single row
   to read.
@@ -910,21 +911,21 @@ Two older pieces were deleted rather than kept as insurance:
 (household) both render `_email_shell()` + `_email_assets()`, so the palette, the art and the footer
 cannot drift. The wording is a separate set of strings — `hello_many`, `title_many_*`, `body_many_*`,
 `links_note`, `link_label`, `link_button`, `privacy_many`, `subject_many(_pending)`, `and`,
-`and_more` — because « ton lien » in a mail holding three links is simply untrue, and conditional
+`and_more` — because "ton lien" in a mail holding three links is simply untrue, and conditional
 `{% if n > 1 %}` sprinkles would have made the template unreadable. Each link is labelled
-(« Voir le lien de Alec ») so nobody has to guess which button is theirs, and the mail still never
+("Voir le lien de Alec") so nobody has to guess which button is theirs, and the mail still never
 contains a pairing or an outsider's name.
 
-**Subject.** The ingredients the user asked for — the people, the words « vos liens », the draw name
+**Subject.** The ingredients the user asked for — the people, the words "vos liens", the draw name
 — in the order the singular subject already used in production: `Alec, Gabrielle et Hugo — vos liens
 · Pige Adultes`. Kept consistent rather than reordered, because a family that already saw
-« Ghislaine — ton lien secret · Réveillon chez Gaétan » should recognize the pattern, and the event
+"Ghislaine — ton lien secret · Réveillon chez Gaétan" should recognize the pattern, and the event
 title last is the part Gmail truncates. Past `MAX_SUBJECT_NAMES` (3) the list becomes
-« A, B, C et 2 autre(s) » so « vos liens » never scrolls off a phone's list view — which is the whole
+"A, B, C et 2 autre(s)" so "vos liens" never scrolls off a phone's list view — which is the whole
 reason the subject names people.
 
-**The console has to say it before the click.** A chip next to « Envoyer les liens par courriel »
-counts « 3 personne(s) · 1 boîte(s) · 1 courriel(s) »; each row's « Envoyer » tooltip explains that
+**The console has to say it before the click.** A chip next to "Envoyer les liens par courriel"
+counts "3 personne(s) · 1 boîte(s) · 1 courriel(s)"; each row's "Envoyer" tooltip explains that
 the address already receives N links; and a row's send now sends the *household* (otherwise three
 clicks on three relatives is three mails anyway). The report answers per person — so a skipped
 address is still named — plus `messages`, the number of mails that really left, and `with: [names]`
@@ -988,8 +989,8 @@ arrival is worse than an error on the organizer's screen, so:
   per-row send answering the same, and the auto-send-on-draw listing every person as skipped with
   `EMAIL_BAD_BASE_URL` while the draw itself still commits;
 - the console translates that 503 into its own message instead of the admin-password one. A latent
-  ordering bug in `errorText()` was fixed on the way: it answered *every* 503 with « admin password
-  not configured » before reading the detail, which had been masking the email feature's own 503 all
+  ordering bug in `errorText()` was fixed on the way: it answered *every* 503 with "admin password
+  not configured" before reading the detail, which had been masking the email feature's own 503 all
   along — a guard now pins the order.
 
 **One header that was quietly wrong too.** Every response carried
@@ -1029,8 +1030,8 @@ Google's own statements and cani.email — and the PNG mail sent through the rea
    lists each person as skipped with `EMAIL_BAD_BASE_URL` — the draw itself still commits, because a
    mail problem must never roll a draw back.
 
-Two smaller things found on the way, both now guarded: the SPA answered **every** 503 with « admin
-password not configured » before reading the detail, so the email feature's own 503s (`not
+Two smaller things found on the way, both now guarded: the SPA answered **every** 503 with "admin
+password not configured" before reading the detail, so the email feature's own 503s (`not
 configured on this server`, and now `public address`) were unreachable — a guard pins the order. And
 the i18n parity check reads one entry per line, so a wrapped entry was invisible to every test; a new
 guard counts the raw `'<key>':` starts against the parsed keys. 182 tests.
@@ -1102,3 +1103,199 @@ locales, which is cosmetic because the card carries no name, no event title and 
 decisions — what a string used to say, what it says now, why a form is banned — so quoting the French
 *is* the content here, and paraphrasing it would cost the log its evidence. Code, tests and strings
 unchanged: 186 tests, all the same keys.
+
+## The console moves off the site root (addendum, 2026-11-14)
+
+The bug was ordinary: the app had one URL, `/`, and that URL was the **organizer console**. A relative
+who typed the hostname from the email — or who was sent it by a family group — landed on a password
+form they had no business seeing, and every bookmark, dashboard card and screenshot pointed at the
+same page the family was meant to read. Nothing was leaked; the console was always behind the
+password, the login budget and the lockout. What was wrong was the front door.
+
+**The shape now.** One bundle, three screens, one server-stamped flag:
+
+| Path | Screen | Notes |
+|---|---|---|
+| `/` | the family's page | the page that explains the game and says where their link is; with `?t=<uuid>` it is one person's own page |
+| `/admin` | the organizer console | `ADMIN_PATH` moves it; `X-Robots-Tag: noindex, nofollow`; no share tags |
+| an address that is not the console, the API or a file | the family's page | a mistyped address gets an explanation instead of `{"detail":"Not Found"}`; `/api/…`, `/openapi.json`, `/favicon.ico` and `/admin/…` are probes, and answer the API's 404 |
+
+`spa_shell()` replaces two markers in the same `INDEX_HTML`: the share block (family pages only) and
+`route_tag()`, a boolean — `window.__GE_ORGANIZER__=true|false`. The SPA reads it with `=== true`, so a
+document with no flag opens the family's page, never the console. Nothing on the family's page names
+the console path, and `tests/test_pages.py` fails if it ever does: every `/admin` in the bundle must be
+preceded by `/api`, and `'/?draw=` / `replaceState({}, '', '/')` are banned outright, because those two
+were how a signed-in organizer would have been ejected onto the family's page mid-session.
+
+**`ADMIN_PATH` is validated, not trusted.** `normalize_organizer_path()` corrects the obvious
+(`admin` → `/admin`, `/Admin/` → `/Admin`, `/a/./b` → `/a/b`) and refuses what it cannot make safe: a
+non-ASCII segment, a space, a percent escape, a 200-character segment, `/api`, `/static`,
+`/openapi.json`. A refusal falls back to `/admin` with one audit line rather than refusing to boot —
+a gift exchange that will not start is worse than a console at the expected path. It is read **at
+import**, because that is when routes are registered; the change needs a restart, and
+`test_the_console_route_is_registered_and_the_catch_all_is_last` pins both that the route table
+follows the value and that the catch-all is registered last (registered earlier it would answer
+`/api/*`).
+
+**The `/draw/<uuid>` shim is gone.** That route existed for one mistake: the first real mailing built
+links from the API's path shape, twelve people got `{"detail":"Not Found"}`, and a 302 to `/?t=<uuid>`
+was the repair. The links were re-sent from the one builder (`participant_link()`), the console's copy
+button uses the same shape, and a redirect whose only customer is an address nobody mails any more is
+a route nobody maintains — it also needed its own rate limit, its own UUID-shape check and its own log
+redaction to stay honest. What replaces it is the honest behaviour: the path is not an endpoint, so it
+renders the family's landing page, which tells them where their real link is. It never reads a token out
+of a path segment, and a test asserts the token appears nowhere in the response. Two tests that pinned
+the 302 were deleted with it; `test_the_link_shape_the_mail_carries_is_the_shape_the_spa_reads` stays,
+because that is the one holding the console and the mail template together.
+
+**Tidying done on the way** (behaviour unchanged unless noted):
+
+- `_draw_lock` + `BEGIN IMMEDIATE` + `try/COMMIT/except: ROLLBACK` was copy-pasted three times
+  (`run_draw`, `reset_draw`, `delete_draw`), and the 6-line "delete this draw's assignments" statement
+  with it. Now one `draw_transaction()` context manager and one `_clear_assignments()`.
+- The admin config whitelist was a second copy of the rule columns. `EDITABLE_CONFIG_FIELDS` is now
+  derived from `DRAW_RULE_COLUMNS` (minus `is_locked`), so a new column cannot quietly become writable
+  or stay unwritable because somebody forgot a list. The two `UPDATE … SET col = ?` writers share
+  `_update_columns()`, and the participant writer keeps its `AND draw_id = ?` scope.
+- `update_participant` computed the same `model_dump` twice in two branches that produced identical
+  dicts; one computation, and clearing the mail stamp is now a column in the same UPDATE
+  (`email_sent_at = None`) instead of string surgery on the clause list.
+- `admin_state` re-implemented `_all_participants`; now it calls it.
+- Dead code removed: `LimitsOut` (a model never attached to the route it described),
+  `DRAW_TITLE_REQUIRED` (the validator raises `ValueError` instead), `with_email` and `shared_with` in
+  the API payloads (no consumer in the SPA or the suite — and `shared_with`'s docstring claimed the
+  console showed it, which it never did), the SPA's `wishlistSaved` state and its write into
+  `data.participant` (nothing rendered either), and one no-op CSS rule.
+- Unbounded process memory: `RateLimiter.prune()` existed and was never called (now called from
+  `hit()` past 4096 windows), and `_email_gate_at["by_address"]` grew one entry per address forever
+  (now capped at 512, cleared when it reaches the cap — an hour-old gap is no gap).
+- The family's hostname was hard-coded twice — CSP `img-src` and the mail preview's fallback origin —
+  where a host change would silence the preview's art while the mail kept working. One
+  `KNOWN_PUBLIC_ORIGIN`, and a test that ties the CSP entry to the URL the preview actually emits.
+- `sessionStorage.getItem('admin_pw')` was read in two places and never written in any: the browser
+  now sends only the bearer token. The bare `X-Admin-Password` header still works for curl and the
+  tools — it is the API's, not the SPA's.
+- SPA plumbing that had drifted into three copies: one `participantUrl()` (was inlining
+  `${window.location.origin}/?t=` twice), one `flashFlag()` for the copied-flags' timer pairs, one
+  `tallyBy()` for the household and surname chips, one `addressKey()` for the mailbox grouping
+  (mirroring `_group_by_address`), one `parseDate()` behind both formatters, and `enterAdmin()` reading
+  its own query string instead of taking a parsed one from each caller.
+- Comments that had gone wrong rather than merely stale: `list_draws` claimed it touched `assignments`
+  as a COUNT (it never queries that table), the email section header claimed every knob is read per
+  call (the throttle sizes are import-time), `DRAW_RULE_COLUMNS` said three places had to agree (it is
+  four), and `participant_link()` described `/draw/<uuid>` as a route that answers something.
+
+**Verification.** 234 tests, up from 186: `tests/test_pages.py` (44 cases — the two shells, the
+fail-closed flag, the catch-all leaving `/api`, `/static` and asset requests alone, and `ADMIN_PATH`
+normalization), the CSP/preview-origin test, the rate-limiter and send-throttle sweeps, and the
+rewritten stale-link test. `tools/check_organizer_ui.py` passes clean against a live instance at
+`/admin` (login → draw list → rules → roster → group filter → predicted crossing → second draw →
+delete → 390 px → EN, no console errors, no raw keys), and the same pass now covers the family's half
+too: root, `/Reveillon` and a stale `/draw/<uuid>` all render the family's page with no `#pw` anywhere
+and the token never echoed; every landing string the markup asks for has become visible text; the page
+switches to English and its tab title follows; and nothing overflows a 390 px viewport. New gallery
+stills `22-family-landing.jpg` and `23-family-landing-guide.jpg`; the rest of the gallery is unchanged
+because no console screen moved visually.
+
+**Deployment consequence, stated before it surprises anyone:** organizer bookmarks and dashboard cards
+pointing at the bare hostname now land on the family's page. Point them at `/admin`. Participant links
+are untouched — the token was always a query parameter — so nobody in an inbox is affected, which is
+the one thing that had to stay true.
+
+### The documentation and the guards, checked against the code (same branch, 2026-11-14)
+
+Moving the console is a small change with a long tail of prose, so the whole repository was re-read
+against the code. What that found, in the order that mattered:
+
+* **The i18n guards were blind to 19 of the 196 keys.** `tests/test_i18n.py` parses the two
+  dictionaries with a key character class of `[a-z0-9.]` — no underscore. Nineteen keys carry one
+  (`roster.send_all`, `rules.email_off`, `draws.status_open`, …), so key parity, placeholder parity,
+  the duplicate-label rule and "every label the markup asks for exists" were all skipping them, and
+  the test written to catch exactly that (`…visible_to_the_parity_check`) compared two blind parsers
+  against each other and passed. One shared `KEY_CHARS` class now feeds `ENTRY_RE` and `LABEL_RE`, and
+  the visibility test looks for key starts with a **broader** pattern (`'…':` with anything inside), so
+  a key the parser cannot see is a failure instead of a gap. Widening the class surfaced one real
+  duplicate — `draw.auto_email_failed` and `roster.bulk_failed` are the same sentence — allowlisted
+  with the reason: two report paths, one fact ("these people did not get mail").
+* **The README's key count had drifted and nothing noticed.** It said 193; there were 196. A count in
+  prose is a claim, so `test_the_readme_quotes_the_real_key_count` compares the number in the README
+  with the number the guards parse.
+* **`/openapi.json` was documented as disabled and was not.** `docs_url` and `redoc_url` were `None`;
+  the schema route was live, and both documents said otherwise. `openapi_url=None` now makes the
+  sentence true instead of the sentence getting softer.
+* **The catch-all was answering probes with a welcome page.** `GET /favicon.ico`, `GET /api`,
+  `GET /openapi.json`, `GET /docs` and `GET /admin/settings` all rendered the family's card with a
+  `200`. A browser asking for an icon and receiving HTML hides a broken reference for months, and a
+  scanner receiving a festive card is being told the page exists. Reserved heads (`api`, `static`,
+  `openapi.json`, `docs`, `redoc`), any last segment that looks like a file, and anything under
+  `ORGANIZER_PATH/` now get the API's JSON `404`; a mistyped *address* — which is what the catch-all
+  was written for — still gets the card. `ADMIN_PATH` refuses the reserved heads for the same reason:
+  a path a scanner already expects is a poor place to put the console.
+* **Sentences that had stopped being true:** "Opening a draw puts it in the URL (`/?draw=7`)" (now
+  `/admin?draw=7`); "No admin route ever reads the `assignments` table" (it reads one `COUNT`, which
+  the same README explains three sections later); "Every page carries Open Graph tags" (the console
+  document carries none, on purpose); `193 keys each`. The quickstart also reordered itself so the
+  colon introduces the list rather than a paragraph about routing, and the bare-uvicorn snippet gained
+  the `--no-access-log` the image has always passed — without it the README's "one line per API
+  request" claim is false on the machine you are reading it on.
+* **Reference gaps rather than mistakes:** `.env.example` carried the rate limits and the Resend
+  throttle but not `PUBLIC_BASE_URL`, the one variable that decides whether a mailed link opens for
+  anybody, nor `DB_PATH`; the README's tuning table was missing the same variables plus `RESEND_FROM`,
+  `RESEND_TIMEOUT`, `RESEND_USER_AGENT` and the mail knobs that only existed inside prose.
+* **The landing card's tab title ignored the language switch.** The server sends `SHARE_TITLE` as the
+  `<title>`, which is right before the SPA knows anything and wrong after: an English reader on the
+  family's landing card was left holding a French tab, because only the participant and console paths
+  renamed it (after an event title). The landing screen now takes the localized brand, in boot and on
+  every language switch, and `tools/check_organizer_ui.py` asserts the title actually moves — copy
+  changes, the tab title following it should not.
+* **Punctuation.** One hundred and thirty quoted phrases across seven files used guillemets — the
+  plan mostly, five comments in `main.py`, six UI strings (`Tirage « {title} » créé.`), and the
+  reasons list in the French-style guard. They are gone: the repository quotes with straight `"`, the
+  same rule the README already followed, and the French copy loses nothing (`Tirage "Réveillon" créé.`
+  reads the same as it did before). One nested case in the plan needed single quotes inside double
+  quotes rather than a mechanical swap, and the banned-French reasons in `tests/test_i18n.py` had to be
+  re-quoted by hand, because substituting into a double-quoted Python string is how you get
+  `""brisé""` — a syntax error the suite reports as an import failure, not as a typo.
+
+**The root stops being a card and becomes a page.** Once the console had moved, the hostname was left
+with one card and a sentence. That card answers a question ("where is my link?") but the page is also
+the only screen a stranger ever reads, and "what is this thing, and could my family use it?" was going
+unanswered. It is now a short explanation of the game, written for a relative rather than an operator:
+the answer stays first — the gold callout, *ton lien arrive par courriel*, and the privacy line already
+used on the participant page — then what the game is in one sentence, then three steps in the order
+they happen, then six things an organizer actually sets (who pige who, households, more than one
+exchange on one site, the budget as a note, links without email, both languages), then three reasons
+the result cannot be gamed, then a closing line for a visitor who wants the same thing for their own
+family. Nothing technical: no quotas, no tokens, no server. The container widened to `max-w-3xl` for
+the two-column flexibility grid, and the icons come from the sprite already in the bundle — no new
+assets, no new requests.
+
+**Copy, and the guards that kept it honest.** Twenty-five `landing.*` keys, in both dictionaries, so
+each language now carries 218. Three guards matter here:
+
+* The landing block's markup is scanned for `<form`, `password`, `mot de passe`, `login.` and `admin.`.
+  A page whose whole job is to not be a login form should not have to be re-read by a human every time
+  someone adds a paragraph — the ban is asserted, in both languages, in the words themselves.
+* `tools/check_organizer_ui.py` now walks every `[x-text^="t('landing."]` element on the live page and
+  fails on one that renders empty. Twenty-five strings is a page long enough to lose one quietly, and
+  an empty paragraph is invisible in a screenshot nobody reads closely.
+* **French punctuation spacing** is now a test: `: ; ! ?` take a space before them here, and a letter
+  sitting directly against one of them is English spacing. The guard covers the UI dictionary and the
+  mail dictionary together, because the mail is what a relative actually reads. It found its first bug
+  in the copy that arrived with it — a dozen landing strings written with `famille:` — and one older
+  semicolon in the console's own help text. Letters only count, so `12:30` and `http://` stay legal.
+
+Two stale claims surfaced while doing it, both caught by a guard rather than by reading: the README
+quoted **196 keys each** while the dictionaries had 218, and the browser tool's raw-key scan used
+`[a-zA-Z_.]+`, which cannot see a digit — so `landing.step1Title`, and every other key with a number in
+it, would have rendered literally on screen without that assertion noticing. The same blind spot in the
+i18n guards is what the shared `KEY_CHARS` fixed earlier in this pass; the pattern keeps recurring
+because a regex that silently matches less than it looks like it does fails closed into a *passing*
+test.
+
+**Gallery.** `22-family-landing.jpg` is the top of the page, `23-family-landing-guide.jpg` is scrolled
+to the flexibility and fairness sections — one viewport of a two-screen page documents only its hero.
+`capture_docs_media.py` shoots both from a context with its viewport written down (1440×900 at 2x) and
+scrolls by measurement rather than with `scroll_into_view_if_needed`, which decided that an already
+partly visible section needed no scrolling and re-shot the top instead. `tests/test_docs.py` keeps the
+pair honest: a still with no README row fails, and a README row with no still fails.

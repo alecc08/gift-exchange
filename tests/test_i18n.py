@@ -13,24 +13,35 @@ import main
 
 # Word-boundary on `pis` so it does not fire on "pige", "pisser" or "capopsis".
 BANNED_FR = [
-    (r"\bpis\b", "use « et » — « pis » reads as caricature on a button"),
-    (r"\btoé\b|\bmoé\b|\bste\b", "spelled-out spoken contractions; « toi » / « moi » are fine"),
-    (r"\bfrett", "« verrouillé » / « lancé » says what actually happened"),
-    (r"\bbinôm", "say « qui pige qui »"),
-    (r"astheur", "« maintenant »"),
-    (r"\bcapot", "« brisé » / « n’a pas fonctionné »"),
-    (r"\bsouhait", "the UI word is « liste d’idées »"),
-    (r"\bpu\b(?!isque)", "« plus » — « marche pu » is dialogue, not interface copy"),
-    (r"c’année", "« cette année »"),
-    (r"\bben\b", "« bien » — no phonetic spelling in the interface"),
+    (r"\bpis\b", "use 'et' — 'pis' reads as caricature on a button"),
+    (r"\btoé\b|\bmoé\b|\bste\b", "spelled-out spoken contractions; 'toi' / 'moi' are fine"),
+    (r"\bfrett", "'verrouillé' / 'lancé' says what actually happened"),
+    (r"\bbinôm", "say 'qui pige qui'"),
+    (r"astheur", "say 'maintenant'"),
+    (r"\bcapot", "'brisé' / 'n’a pas fonctionné'"),
+    (r"\bsouhait", "the UI word is 'liste d’idées'"),
+    (r"\bpu\b(?!isque)", "'plus' — 'marche pu' is dialogue, not interface copy"),
+    (r"c’année", "say 'cette année'"),
+    (r"\bben\b", "'bien' — no phonetic spelling in the interface"),
 ]
 
-ENTRY_RE = re.compile(r"^\s*'([a-z0-9.]+)':\s*'((?:[^'\\]|\\.)*)',\s*$", re.IGNORECASE)
+# Keys are lowercase with dots — and 19 of them also carry underscores (`roster.send_all`,
+# `rules.email_off`). This character class used to omit `_`, which quietly left those 19 outside
+# every guard in this file: parity, placeholders, duplicate labels, and "the markup only asks for
+# labels that exist" all skipped them. One shared class, and the visibility test below looks for key
+# starts with a *broader* pattern, so a key this parser cannot see fails the suite instead of being
+# skipped.
+KEY_CHARS = r"[a-z0-9_.]+"
+ENTRY_RE = re.compile(rf"^\s*'({KEY_CHARS})':\s*'((?:[^'\\]|\\.)*)',\s*$", re.IGNORECASE)
+KEY_START_RE = re.compile(r"^\s*'([^']{1,60})':")
 PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+# A letter sitting directly against `: ; ! ?` is English spacing. `[^\W\d_]` is "a letter, in any
+# alphabet", which keeps `12:30` and `http://` out of the way.
+TIGHT_PUNCTUATION_RE = re.compile(r"[^\W\d_][:;!?]")
 # `detail.includes('...')` is how the SPA decides which explanation to show, and `t('key')` is how
 # the markup asks for a label. Both are stringly-typed, so both drift silently.
 INCLUDE_RE = re.compile(r"detail\.includes\('([^']+)'\)")
-LABEL_RE = re.compile(r"\bt\('([a-z0-9.]+)'")
+LABEL_RE = re.compile(rf"\bt\('({KEY_CHARS})'")
 
 
 def dictionary(language: str) -> dict[str, str]:
@@ -87,6 +98,22 @@ def test_french_is_plain_quebec_french_not_caricature():
     assert not broken, "\n".join(broken)
 
 
+def test_french_punctuation_keeps_the_space_before_it():
+    """In Quebec typography `: ; ! ?` all take a space before them, and the app's French was written
+    that way throughout — until the landing page arrived with English spacing on a dozen strings.
+
+    Asserted, because spacing is invisible to a spell-checker and a reader only notices that the page
+    looks translated. Both dictionaries are checked: the mail is the text a relative actually reads.
+    The English side is deliberately not checked — tight punctuation is correct there. Letters only
+    count as violations, so `12:30` and `http://` stay legal.
+    """
+    sources = {f"ui.{key}": value for key, value in dictionary("fr").items()}
+    sources.update({f"email.{key}": value for key, value in main.EMAIL_STRINGS["fr"].items()
+                    if isinstance(value, str)})
+    tight = [f"{key}: {sources[key]!r}" for key in sorted(sources) if TIGHT_PUNCTUATION_RE.search(sources[key])]
+    assert not tight, "no space before : ; ! ?\n" + "\n".join(tight)
+
+
 def test_no_two_different_controls_share_a_label():
     """Renaming is how two unrelated buttons end up reading the same thing — which is not only a
     click-anyone hazard, it breaks anything that selects a control by its text (the docs capture
@@ -95,7 +122,11 @@ def test_no_two_different_controls_share_a_label():
     SAME_THING_TWICE = {frozenset({"admin.title", "login.title"}),
                         # The preview modal is named after the button that opens it: two controls,
                         # one thing — exactly what the allowlist is for.
-                        frozenset({"rules.preview", "mail.preview_title"})}
+                        frozenset({"rules.preview", "mail.preview_title"}),
+                        # The two mail reports (auto-send after a draw, and the bulk send) name the
+                        # same fact — who did not get mail — from two call sites. Same sentence, and
+                        # an organizer reading either means the same thing.
+                        frozenset({"draw.auto_email_failed", "roster.bulk_failed"})}
     for language in ("fr", "en"):
         by_value: dict[str, list[str]] = {}
         for key, value in dictionary(language).items():
@@ -111,6 +142,19 @@ def test_the_share_copy_and_the_ui_agree():
     assert "qui pige qui" in main.SHARE_DESCRIPTION
     assert "qui pige qui" in french["draw.blindNote"]
     assert "liste d’idées" in french["p.myWishlist"].lower()
+
+
+def test_the_readme_quotes_the_real_key_count():
+    """The README says how many keys each locale carries, and that number had already drifted.
+
+    A count in prose is a claim, and the sentence exists to tell a translator where they stand, so it
+    is compared against the dictionaries the guards above actually parse.
+    """
+    readme = (main.BASE_DIR / "README.md").read_text(encoding="utf-8")
+    stated = set(re.findall(r"\*\*(\d+) keys each\*\*", readme))
+    assert stated, "the README no longer states the key count this test exists to check"
+    french = dictionary("fr")
+    assert stated == {str(len(french))}, f"README says {sorted(stated)}, the dictionaries have {len(french)}"
 
 
 def test_every_label_the_markup_asks_for_exists():
@@ -142,15 +186,16 @@ def test_every_i18n_entry_is_visible_to_the_parity_check():
         block = main.INDEX_HTML[start:main.INDEX_HTML.index("\n  },", start)]
         declared = [match.group(1) for line in block.splitlines()
                     if (match := ENTRY_RE.match(line))]
-        started = re.findall(r"^\s*'([a-z0-9.]+)':", block, re.IGNORECASE | re.MULTILINE)
+        started = [match.group(1) for line in block.splitlines()
+                   if (match := KEY_START_RE.match(line))]
         assert len(started) == len(set(started)), f"{language}: duplicate keys"
         assert set(started) == set(declared), (
             f"{language}: entries the guards cannot see: {sorted(set(started) - set(declared))}")
 
 
 def test_the_email_errors_are_matched_before_the_generic_503():
-    """Two of the email failures are 503s, and the SPA used to answer 503 with « admin password not
-    configured » before it ever read the detail — so a mail problem was explained as a login problem.
+    """Two of the email failures are 503s, and the SPA used to answer 503 with "admin password not
+    configured" before it ever read the detail — so a mail problem was explained as a login problem.
     """
     markup = main.INDEX_HTML
     generic = markup.index("response.status === 503")

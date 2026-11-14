@@ -28,6 +28,10 @@ services:
       DB_PATH: /app/data/exchange.db
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env (openssl rand -hex 32)}
       TRUST_PROXY: ${TRUST_PROXY:-1}
+      # The console is not at the site root: "/" is the family's page (landing card + their own
+      # link). Pick something quiet if this box is public — but what guards the console is still
+      # the password, the login budget and the lockout, never the path.
+      ADMIN_PATH: ${ADMIN_PATH:-/admin}
     read_only: true
     tmpfs:
       - /tmp:size=32m

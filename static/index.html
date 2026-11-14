@@ -11,10 +11,16 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="manifest" href="/static/site.webmanifest">
 
+<!-- Which screen this document is, stamped by the server (route_tag in main.py): the family's
+     page at "/" and at any mistyped address, the organizer console at its own path. Injected rather
+     than read off the URL so the page cannot be fooled into showing the login form. -->
+<!--app-route-->
+
 <!-- The share card (og:* / twitter:*) is injected by the server, because only the server knows
      which host the family was given — see share_meta() in main.py. It is deliberately generic and
      identical for "/" and for a private "/?t=<uuid>": crawlers read this block, so nothing about a
-     real family may ever appear in it. -->
+     real family may ever appear in it. The organizer console is served this same document with the
+     block left empty: a console is not something anybody shares. -->
 <!--share-meta-->
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -149,13 +155,13 @@
 
   /* ---- responsive ----
      There were no breakpoints here at all: at phone width the roster's seven columns simply
-     overflowed their scroll container and the status chips (« Pas encore ouvert », « Lien envoyé
-     il y a 2 h ») ran into the next cell. Below 900 px the roster stops being a table and becomes
+     overflowed their scroll container and the status chips ("Pas encore ouvert", "Lien envoyé
+     il y a 2 h") ran into the next cell. Below 900 px the roster stops being a table and becomes
      one card per person, with the column names rendered inside each cell; below 640 px the controls
      get thumb-sized and the mail preview stops pretending to be a desktop window. */
 
-  /* A chip is a fact, not a fixed width: it has to survive « Pas encore ouvert » in French and
-     « Unopened » in English in the same column without stacking on top of its neighbour. */
+  /* A chip is a fact, not a fixed width: it has to survive "Pas encore ouvert" in French and
+     "Unopened" in English in the same column without stacking on top of its neighbour. */
   .chip { max-width: 100%; flex-wrap: wrap; row-gap: .15rem; }
   .chip > span { overflow-wrap: anywhere; }
 
@@ -171,7 +177,6 @@
       border: 1px solid rgba(20,60,46,.12); border-radius: 1rem; padding: .9rem 1rem;
       margin-bottom: .7rem; background: #fff;
     }
-    #roster-table tr.part + tr.part { margin-top: 0; }
     #roster-table td { padding: .3rem 0; text-align: left; }
     #roster-table td[data-label]::before {
       content: attr(data-label); display: block; margin-bottom: .2rem;
@@ -196,7 +201,7 @@
   }
 
   @media (max-width: 480px) {
-    /* The chip keeps the fact (« Lien envoyé »); the when moves to the tooltip it already carries.
+    /* The chip keeps the fact ("Lien envoyé"); the when moves to the tooltip it already carries.
        Same information, one line, no overlap with the cell next to it. */
     .chip-time { display: none; }
   }
@@ -294,11 +299,13 @@
         <button @click="setLang('en')" :class="lang === 'en' ? 'bg-pine-700 text-white shadow-sm' : 'text-pine-600 hover:text-pine-800'"
                 :title="t('lang.enTitle')" class="px-3 py-1.5 rounded-full transition">EN</button>
       </div>
-      <button x-show="mode === 'admin' && authed" @click="lock()" class="btn btn-quiet px-3 py-2 text-xs" x-text="t('admin.signout')"></button>
+      <button x-show="authed" @click="lock()" class="btn btn-quiet px-3 py-2 text-xs" x-text="t('admin.signout')"></button>
     </div>
   </header>
 
-  <!-- ===================== ADMIN ===================== -->
+  <!-- ===================== ORGANIZER CONSOLE =====================
+       Served at its own path only (ORGANIZER_PATH in main.py), and nothing on the family's page
+       links here: the password form used to be the first thing a relative met at the hostname. -->
   <template x-if="mode === 'admin'">
     <div>
 
@@ -862,6 +869,130 @@
     </div>
   </template>
 
+  <!-- ===================== FAMILY LANDING (the hostname, no token) =====================
+       Two jobs, in this order. First the one a relative needs answered: where their link is. Then
+       the page explains the game itself — how it runs, what it adapts to, why nobody can cheat —
+       because this is also the only page a stranger ever sees, and "what is this thing?" deserves an
+       answer that is not a login form. No form, and no hint that one exists anywhere: the landing
+       block is tested for those words, not trusted to stay clean. -->
+  <template x-if="mode === 'landing'">
+    <div class="max-w-3xl mx-auto px-5 pt-10 pb-28 space-y-5">
+
+      <!-- the answer first, then the pitch: whoever typed this address came looking for their link -->
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-8 md:p-10 text-center relative overflow-hidden pop-in">
+        <svg class="absolute -right-8 -top-8 w-32 h-32 text-pine-100 pointer-events-none"><use href="#i-flake"/></svg>
+        <svg class="absolute -left-10 bottom-0 w-24 h-24 text-gold-100 pointer-events-none"><use href="#i-flake"/></svg>
+
+        <p class="label" x-text="t('landing.kicker')"></p>
+        <h2 class="font-display text-3xl md:text-4xl text-pine-800 mt-1.5" x-text="t('landing.title')"></h2>
+        <p class="text-pine-700 mt-4" x-text="t('landing.lead')"></p>
+
+        <div class="mt-7 rounded-2xl bg-gold-100 ring-1 ring-gold-300/50 p-5 md:p-6 text-left">
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-10 h-10 shrink-0 rounded-xl bg-white text-gold-600">
+              <svg class="w-5 h-5"><use href="#i-mail"/></svg>
+            </span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.whereTitle')"></h3>
+              <p class="text-sm text-pine-700 mt-1" x-text="t('landing.whereBody')"></p>
+            </div>
+          </div>
+        </div>
+
+        <p class="text-[11px] text-pine-600/70 mt-4" x-text="t('p.privateNote')"></p>
+      </section>
+
+      <!-- three steps, in the order they happen -->
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-7 md:p-9">
+        <p class="label" x-text="t('landing.howTitle')"></p>
+        <ol class="mt-5 space-y-5">
+          <li class="flex gap-4">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-full bg-pine-100 text-pine-700 font-semibold text-sm">1</span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.step1Title')"></h3>
+              <p class="text-sm text-pine-600 mt-1" x-text="t('landing.step1Body')"></p>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-full bg-pine-100 text-pine-700 font-semibold text-sm">2</span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.step2Title')"></h3>
+              <p class="text-sm text-pine-600 mt-1" x-text="t('landing.step2Body')"></p>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-full bg-pine-100 text-pine-700 font-semibold text-sm">3</span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.step3Title')"></h3>
+              <p class="text-sm text-pine-600 mt-1" x-text="t('landing.step3Body')"></p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <!-- what an organizer can set: six things a family actually asks for -->
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-7 md:p-9">
+        <p class="label" x-text="t('landing.flexTitle')"></p>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-tree"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexRoles')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-bauble"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexHome')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-gift"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexMany')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-candy"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexBudget')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-link"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexLinks')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-star"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexLanguage')"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-7 md:p-9">
+        <p class="label" x-text="t('landing.fairTitle')"></p>
+        <ul class="mt-4 space-y-3">
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 shrink-0 mt-0.5 text-pine-500"><use href="#i-check"/></svg>
+            <p class="text-sm text-pine-700" x-text="t('landing.fairBlind')"></p>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 shrink-0 mt-0.5 text-pine-500"><use href="#i-check"/></svg>
+            <p class="text-sm text-pine-700" x-text="t('landing.fairFair')"></p>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 shrink-0 mt-0.5 text-pine-500"><use href="#i-check"/></svg>
+            <p class="text-sm text-pine-700" x-text="t('landing.fairLink')"></p>
+          </li>
+        </ul>
+      </section>
+
+      <section class="rounded-[2rem] ring-1 ring-pine-200/70 bg-pine-50/70 p-6 md:p-7 text-center">
+        <svg class="w-9 h-9 text-gold-500 mx-auto"><use href="#i-flake"/></svg>
+        <h3 class="font-display text-lg text-pine-800 mt-2" x-text="t('landing.askTitle')"></h3>
+        <p class="text-sm text-pine-600 mt-1.5 max-w-xl mx-auto" x-text="t('landing.askBody')"></p>
+      </section>
+    </div>
+  </template>
+
   <!-- ===================== PARTICIPANT ===================== -->
   <template x-if="mode === 'participant'">
     <div class="max-w-2xl mx-auto px-5 pt-10 pb-28 space-y-6">
@@ -1043,6 +1174,37 @@
 const I18N = {
   fr: {
     'brand': 'Temps des Fêtes',
+
+    /* The screen at the site's own address: for a relative who typed it instead of using their
+       link, and for anyone else who lands here. It explains the game and where the link is. Nothing
+       about a console or a signing-in form appears here, and the words themselves stay out: the
+       landing block is tested for them. */
+    'landing.kicker': 'Échange de cadeaux en famille',
+    'landing.title': 'Tout le monde gâte quelqu’un. Personne ne sait qui.',
+    'landing.lead': 'Un tirage au sort pensé pour une grande famille : les règles se décident à l’avance, chacun reçoit son propre lien, et le résultat ne se découvre qu’en ouvrant ce lien.',
+    'landing.whereTitle': 'Ton lien arrive par courriel',
+    'landing.whereBody': 'Ou l’organisateur te le donne en main propre. Ouvre-le pour écrire tes idées de cadeaux, puis pour voir qui tu gâtes dès que le tirage est lancé. Rien à installer, aucun compte à créer : le lien, c’est tout.',
+    'landing.howTitle': 'Comment ça marche',
+    'landing.step1Title': 'Le monde et les règles',
+    'landing.step1Body': 'L’organisateur écrit la liste des participants et décide qui pige qui : les adultes entre eux, les enfants aussi, les deux mélangés si tu préfères. Il peut ajouter un mot sur le budget.',
+    'landing.step2Title': 'Un lien par personne',
+    'landing.step2Body': 'Chacun reçoit son propre lien, par courriel ou en main propre. Douze cousins, ça fait douze liens ; un seul courriel part par boîte quand trois personnes partagent la même.',
+    'landing.step3Title': 'Le tirage, puis la surprise',
+    'landing.step3Body': 'Une fois les règles verrouillées, chacun ouvre son lien : c’est là que le nom apparaît, avec la liste d’idées de la personne. Personne ne peut voir celle des autres.',
+    'landing.flexTitle': 'Ça se règle sur ta famille',
+    'landing.flexRoles': 'Adultes et enfants : qui gâte qui se décide case par case — un enfant peut gâter un adulte, ou jamais.',
+    'landing.flexHome': 'Personne ne gâte quelqu’un de sa propre maison, même quand deux familles portent le même nom.',
+    'landing.flexMany': 'Un Noël en famille, un échange au bureau, un autre entre cousins : tout peut tourner sur le même site, sans se mélanger.',
+    'landing.flexBudget': 'Le budget reste une note libre, pas une case à remplir au centime près.',
+    'landing.flexLinks': 'Les liens partent d’un clic, ou s’écrivent à la main pour ceux qui n’ont pas de courriel.',
+    'landing.flexLanguage': 'Le site est en français ou en anglais, d’un clic, et les courriels peuvent être dans l’autre langue.',
+    'landing.fairTitle': 'Pourquoi personne ne triche',
+    'landing.fairBlind': 'Le tirage est fait d’un seul coup et personne ne peut le regarder : pas même l’organisateur.',
+    'landing.fairFair': 'Chacun reçoit un nombre de cadeaux égal à celui qu’il donne — pas de cousin qui gâte tout le monde.',
+    'landing.fairLink': 'Le lien ne se partage pas : il ne montre que ton nom à toi, et la personne que tu gâtes.',
+    'landing.askTitle': 'Envie de la même chose pour ta famille ?',
+    'landing.askBody': 'Cet échange a été monté par un proche, sur son propre serveur. Demande-lui : ça se monte en une soirée, et ça se joue toute la saison des Fêtes.',
+
     'admin.title': 'Espace organisateur',
     'lang.switch': 'Choisir la langue',
     'lang.frTitle': 'Français québécois',
@@ -1077,7 +1239,7 @@ const I18N = {
     'draws.budgetField': 'Note de budget (facultatif)',
     'draws.copyField': 'Copier les participants de…',
     'draws.copyNone': 'Personne (roster vide)',
-    'draws.copyHelp': 'Les personnes et leurs adresses viennent avec; pas les liens, pas les résultats.',
+    'draws.copyHelp': 'Les personnes et leurs adresses viennent avec ; pas les liens, pas les résultats.',
     'draws.create': 'Créer le tirage',
     'draws.back': 'Tous les tirages',
     'draws.opened_on': 'Ouvert le {at}',
@@ -1085,9 +1247,9 @@ const I18N = {
     'draws.status_locked': 'Tiré',
     'draws.status_drawn': 'Tiré le {at}',
     'draws.counts': '{people} personne(s) · {mailed} lien(s) envoyé(s) · {opened} ouvert(s)',
-    'draws.created': 'Tirage « {title} » créé.',
-    'draws.deleted': 'Tirage « {title} » supprimé.',
-    'draws.confirmDelete': 'Supprimer le tirage « {title} » et ses {n} participant(s)? Leurs liens ne fonctionneront plus.',
+    'draws.created': 'Tirage "{title}" créé.',
+    'draws.deleted': 'Tirage "{title}" supprimé.',
+    'draws.confirmDelete': 'Supprimer le tirage "{title}" et ses {n} participant(s)? Leurs liens ne fonctionneront plus.',
     'err.drawGone': 'Ce tirage n’existe plus.',
     'err.pickDraw': 'Choisis un tirage dans la liste.',
 
@@ -1096,7 +1258,7 @@ const I18N = {
     'warn.childrenNeed': 'Chaque adulte doit piger {need} enfant(s), mais il n’y en a que {available} en tout dans la liste.',
     'warn.childAdultsNeed': 'Chaque enfant doit piger {need} adulte(s), mais il n’y en a que {available} en tout dans la liste.',
     'warn.childChildrenNeed': 'Chaque enfant doit piger {need} enfant(s), mais il n’y en a que {available} en tout dans la liste.',
-    'warn.noReceivers': 'Pour le rôle « {role} », il n’y a personne à gâter.',
+    'warn.noReceivers': 'Pour le rôle "{role}", il n’y a personne à gâter.',
     'warn.selfOnly': 'Il n’y a qu’une seule personne dans la liste : le tirage ne peut pas se faire.',
     'note.title': 'À savoir avant de lancer',
     'note.crossingsNeeded': 'Avec des groupes gros comme ceux-là, le tirage devra bien piger {n} fois à l’intérieur d’un groupe.',
@@ -1192,7 +1354,7 @@ const I18N = {
     'draw.crossingsNone': 'Personne a pigé dans son propre groupe.',
     'draw.reset': 'Recommencer le tirage',
     'draw.resetHint': 'Efface les résultats et ça rouvre la place.',
-    'draw.confirmReset': 'Recommencer le tirage ? Les résultats et les marques « ouvert » s’en vont.',
+    'draw.confirmReset': 'Recommencer le tirage ? Les résultats et les marques "ouvert" s’en vont.',
     'draw.resetDone': 'Tirage recommencé. Tu peux changer les règles et la liste.',
     'draw.forecast': '{gifts} cadeau(s) en tout : {toAdults} pour des adultes, {toChildren} pour des enfants',
     'draw.auto_email_done': '{sent} courriel(s) envoyé(s) automatiquement.',
@@ -1202,7 +1364,7 @@ const I18N = {
     'mail.preview_sub': 'C’est un modèle : rien n’a été envoyé et le lien est un exemple.',
     'mail.subject': 'Sujet',
     'mail.close': 'Fermer',
-    'mail.sample': 'Nom d’exemple : « Aline ».',
+    'mail.sample': 'Nom d’exemple : "Aline".',
 
     'p.hello': 'Bonjour',
     'p.pending': 'le tirage n’est pas encore fait. Ça s’en vient, repasse plus tard !',
@@ -1250,6 +1412,33 @@ const I18N = {
   },
   en: {
     'brand': 'Gift exchange',
+
+    'landing.kicker': 'A family gift exchange',
+    'landing.title': 'Everyone buys for somebody. Nobody knows for whom.',
+    'landing.lead': 'A draw built for a big family: the rules are decided up front, everyone gets their own link, and the pairing is only ever visible inside that link.',
+    'landing.whereTitle': 'Your link arrives by email',
+    'landing.whereBody': 'Or the organizer hands it to you in person. Open it to write down your gift ideas, and to see who you are buying for once the draw has run. Nothing to install, no account to create: the link is everything.',
+    'landing.howTitle': 'How it works',
+    'landing.step1Title': 'The people and the rules',
+    'landing.step1Body': 'The organizer writes out the guest list and decides who buys for whom: adults among themselves, children too, or the two mixed together. A note about the budget can go along.',
+    'landing.step2Title': 'One link each',
+    'landing.step2Body': 'Everyone gets their own link, by email or in person. Twelve cousins means twelve links; when three people share one mailbox, only one message goes out.',
+    'landing.step3Title': 'The draw, then the surprise',
+    'landing.step3Body': 'Once the rules are locked, each person opens their own link: that is where the name appears, with the other person’s gift ideas. Nobody can see anyone else’s.',
+    'landing.flexTitle': 'It bends to your family',
+    'landing.flexRoles': 'Adults and children: who gives to whom is set one box at a time — a child can buy for an adult, or never.',
+    'landing.flexHome': 'Nobody buys for someone in their own household, even when two families carry the same surname.',
+    'landing.flexMany': 'A holiday exchange, an office one, another among cousins: they can all run on the same site without mixing.',
+    'landing.flexBudget': 'The budget stays a note in your own words, not a field to fill in to the cent.',
+    'landing.flexLinks': 'Links go out with one click, or get written by hand for the people with no email.',
+    'landing.flexLanguage': 'The site switches between French and English in one click, and the emails can be in the other language.',
+    'landing.fairTitle': 'Why nobody can cheat',
+    'landing.fairBlind': 'The draw happens all at once and nobody can look at it — not even the organizer.',
+    'landing.fairFair': 'Everyone receives as many gifts as they give — no cousin buying for the whole room.',
+    'landing.fairLink': 'A link is not shareable: it shows only your name, and the person you are buying for.',
+    'landing.askTitle': 'Want the same thing for your family?',
+    'landing.askBody': 'This exchange was set up by someone close to you, on their own server. Ask them: it takes an evening to put together, and it runs all season.',
+
     'admin.title': 'Organizer space',
     'lang.switch': 'Language choice',
     'lang.frTitle': 'Quebec French',
@@ -1474,7 +1663,11 @@ function asAdminConfig(config) {
 function giftExchange() {
   return {
     lang: localStorage.getItem('ge_lang') || 'fr',
-    mode: 'admin',
+    /* Which screen this document is. The server stamps it (see spa_shell/route_tag in main.py):
+       the console is served at its own path, and every other path is the family's page. Absent
+       (opened from a file, a stale cache) counts as the family's page — never as the console. */
+    route: { organizer: window.__GE_ORGANIZER__ === true },
+    mode: 'landing',
     token: null,
     limits: { ...DEFAULT_LIMITS },
 
@@ -1489,11 +1682,13 @@ function giftExchange() {
     participants: [], locked: false, groupFilter: '',
     draft: { name: '', role: 'ADULT', family_group: '', group_key: '', wishlist: '', email: '' },
     copiedId: null, copiedAll: false,
+    /* The setTimeout handles for the "copied" flags, declared so they can be cancelled. */
+    _timers: {},
     emailEnabled: false, emailBusyId: null, sendingAll: false, previewOpen: false, previewBody: null,
 
     participant: null, data: { status: '', assignments: [] }, pError: false,
     revealed: false, burstOn: false, wishlistDraft: '', savedWishlist: '', savedAt: null,
-    wishlistSaved: false, copiedList: false, poll: null,
+    copiedList: false, poll: null,
     burst: [],
 
     /* ---------- helpers ---------- */
@@ -1505,6 +1700,7 @@ function giftExchange() {
     },
     get pageTitle() {
       if (this.mode === 'participant') return this.data.event_title || this.t('brand');
+      if (this.mode === 'landing') return this.t('landing.kicker');
       // The list screen is not about one draw, so it must not borrow a title from the last one
       // the organizer had open.
       if (this.activeDraw === null) return this.t('draws.title');
@@ -1526,27 +1722,22 @@ function giftExchange() {
     },
     /* Two different labels on purpose: `family_group` is a surname people share, `group_key` is the
        household the rule actually works on. Chips and filters use the household. */
-    get householdGroups() {
+    /* Household chips and surname chips are the same tally over a different field: display name,
+       case-insensitive count, biggest first then alphabetical. An empty value is nobody's household
+       and nobody's surname, so it never becomes a chip. */
+    tallyBy(field) {
       const counts = new Map();
-      for (const p of this.participants) {
-        const key = p.group_key.trim().toLowerCase();
+      for (const person of this.participants) {
+        const key = (person[field] || '').trim().toLowerCase();
         if (!key) continue;
         const found = counts.get(key);
         if (found) found.count += 1;
-        else counts.set(key, { name: p.group_key, count: 1 });
+        else counts.set(key, { name: person[field], count: 1 });
       }
       return [...counts.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
     },
-    get familyNames() {
-      const counts = new Map();
-      for (const p of this.participants) {
-        const key = p.family_group.trim().toLowerCase();
-        const found = counts.get(key);
-        if (found) found.count += 1;
-        else counts.set(key, { name: p.family_group, count: 1 });
-      }
-      return [...counts.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
-    },
+    get householdGroups() { return this.tallyBy('group_key'); },
+    get familyNames() { return this.tallyBy('family_group'); },
     get visibleParticipants() {
       if (!this.groupFilter) return this.participants;
       const wanted = this.groupFilter.trim().toLowerCase();
@@ -1559,12 +1750,11 @@ function giftExchange() {
     get emailReadyCount() { return this.participants.filter(p => this.looksLikeEmail(p.email)).length; },
     /* Distinct mailboxes among the people with an address: the number of emails that will actually
        leave. Twelve cousins at five addresses is five sends, and saying so here is what makes the
-       « Envoyer » click predictable instead of a guess. */
+       "Envoyer" click predictable instead of a guess. */
     get mailboxCount() {
-      const seen = new Set(this.participants
+      return new Set(this.participants
         .filter(p => this.looksLikeEmail(p.email))
-        .map(p => p.email.trim().toLowerCase()));
-      return seen.size;
+        .map(p => this.addressKey(p))).size;
     },
     looksLikeEmail(value) {
       // Mirrors the server's EMAIL_RE intent: something @ something.tld, no spaces. Deliberately
@@ -1655,16 +1845,21 @@ function giftExchange() {
     /* Quebec French for dates/relative times ("il y a 5 minutes", 24 h clock);
        Canadian English for the EN switch. */
     locale() { return this.lang === 'fr' ? 'fr-CA' : 'en-CA'; },
-    formatDate(value) {
-      if (!value) return '';
+    /* A stored ISO timestamp, or null when the string is unusable — both formatters print the raw
+       value in that case, because an invented date is worse than an ugly one. */
+    parseDate(value) {
+      if (!value) return null;
       const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return value;
+      return Number.isNaN(date.getTime()) ? null : date;
+    },
+    formatDate(value) {
+      const date = this.parseDate(value);
+      if (!date) return value || '';
       return new Intl.DateTimeFormat(this.locale(), { dateStyle: 'medium', timeStyle: 'short' }).format(date);
     },
     relative(value) {
-      if (!value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return value;
+      const date = this.parseDate(value);
+      if (!date) return value || '';
       const seconds = Math.round((Date.now() - date.getTime()) / 1000);
       const rtf = new Intl.RelativeTimeFormat(this.locale(), { numeric: 'auto' });
       if (Math.abs(seconds) < 60) return rtf.format(-seconds, 'second');
@@ -1693,21 +1888,32 @@ function giftExchange() {
       const params = new URLSearchParams(window.location.search);
       this.token = params.get('t');
       if (this.token) {
+        // A token is a query parameter, so a private link works from any path this shell is
+        // served at; it always wins over the console.
         this.mode = 'participant';
         this.revealed = sessionStorage.getItem('ge_revealed_' + this.token) === '1';
         await this.loadDraw();
-      } else if (sessionStorage.getItem('ge_admin_token') || sessionStorage.getItem('admin_pw')) {
-        this.authed = true;
-        await this.enterAdmin(params);
+      } else if (this.route.organizer) {
+        this.mode = 'admin';
+        if (sessionStorage.getItem('ge_admin_token')) {
+          this.authed = true;
+          await this.enterAdmin();
+        }
       }
+      // The <title> the server sends is the generic share card, which is the right thing before this
+      // script knows anything and the wrong thing afterwards: on the family's landing card an English
+      // reader should not be left holding a French tab. The other two screens name the tab after the
+      // event once the event is loaded; this one has no event, so it takes the localized brand.
+      if (this.mode === 'landing') document.title = this.t('brand');
     },
 
     /* Where an organizer lands: the draw in the URL if it still exists, otherwise the list. A
        bookmarked console link is worth keeping across a reload, but a deleted draw must not leave
-       the screen pointing at nothing. */
-    async enterAdmin(params) {
+       the screen pointing at nothing. The query string is read here so both callers — boot and a
+       fresh login — get the same answer. */
+    async enterAdmin() {
       await this.loadDraws();
-      const wanted = parseInt(params.get('draw'), 10);
+      const wanted = parseInt(new URLSearchParams(window.location.search).get('draw'), 10);
       if (Number.isInteger(wanted) && this.draws.some(entry => entry.id === wanted)) {
         await this.openDraw(wanted);
       }
@@ -1717,6 +1923,7 @@ function giftExchange() {
       this.lang = lang;
       localStorage.setItem('ge_lang', lang);
       document.documentElement.lang = this.locale();
+      if (this.mode === 'landing') document.title = this.t('brand');
     },
 
     async loadLimits() {
@@ -1750,10 +1957,10 @@ function giftExchange() {
     /* ---------- transport ---------- */
     authHeaders() {
       const headers = {};
+      // Only the bearer token: the console never stores the password itself, and a bare
+      // X-Admin-Password header is for curl and scripts, not for the browser.
       const bearer = sessionStorage.getItem('ge_admin_token');
       if (bearer) headers['Authorization'] = 'Bearer ' + bearer;
-      const legacy = sessionStorage.getItem('admin_pw');
-      if (legacy) headers['X-Admin-Password'] = legacy;
       return headers;
     },
     async api(path, options = {}, withAuth = false) {
@@ -1820,10 +2027,17 @@ function giftExchange() {
       this.emailEnabled = !!response.body.email_enabled;
     },
 
+    /* The console's own address, in one place. It used to be the site root, so every rewrite said
+       '/' — which, now that the console is served at its own path, would have bounced the organizer
+       onto the family's landing card mid-session. */
+    consoleUrl(drawId = null) {
+      const path = window.location.pathname;
+      return drawId === null ? path : `${path}?draw=${encodeURIComponent(drawId)}`;
+    },
     async openDraw(id) {
       this.activeDraw = id;
       this.clearAdminError();
-      window.history.replaceState({}, '', '/?draw=' + encodeURIComponent(id));
+      window.history.replaceState({}, '', this.consoleUrl(id));
       await this.loadState();
     },
 
@@ -1831,7 +2045,7 @@ function giftExchange() {
       this.activeDraw = null;
       this.previewOpen = false;
       this.groupFilter = '';
-      window.history.replaceState({}, '', '/');
+      window.history.replaceState({}, '', this.consoleUrl());
       // The tab stops naming one event as soon as the organizer is back among several.
       document.title = this.t('brand');
       this.loadDraws();
@@ -1882,23 +2096,23 @@ function giftExchange() {
         this.loginError = this.errorText(response, 'login.error');
         return;
       }
-      sessionStorage.removeItem('admin_pw');
       sessionStorage.setItem('ge_admin_token', response.body.token);
       this.pwDraft = '';
       this.authed = true;
-      await this.enterAdmin(new URLSearchParams(window.location.search));
+      await this.enterAdmin();
     },
     async lock() {
       await this.api('/api/admin/logout', { method: 'POST', body: '{}' }, true);
       sessionStorage.removeItem('ge_admin_token');
-      sessionStorage.removeItem('admin_pw');
       this.authed = false;
       this.participants = [];
       this.draws = [];
       this.activeDraw = null;
-      window.history.replaceState({}, '', '/');
       this.clearAdminError();
       this.securityNotice = '';
+      // Back to the console's own path, not to "/": signing out must not drop the organizer onto
+      // the family's landing card, which is where the console used to be.
+      window.history.replaceState({}, '', window.location.pathname);
     },
     async loadState() {
       const response = await this.api(this.drawPath('/api/admin/state'), { method: 'GET' }, true);
@@ -1965,24 +2179,33 @@ function giftExchange() {
       helper.remove();
       return copied;
     },
+    /* The participant's URL, built in one place because three things have to agree on it: this
+       console, the mail template (`participant_link()` in main.py) and whatever the family was
+       already mailed. One shape, `/?t=<uuid>`, and the token is a credential. */
+    participantUrl(person) {
+      return `${window.location.origin}/?t=${person.token}`;
+    },
+    /* A "copied" flag that turns itself back off. Three controls need it, and the third copy of
+       the clearTimeout/setTimeout pair is how a timer leaks into a button the user already left. */
+    flashFlag(flag, onValue, offValue, ms) {
+      clearTimeout(this._timers[flag]);
+      this[flag] = onValue;
+      this._timers[flag] = setTimeout(() => { this[flag] = offValue; }, ms);
+    },
     async copyLink(person) {
-      const url = `${window.location.origin}/?t=${person.token}`;
+      const url = this.participantUrl(person);
       if (!(await this.writeClipboard(url))) { window.prompt(this.t('err.copy'), url); return; }
-      this.copiedId = person.id;
-      clearTimeout(this._copyTimer);
-      this._copyTimer = setTimeout(() => { this.copiedId = null; }, 1800);
+      this.flashFlag('copiedId', person.id, null, 1800);
     },
     async copyAllLinks() {
       const lines = this.participants
         .map(p => `${p.name} (${this.t('role.' + p.role)}, ${p.family_group}`
           + `${p.group_key ? ' · ' + this.t('roster.group') + ' ' + p.group_key : ''}`
-          + `) — ${window.location.origin}/?t=${p.token}`)
+          + `) — ${this.participantUrl(p)}`)
         .join('\n');
       if (!(await this.writeClipboard(lines))) { window.prompt(this.t('err.copy'), lines); return; }
-      this.copiedAll = true;
+      this.flashFlag('copiedAll', true, false, 2200);
       this.toast(this.t('roster.copied'));
-      clearTimeout(this._copyAllTimer);
-      this._copyAllTimer = setTimeout(() => { this.copiedAll = false; }, 2200);
     },
 
     /* ---------- email ---------- */
@@ -2022,12 +2245,17 @@ function giftExchange() {
       if (failed.length) this.toast(this.t('roster.bulk_failed', { names: failed.join(', ') }), 'warn');
       await this.loadState();
     },
+    /* The same grouping the server applies when it bundles a household into one mail
+       (`_group_by_address` in main.py): compare the trimmed, lowercased address. */
+    addressKey(person) {
+      return (person.email || '').trim().toLowerCase();
+    },
     /* Who else shares this person's address, in this draw. That is the household the one-mail rule
        sends to, and the console should say so before the click, not after the surprise. */
     emailHousehold(person) {
-      const address = (person.email || '').trim().toLowerCase();
+      const address = this.addressKey(person);
       if (!address) return [];
-      return this.participants.filter(other => (other.email || '').trim().toLowerCase() === address);
+      return this.participants.filter(other => this.addressKey(other) === address);
     },
     sendHelpFor(person) {
       const shared = this.emailHousehold(person).length;
@@ -2119,8 +2347,7 @@ function giftExchange() {
         ? this.data.assignments.map(a => `${a.name} (${this.t('role.' + a.role)})${a.wishlist ? ': ' + a.wishlist : ''}`).join('\n')
         : this.t('p.noGifts');
       if (!(await this.writeClipboard(list))) return;
-      this.copiedList = true;
-      setTimeout(() => { this.copiedList = false; }, 1800);
+      this.flashFlag('copiedList', true, false, 1800);
     },
     queueWishlistSave() {
       clearTimeout(this._saveTimer);
@@ -2137,8 +2364,6 @@ function giftExchange() {
       if (!response.ok) { this.toast(this.errorText(response, 'err.unknown'), 'error'); return; }
       this.savedWishlist = this.wishlistDraft;
       this.savedAt = new Date().toISOString();
-      if (this.data.participant) this.data.participant.wishlist = this.wishlistDraft;
-      this.wishlistSaved = true;
     },
 
     /* ---------- ambience ---------- */
