@@ -34,13 +34,13 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Literal, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -89,7 +89,6 @@ NO_PARTICIPANTS = "Cannot run a draw with no participants"
 DRAW_NOT_FOUND = "This draw does not exist"
 DRAW_ID_REQUIRED = "No draw selected"
 DRAW_NONE = "There is no draw yet"
-DRAW_TITLE_REQUIRED = "A draw needs a name"
 TOO_LARGE = "Request body too large"
 EMAIL_NOT_CONFIGURED = "Email sending is not configured on this server"
 EMAIL_NO_ADDRESS = "This participant has no email address"
@@ -149,7 +148,9 @@ SESSION_TTL_SECONDS = env_int("SESSION_TTL_SECONDS", 12 * 3600)
 # Email delivery (Resend)
 # --------------------------------------------------------------------------- #
 #
-# Read per call, like db_path(), so tests (and a container restart with new env) are honest.
+# Credentials and endpoints are read per call, like db_path(), so tests (and a container restart with
+# new env) are honest. The throttle sizes below are the exception: they are read once at import, so
+# changing one means a restart — deliberate, because they are tuning knobs nobody flips at runtime.
 # A blank RESEND_API_KEY means the feature is OFF: every send fails closed with a clear message,
 # the same shape as a blank ADMIN_PASSWORD closing the console. The key is read here and in
 # send_email only — it never reaches a log line, an API response or a git-managed file.
@@ -195,6 +196,11 @@ def email_retry_after_s() -> int:
 
 _email_gate = threading.Lock()          # one send at a time across the whole process
 _email_gate_at = {"global": 0.0, "by_address": {}}
+# How long an address stays remembered, and how many are kept. A gift exchange has dozens of
+# addresses; the numbers only matter for a long-lived process, which is why they are a ceiling
+# rather than a config knob.
+ADDRESS_MEMORY_SECONDS = 3600
+ADDRESS_MEMORY_MAX = 512
 
 
 def _throttle_before_send(address: str) -> None:
@@ -210,7 +216,15 @@ def _throttle_before_send(address: str) -> None:
             time.sleep(wait)
         sent_at = time.monotonic()
         _email_gate_at["global"] = sent_at
-        _email_gate_at["by_address"][address] = sent_at
+        by_address = _email_gate_at["by_address"]
+        if len(by_address) >= ADDRESS_MEMORY_MAX:
+            # Addresses are never deleted from the roster (the same family comes back next year), so
+            # the map would grow forever. Forget only the ones too old to space anything: an hour-old
+            # gap is no gap, and the addresses that just received a mail keep their spacing.
+            stale = [key for key, when in by_address.items() if now - when > ADDRESS_MEMORY_SECONDS]
+            for key in stale:
+                del by_address[key]
+        by_address[address] = sent_at
 
 
 # Resend sits behind Cloudflare, and that edge answers `403 / error code: 1010` to Python's
@@ -248,15 +262,15 @@ def _group_by_address(people: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _skip_rows(people: list[dict[str, Any]], reason: str) -> list[dict[str, Any]]:
     """One report row per skipped person — never one error that hides who was skipped."""
     return [{"id": person["id"], "name": person["name"], "ok": False, "reason": reason,
-             "message_id": None, "shared_with": []} for person in people]
+             "message_id": None} for person in people]
 
 
 def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], event_title: str,
                             language: str, base_url: str, ready: bool) -> list[dict[str, Any]]:
     """Send one email covering everyone at one address, and stamp every one of them.
 
-    Returns a row per participant, because that is how the roster is read; each row carries
-    `shared_with` so the console can say "one mail, three people" instead of implying three sends.
+    Returns a row per participant, because that is how the roster is read: a household of three is
+    three rows, and the caller counts `messages` to know that only one mail left.
 
     `ready` (has this draw been drawn?) is an argument, not a re-read of a settings row: with
     several draws on one server there is no single row to read, and the caller knows which draw it
@@ -298,11 +312,8 @@ def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], eve
     # enough to trace a send through Resend's own event feed.
     audit("email_sent", participant_ids=",".join(map(str, ids)), people=len(people),
           message_id=message_id or None)
-    names_by_id = {person["id"]: person["name"] for person in people}
     return [{"id": person["id"], "name": person["name"], "ok": True, "reason": None,
-             "message_id": message_id or None,
-             "shared_with": [name for other_id, name in names_by_id.items()
-                             if other_id != person["id"]]}
+             "message_id": message_id or None}
             for person in people]
 
 
@@ -320,6 +331,14 @@ def _sendable_email(value: str) -> bool:
     """Does this look like it can carry mail? Checked only at send time — see _clean_email_value."""
     return bool(EMAIL_RE.match(value or ""))
 
+# The origin this deployment is known by, for the two places a *request* cannot supply one: the
+# CSP's img-src (the console's mail preview loads the art by absolute URL from a srcdoc iframe,
+# which is a different origin as far as CSP is concerned) and the sample links in a preview.
+# `PUBLIC_BASE_URL` wins when set, so a deployment that moves host moves one value, not two — the
+# day the CSP and the mail disagreed is the day the preview's art goes blank for no visible reason.
+KNOWN_PUBLIC_ORIGIN = (os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip("/")
+                       or "https://tirage-noel.alserv.org")
+
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
@@ -331,7 +350,7 @@ SECURITY_HEADERS = {
         "script-src 'self' https://cdn.tailwindcss.com https://cdn.jsdelivr.net 'unsafe-inline' 'unsafe-eval'; "
         "style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://fonts.googleapis.com; "
         "font-src 'self' https://fonts.gstatic.com; "
-        "img-src 'self' data: https://tirage-noel.alserv.org; "
+        f"img-src 'self' data: {KNOWN_PUBLIC_ORIGIN}; "
         "connect-src 'self'; "
         "base-uri 'self'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
     ),
@@ -406,14 +425,21 @@ CREATE TABLE IF NOT EXISTS assignments (
 # one gets them here, and `group_key` inherits what `family_group` used to mean so a roster built
 # before this existed keeps drawing exactly as it did. See "Grouping" in PLAN.md for why the two
 # fields are separate now: a surname is not a household.
-# The rules that belong to one draw. Named once because three things have to agree on the list:
-# the API payload (_config_dict), the column migrations below, and the rebuild that turns the old
-# single-event `config` table into `draws`.
+# The rules that belong to one draw. Named once because four places have to agree on the list: the
+# table in SCHEMA, the rebuild that turns the old single-event `config` table into `draws`, the
+# column migrations below, and the API payload (_config_dict). Anything the console may write is
+# derived from this list rather than written out a fifth time.
 DRAW_RULE_COLUMNS = (
     "event_title", "adult_draws_adult", "adult_draws_child", "child_draws_adult",
     "child_draws_child", "budget_note", "avoid_same_group", "email_language",
     "auto_email_on_draw", "is_locked",
 )
+
+# The rules an organizer is allowed to change. Derived from the rule columns instead of written out
+# again, so a new column cannot quietly become writable — or stay unwritable because somebody forgot
+# to add it here. `is_locked` is the one exception: it is the server's answer to a draw having run,
+# never a field a client sets.
+EDITABLE_CONFIG_FIELDS = tuple(column for column in DRAW_RULE_COLUMNS if column != "is_locked")
 
 MIGRATIONS = (
     ("participants", "group_key", "ALTER TABLE participants ADD COLUMN group_key TEXT NOT NULL DEFAULT ''",
@@ -626,11 +652,11 @@ def mail_base_url(request: Request) -> str:
 def participant_link(base_url: str, token: str) -> str:
     """The participant's own URL, built in one place because it is a credential *and* a route.
 
-    The SPA reads its token from the query string (`/?t=<uuid>`), and that is what the console's
-    « Copier le lien » hands out. An email that instead reuses the API's path shape — `/draw/<uuid>`
-    — lands on a route the server does not serve, and the family reads `{"detail":"Not Found"}`.
-    That happened, twelve inboxes, on the first real send; this function is the seam that keeps the
-    console, the mail template and the sample preview saying the same URL.
+    The SPA reads its token from the query string (`/?t=<uuid>`), so the link works from any path the
+    shell is served at. The first real send instead reused the API's path shape (`/draw/<uuid>`) and
+    twelve inboxes got a link that answered nothing useful; this function is the seam that keeps the
+    console, the mail template and the sample preview saying one URL, because a mailed URL cannot be
+    taken back.
     """
     return f"{base_url}/?t={token}"
 
@@ -664,6 +690,8 @@ class RateLimiter:
                 return False, blocked_until - now
             count += 1
             self._hits[identity] = (seen_bucket, count, blocked_until)
+            if len(self._hits) > 4096:      # one public page, many client addresses
+                self._prune_locked()
             if limit > 0 and count > limit:
                 return False, (seen_bucket + 1) * window - now
         return True, 0
@@ -683,12 +711,16 @@ class RateLimiter:
         with self._lock:
             self._hits.pop((scope, key), None)
 
-    def prune(self) -> None:
+    def _prune_locked(self) -> None:
+        """Drop windows that have expired and are not holding a lockout. Caller holds the lock."""
         cutoff = int(time.time()) - 300
+        for identity, (bucket, _count, blocked) in list(self._hits.items()):
+            if bucket * 60 < cutoff and blocked < int(time.time()):
+                self._hits.pop(identity, None)
+
+    def prune(self) -> None:
         with self._lock:
-            for identity, (bucket, _count, blocked) in list(self._hits.items()):
-                if bucket * 60 < cutoff and blocked < int(time.time()):
-                    self._hits.pop(identity, None)
+            self._prune_locked()
 
 
 LIMITER = RateLimiter()
@@ -1653,17 +1685,6 @@ class EmailPreviewRequest(BaseModel):
     links: int = Field(default=1, ge=1, le=len(PREVIEW_NAMES))
 
 
-class LimitsOut(BaseModel):
-    name: int
-    family_group: int
-    group_key: int
-    wishlist: int
-    email: int
-    event_title: int
-    budget_note: int
-    max_quota: int
-
-
 # --------------------------------------------------------------------------- #
 # App, middleware, auth plumbing
 # --------------------------------------------------------------------------- #
@@ -1828,6 +1849,58 @@ def _participant_row(conn: sqlite3.Connection, participant_id: int,
     return row
 
 
+@contextmanager
+def draw_transaction(conn: sqlite3.Connection):
+    """One serialised write against the draw tables.
+
+    `_draw_lock` stops two organizers interleaving a re-draw and a reset, and BEGIN IMMEDIATE takes
+    the SQLite write lock up front so the statements inside cannot read each other's half-written
+    roster. The rollback on the way out is what lets the three call sites read as straight-line code
+    instead of each carrying its own try/except.
+    """
+    with _draw_lock:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+
+
+def _clear_assignments(conn: sqlite3.Connection, draw_id: int) -> int:
+    """Delete one draw's pairings and say how many went.
+
+    `assignments` has no draw_id column — a pairing hangs off two participant ids — so the scope is a
+    subquery, and it is not cosmetic: re-drawing the office exchange must not erase the family's
+    results, and a reset on one draw must not clear another one's delivery stamps.
+    """
+    return conn.execute(
+        "DELETE FROM assignments WHERE giver_id IN "
+        "(SELECT id FROM participants WHERE draw_id = ?) "
+        "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
+        (draw_id, draw_id),
+    ).rowcount
+
+
+def _update_columns(conn: sqlite3.Connection, table: str, row_id: int, values: dict[str, Any],
+                    *, draw_id: int | None = None) -> None:
+    """`UPDATE <table> SET col = ? … WHERE id = ?` for a caller-vetted set of columns.
+
+    Column names go into the SQL text, never the values, so the safety of the f-string lives entirely
+    in the caller's whitelist — which is why both admin writers pass a dict built from a constant
+    list rather than from whatever keys the payload happened to carry. `draw_id` restates the scope
+    the caller already checked: participant ids are global, and a write that names the draw it belongs
+    to cannot be talked into touching another one.
+    """
+    clauses = ", ".join(f"{column} = ?" for column in values)
+    where, params = "id = ?", [*values.values(), row_id]
+    if draw_id is not None:
+        where += " AND draw_id = ?"
+        params.append(draw_id)
+    conn.execute(f"UPDATE {table} SET {clauses} WHERE {where}", params)
+
+
 # --------------------------------------------------------------------------- #
 # Admin endpoints
 # --------------------------------------------------------------------------- #
@@ -1903,13 +1976,7 @@ def admin_state(
     one of them. That number is what lets the console admit a relaxed draw instead of hiding it.
     """
     target = select_draw_id(conn, draw_id)
-    participants = [
-        _participant_dict(row)
-        for row in conn.execute(
-            f"SELECT {PARTICIPANT_COLUMNS} FROM participants WHERE draw_id = ? ORDER BY id",
-            (target,),
-        )
-    ]
+    participants = _all_participants(conn, target)
     # A COUNT, never a pairing — and only while the preference is on. The number answers "how far did
     # the rule have to bend", which has no meaning when the rule was switched off on purpose: counting
     # same-group pairs then would report a relaxation that was never forced. Scoped to this draw, so
@@ -1940,9 +2007,8 @@ def list_draws(
     """Every draw with the counts the list screen needs — never a pairing.
 
     The status line is what an organizer scans: has this one been drawn, how many people are in it,
-    how many have opened their link, how many have been mailed. `assignments` is touched only as a
-    COUNT, and only to answer "is there a result yet", which is the same question is_locked answers
-    from the other side.
+    how many have opened their link, how many have been mailed. No pairing is read here at all — the
+    locked flag is what answers "is there a result yet".
     """
     rows = conn.execute(
         "SELECT id, event_title, is_locked, created_at, drawn_at FROM draws ORDER BY id"
@@ -1952,8 +2018,7 @@ def list_draws(
         for row in conn.execute(
             "SELECT draw_id, COUNT(*) AS people, "
             "SUM(CASE WHEN viewed_at IS NOT NULL THEN 1 ELSE 0 END) AS opened, "
-            "SUM(CASE WHEN email_sent_at IS NOT NULL THEN 1 ELSE 0 END) AS mailed, "
-            "SUM(CASE WHEN email <> '' THEN 1 ELSE 0 END) AS with_email "
+            "SUM(CASE WHEN email_sent_at IS NOT NULL THEN 1 ELSE 0 END) AS mailed "
             "FROM participants GROUP BY draw_id"
         )
     }
@@ -1969,7 +2034,6 @@ def list_draws(
             "participants": tally["people"] if tally else 0,
             "opened": tally["opened"] if tally else 0,
             "mailed": tally["mailed"] if tally else 0,
-            "with_email": tally["with_email"] if tally else 0,
         })
     return {"draws": draws, "email_enabled": email_enabled()}
 
@@ -2031,21 +2095,10 @@ def delete_draw(
     """
     row = _draw_row(conn, draw_id)
     _reject_if_locked(row)
-    with _draw_lock:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "DELETE FROM assignments WHERE giver_id IN "
-                "(SELECT id FROM participants WHERE draw_id = ?) "
-                "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
-                (draw_id, draw_id),
-            )
-            gone = conn.execute("DELETE FROM participants WHERE draw_id = ?", (draw_id,)).rowcount
-            conn.execute("DELETE FROM draws WHERE id = ?", (draw_id,))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+    with draw_transaction(conn):
+        _clear_assignments(conn, draw_id)
+        gone = conn.execute("DELETE FROM participants WHERE draw_id = ?", (draw_id,)).rowcount
+        conn.execute("DELETE FROM draws WHERE id = ?", (draw_id,))
     audit("draw_deleted", ip=client_ip(request), draw_id=draw_id, participants_removed=gone)
     return {"status": "OK", "deleted": draw_id, "participants_removed": gone}
 
@@ -2060,22 +2113,10 @@ def update_config(
 ) -> dict[str, Any]:
     target = select_draw_id(conn, draw_id)
     _reject_if_locked(_load_config(conn, target))
-    updates = payload.model_dump(exclude_unset=True, exclude_none=True)
-    allowed = (
-        "event_title",
-        "adult_draws_adult",
-        "adult_draws_child",
-        "child_draws_adult",
-        "child_draws_child",
-        "budget_note",
-        "avoid_same_group",
-        "email_language",
-        "auto_email_on_draw",
-    )
-    updates = {key: value for key, value in updates.items() if key in allowed}
+    updates = {key: value for key, value in payload.model_dump(exclude_unset=True).items()
+               if key in EDITABLE_CONFIG_FIELDS and value is not None}
     if updates:
-        clauses = ", ".join(f"{key} = ?" for key in updates)
-        conn.execute(f"UPDATE draws SET {clauses} WHERE id = ?", list(updates.values()) + [target])
+        _update_columns(conn, "draws", target, updates)
     audit("config_updated", ip=client_ip(request), draw_id=target, fields=sorted(updates))
     return {"status": "OK", "config": _config_dict(_load_config(conn, target))}
 
@@ -2129,26 +2170,17 @@ def update_participant(
     the old send went somewhere else.
     """
     target = select_draw_id(conn, draw_id)
-    config_row = _load_config(conn, target)
-    if config_row["is_locked"]:
-        updates = payload.model_dump(exclude_unset=True, exclude_none=True)
-        if set(updates) - {"email"}:
-            raise HTTPException(status_code=400, detail=LOCKED_MSG)
-    else:
-        updates = {key: value for key, value in
-                   payload.model_dump(exclude_unset=True).items() if value is not None}
-        # group_key may be cleared deliberately; role/name/family_group cannot, see ParticipantUpdate.
+    updates = payload.model_dump(exclude_unset=True, exclude_none=True)
+    # `group_key` may be cleared deliberately; name/role/family_group cannot, see ParticipantUpdate.
+    if _load_config(conn, target)["is_locked"] and set(updates) - {"email"}:
+        raise HTTPException(status_code=400, detail=LOCKED_MSG)
     if not updates:
         raise HTTPException(status_code=422, detail="No fields to update")
 
     existed = _participant_row(conn, participant_id, target)
-
-    clauses = ", ".join(f"{key} = ?" for key in updates)
-    values = list(updates.values())
     if "email" in updates and updates["email"] != (existed["email"] or ""):
-        clauses += ", email_sent_at = NULL"
-    conn.execute(f"UPDATE participants SET {clauses} WHERE id = ? AND draw_id = ?",
-                 values + [participant_id, target])
+        updates["email_sent_at"] = None      # a correction means the old send went elsewhere
+    _update_columns(conn, "participants", participant_id, updates, draw_id=target)
     audit("participant_updated", ip=client_ip(request), participant_id=participant_id,
           draw_id=target, fields=sorted(updates))
     row = _participant_row(conn, participant_id, target)
@@ -2195,32 +2227,17 @@ def run_draw(
     # Matching runs before any write, so a rejected draw cannot corrupt state.
     pairs, crossed = generate_draw(_config_dict(config_row), participants)
 
-    with _draw_lock:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            # Scoped to this draw: re-drawing the office exchange must not erase the family's
-            # pairings, and a reset on one draw cannot clear another one's "already mailed" stamps.
-            conn.execute(
-                "DELETE FROM assignments WHERE giver_id IN "
-                "(SELECT id FROM participants WHERE draw_id = ?) "
-                "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
-                (target, target),
-            )
-            conn.executemany(
-                "INSERT INTO assignments (giver_id, receiver_id) VALUES (?, ?)", pairs
-            )
-            conn.execute("UPDATE draws SET is_locked = 1, drawn_at = ? WHERE id = ?",
-                         (utc_now(), target))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+    with draw_transaction(conn):
+        _clear_assignments(conn, target)
+        conn.executemany("INSERT INTO assignments (giver_id, receiver_id) VALUES (?, ?)", pairs)
+        conn.execute("UPDATE draws SET is_locked = 1, drawn_at = ? WHERE id = ?", (utc_now(), target))
     audit("draw_locked", ip=client_ip(request), draw_id=target, assignments=len(pairs),
           same_group_crossings=crossed)
 
     # Opt-in auto-delivery (the config checkbox). It runs strictly after the lock committed: a
     # slow or dead Resend can never leave a half-drawn event, and a failed send never undoes the
-    # draw — the console response reports exactly who did not get mail.
+    # draw. Only the people who gave an address are mailed; the report names the ones the send
+    # refused, and the rest are the organizer's to hand out in person.
     emailed = None
     if config_row["auto_email_on_draw"]:
         base_url = mail_base_url(request)
@@ -2244,25 +2261,14 @@ def reset_draw(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     target = select_draw_id(conn, draw_id)
-    with _draw_lock:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            conn.execute(
-                "DELETE FROM assignments WHERE giver_id IN "
-                "(SELECT id FROM participants WHERE draw_id = ?) "
-                "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
-                (target, target),
-            )
-            # Both stamps describe the current draw, not the person: a re-draw means the links
-            # reveal something new AND the old mail quotes an obsolete draw. The addresses
-            # themselves survive — only the "this draw went out" stamps reset.
-            conn.execute("UPDATE participants SET viewed_at = NULL, email_sent_at = NULL "
-                         "WHERE draw_id = ?", (target,))
-            conn.execute("UPDATE draws SET is_locked = 0, drawn_at = NULL WHERE id = ?", (target,))
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+    with draw_transaction(conn):
+        _clear_assignments(conn, target)
+        # Both stamps describe the current draw, not the person: a re-draw means the links reveal
+        # something new AND the old mail quotes an obsolete draw. The addresses themselves survive —
+        # only the "this draw went out" stamps reset.
+        conn.execute("UPDATE participants SET viewed_at = NULL, email_sent_at = NULL "
+                     "WHERE draw_id = ?", (target,))
+        conn.execute("UPDATE draws SET is_locked = 0, drawn_at = NULL WHERE id = ?", (target,))
     audit("draw_reset", ip=client_ip(request), draw_id=target)
     return {"status": "OK"}
 
@@ -2369,7 +2375,7 @@ def email_preview(
     # The preview shows what a real send would contain, so it resolves its origin exactly the way a
     # send does — `PUBLIC_BASE_URL` first. Otherwise the modal shows a caller-dependent URL (a Host of
     # 127.0.0.1 while the mail itself carries the real hostname), and the preview stops being proof.
-    base_url = mail_base_url(request) or "https://tirage-noel.alserv.org"
+    base_url = mail_base_url(request) or KNOWN_PUBLIC_ORIGIN
     sample = "00000000-0000-0000-0000-000000000000"
     people = [{"name": name, "link": participant_link(base_url, sample)}
               for name in PREVIEW_NAMES[:max(1, payload.links)]]
@@ -2387,9 +2393,10 @@ def email_preview(
 
 
 def _participant_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row:
+    # Only what the two token routes read. `token` itself is not selected: the row was found by it,
+    # and a projection that carries a credential is one leak away from being logged or serialized.
     row = conn.execute(
-        "SELECT id, draw_id, name, role, family_group, wishlist, token, viewed_at "
-        "FROM participants WHERE token = ?",
+        "SELECT id, draw_id, name, role, wishlist, viewed_at FROM participants WHERE token = ?",
         (token,),
     ).fetchone()
     if row is None:
@@ -2467,7 +2474,7 @@ def update_wishlist(
 
 
 # --------------------------------------------------------------------------- #
-# Static frontend
+# Static frontend and the two page routes
 # --------------------------------------------------------------------------- #
 
 SHARE_TITLE = "Échange de cadeaux · Père Noël secret"
@@ -2476,6 +2483,47 @@ SHARE_DESCRIPTION = ("Chacun reçoit son lien secret. Personne sait qui pige qui
 SHARE_IMAGE = "/static/og-image.png"
 SHARE_IMAGE_ALT = "Un cadeau doré et un flocon sur fond de sapin"
 SHARE_META_MARKER = "<!--share-meta-->"
+ROUTE_MARKER = "<!--app-route-->"
+
+# Where the organizer console lives. The site root used to be the console, so a relative who typed
+# the address the family was handed landed on a password form — and every bookmark, dashboard card
+# and screenshot pointed at the same page the family was meant to see. The root is now the family's
+# page; the console is one path down.
+#
+# `ADMIN_PATH` moves it again, which is a nicety and not a control: what guards the console is the
+# login limit, the lockout and the password, never nobody guessing a path. Read **once at import**,
+# because routes are registered at import — changing the value means restarting the container.
+DEFAULT_ORGANIZER_PATH = "/admin"
+# One path segment the server is willing to name a console after: no `..`, no spaces, no percent
+# escapes, nothing that would have to be escaped again on its way back out into an HTML document.
+_PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,63}$")
+# First path segments the server already owns: the API, the static mount and the schema route. A
+# console registered under one of these would be shadowed and look broken in a way nobody would
+# think to check. (`/docs` and `/redoc` are disabled at construction, so they are free to use.)
+RESERVED_PATHS = ("api", "static", "openapi.json")
+
+
+def normalize_organizer_path(raw: Optional[str]) -> str:
+    """`ADMIN_PATH` as a usable route, or the documented default when it is not one.
+
+    Sloppy input (`admin`, `/Admin/`, `//`, `/../static`, `/api`) is corrected where the intent is
+    obvious and refused where it is not, falling back to the default rather than refusing to boot:
+    a gift exchange that will not start is a worse outcome than a console at the expected path.
+    """
+    value = (raw or "").strip()
+    if not value:
+        return DEFAULT_ORGANIZER_PATH
+    segments = [part for part in value.strip("/").split("/") if part and part != "."]
+    if not segments or any(not _PATH_SEGMENT_RE.match(part) for part in segments):
+        audit("organizer_path_rejected", value=value[:80])
+        return DEFAULT_ORGANIZER_PATH
+    if segments[0].lower() in RESERVED_PATHS:
+        audit("organizer_path_rejected", value=value[:80], reason="reserved")
+        return DEFAULT_ORGANIZER_PATH
+    return "/" + "/".join(segments)
+
+
+ORGANIZER_PATH = normalize_organizer_path(os.environ.get("ADMIN_PATH"))
 
 # The Host header only has to be echoed into og:url and og:image, so accept what a hostname or an
 # address (with optional port) can look like and fall back to the parsed URL otherwise: a preview
@@ -2540,39 +2588,73 @@ def share_meta(request: Request) -> str:
     return "\n".join(f'<meta {attr} content="{html.escape(value, quote=True)}">' for attr, value in pairs)
 
 
+def spa_shell(organizer: bool, request: Request) -> HTMLResponse:
+    """One document, stamped for the route it is being served at.
+
+    Injected instead of served as a file because two parts of it depend on the request: the share
+    tags have to name the host the family was actually given (the public domain, a LAN override, an
+    IP:port), and the screen the SPA shows depends on whether this document is the family's page or
+    the console. `no-cache` for the first reason: the head differs per host.
+
+    The console gets no share tags — a console is not something anybody shares, and `og:url`
+    pointing back at the family's page from it would be a lie — and it gets `noindex`, because a
+    search result for the organizer login is exactly the accidental discovery this path is for.
+    """
+    body = INDEX_HTML.replace(ROUTE_MARKER, route_tag(organizer))
+    body = body.replace(SHARE_META_MARKER, "" if organizer else share_meta(request))
+    headers = {"Cache-Control": "no-cache"}
+    if organizer:
+        headers["X-Robots-Tag"] = "noindex, nofollow"
+    return HTMLResponse(body, headers=headers)
+
+
+def route_tag(organizer: bool) -> str:
+    """The one fact the SPA cannot read off its own URL: which screen this document is.
+
+    A boolean and nothing else — the console's path never gets echoed into a document a relative
+    might be holding, and there is nothing here to escape.
+    """
+    return f"<script>window.__GE_ORGANIZER__={'true' if organizer else 'false'};</script>"
+
+
 @app.get("/")
-def index(request: Request) -> HTMLResponse:
-    """The SPA shell.
+def family_page(request: Request) -> HTMLResponse:
+    """The address the family is given: their landing screen, or their own page with `?t=<uuid>`.
 
-    Injected instead of served as a file because the share tags have to name the host the family
-    was actually given — the public domain, a LAN override, or an IP:port — and only the request
-    knows that. `no-cache` for the same reason: the document's head differs per host.
+    This is the page a relative sees when they type the hostname from the email. It has no login
+    form on it — the console is at ORGANIZER_PATH, and no link on this page points there.
     """
-    body = INDEX_HTML.replace(SHARE_META_MARKER, share_meta(request))
-    return HTMLResponse(body, headers={"Cache-Control": "no-cache"})
+    return spa_shell(organizer=False, request=request)
 
 
-@app.get("/draw/{token}", dependencies=[Depends(enforce_draw_limit)])
-def legacy_draw_link(token: str) -> RedirectResponse:
-    """`/draw/<uuid>` -> the SPA route, for links that are already sitting in inboxes.
-
-    The first batch of link emails was built from the API's path shape instead of the SPA's, so
-    twelve people were handed a URL that answered `{"detail":"Not Found"}`. Emails cannot be
-    unsent, and asking a grandmother to wait for a rebuild is not a fix: this turns every such
-    link into a bounce to `/?t=<uuid>`, the URL the interface actually reads.
-
-    Only a UUID-shaped token is redirected — anything else stays a 404 rather than advertising
-    that some other path shape is meaningful. The redirect itself reveals nothing (it echoes the
-    token back to the same browser that supplied it), and the path is already redacted to
-    `/draw/<token>` in the audit log by redacted_path(). `enforce_draw_limit` keeps it off the
-    cheap-enumeration path anyway.
-    """
-    if not TOKEN_SEGMENT.match(token):
-        raise HTTPException(status_code=404, detail="Link not found")
-    return RedirectResponse(f"/?t={token}", status_code=302)
+@app.get(ORGANIZER_PATH)
+def organizer_console(request: Request) -> HTMLResponse:
+    """The organizer console. Deliberately not linked from the family's page."""
+    return spa_shell(organizer=True, request=request)
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+
+
+# Last, on purpose: FastAPI matches in registration order, so every API route and the static mount
+# above are answered first and this only ever sees what they refused.
+@app.get("/{unmatched:path}", include_in_schema=False)
+def unmatched_path(request: Request) -> HTMLResponse:
+    """Anything else is a mistyped address, not a JSON error to show a grandmother.
+
+    A relative who fat-fingers the hostname, or who still has a stale link from an early mailing in
+    an inbox, gets the page that explains where their real link is. This is not a redirect and it
+    does not rescue a token: the old `/draw/<uuid>` links are gone, and the landing page says what
+    the family needs to know either way. POST/PUT/DELETE on a nonsense path are untouched, because
+    this route is GET-only and the API routes are registered first.
+
+    Two things stay JSON even here: a `/api/…` typo is a machine asking for an endpoint, and handing
+    it HTML is how a broken client fails silently, and the console path with anything after it is a
+    probe, not a family member — both answer the API's own 404 rather than rendering a page.
+    """
+    if request.url.path.startswith("/api/") or request.url.path.startswith(f"{ORGANIZER_PATH}/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+    return spa_shell(organizer=False, request=request)
 
 
 if __name__ == "__main__":  # pragma: no cover - convenience entrypoint

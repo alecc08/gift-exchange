@@ -33,6 +33,10 @@ from playwright.sync_api import sync_playwright
 
 BASE = os.environ.get("GE_BASE", "http://127.0.0.1:8085").rstrip("/")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "")
+# The console is not the site root any more — "/" is the family's page. Pass GE_ADMIN_PATH when the
+# instance runs with ADMIN_PATH set; the app does not advertise the path, so the tool takes it as an
+# argument like it takes the base URL and the password.
+ADMIN_PATH = os.environ.get("GE_ADMIN_PATH", "/admin")
 DATA = "Alpine.$data(document.querySelector('[x-data]'))"
 
 # [full name, family name, group] — Roy (chez Gaétan) holds two people, so one gift has to cross.
@@ -90,7 +94,7 @@ def main() -> int:
             page.get_by_role("button", name="Ajouter").click()
             idle()
 
-        page.goto(BASE, wait_until="networkidle")
+        page.goto(BASE + ADMIN_PATH, wait_until="networkidle")
         page.wait_for_selector("#pw")
         page.fill("#pw", PASSWORD)
         page.press("#pw", "Enter")
@@ -249,7 +253,9 @@ def main() -> int:
         page.get_by_role("button", name="EN", exact=True).click()
         page.wait_for_selector("text=Avoid picks within the same group")
         page.wait_for_selector("text=Nobody drew inside their own group.")
-        assert not page.locator(r"text=/\b(draw|roster|rules|note|warn)\.[a-zA-Z]+/").count(), \
+        # `landing` is in the list because the family's page is rendered by this same bundle: a raw
+        # key there is what a relative would see, and this script never visits that page.
+        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z]+/").count(), \
             "a raw i18n key is visible on screen"
         browser.close()
 

@@ -687,25 +687,44 @@ def test_the_link_shape_the_mail_carries_is_the_shape_the_spa_reads():
     assert "${window.location.origin}/?t=${person.token}" in main.INDEX_HTML
 
 
-def test_the_api_path_shape_still_works_for_links_already_in_inboxes(client):
-    """The first real send mailed `/draw/<uuid>`, which answered 404. Emails cannot be unsent."""
+def test_the_send_throttle_forgets_addresses_that_can_no_longer_be_spaced(monkeypatch):
+    """One remembered timestamp per address is the design; a process that never forgets leaks.
+
+    A family roster is a few dozen addresses, so this is not a hot path — but the same process serves
+    the next event with the next family, and the map only ever grew. What gets dropped is what is too
+    old to influence a gap, so the address that just got a mail keeps its spacing.
+    """
+    monkeypatch.setenv("EMAIL_SEND_INTERVAL_MS", "0")
+    monkeypatch.setenv("EMAIL_SAME_ADDRESS_GAP_S", "0")
+    age = time.monotonic() - main.ADDRESS_MEMORY_SECONDS - 1
+    main._email_gate_at["by_address"] = {f"old{i}@x.test": age for i in range(main.ADDRESS_MEMORY_MAX)}
+    main._throttle_before_send("fresh@x.test")
+
+    remembered = main._email_gate_at["by_address"]
+    assert "fresh@x.test" in remembered
+    assert not any(name.startswith("old") for name in remembered), "stale addresses were kept"
+
+
+def test_the_old_api_path_is_gone_and_leaks_nothing(client):
+    """`/draw/<uuid>` was the wrong URL in the first real mailing, and it was kept alive by a 302.
+
+    The shim is gone: nothing in any inbox uses that shape any more (the links were re-sent from the
+    correct builder, and every console copy button uses it too), and a redirect whose only customer
+    is a mistake from 2026 is a route nobody maintains. What is left is the honest behaviour: the
+    address is not an endpoint, so it lands on the family's landing card, which explains where the
+    real link is. It is not a rescue — the token in the path is never read, and it must not appear
+    anywhere in the response.
+    """
     created = add(client, "Ghislaine", "ADULT", "Bernier")
     token = created["token"]
 
-    bounce = client.get(f"/draw/{token}", follow_redirects=False)
-    assert bounce.status_code == 302
-    assert bounce.headers["location"] == f"/?t={token}"
-
-    landing = client.get(f"/draw/{token}")          # follow it the way a mail client does
-    assert landing.status_code == 200
-    assert "text/html" in landing.headers["content-type"]
-    assert "giftExchange" in landing.text
-
-
-def test_a_non_token_under_the_old_path_stays_a_404(client):
-    """The bounce is for UUIDs, not a catch-all that hints other shapes are meaningful."""
+    page = client.get(f"/draw/{token}", follow_redirects=False)
+    assert page.status_code == 200
+    assert "text/html" in page.headers["content-type"]
+    assert "window.__GE_ORGANIZER__=false" in page.text, "a stale link must not reach the console"
+    assert token not in page.text
     for path in ("/draw/pas-un-jeton", "/draw/1234", "/draw/"):
-        assert client.get(path).status_code == 404
+        assert token not in client.get(path).text
 
 
 # --------------------------------------------------------------------------- #

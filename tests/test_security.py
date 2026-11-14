@@ -189,6 +189,40 @@ def test_security_headers_present(client):
         assert "https://cdn.jsdelivr.net" in csp
 
 
+def test_the_rate_limiter_forgets_expired_windows_as_it_grows():
+    """Every client address that ever knocked leaves a row. Without a sweep that is a slow leak on a
+    public page — and the sweep must not drop a row that is still holding a lockout."""
+    limiter = main.RateLimiter()
+    stale_bucket = int(time.time()) // 60 - 60              # an hour ago: expired, not blocking
+    for index in range(4097):
+        limiter._hits[("api", f"10.0.{index % 250}.{index // 250}")] = (stale_bucket, 1, 0)
+    blocking_bucket = int(time.time()) // 60
+    limiter._hits[("login", "10.9.9.9")] = (blocking_bucket, 3, int(time.time()) + 120)
+
+    limiter.hit("api", "127.0.0.1", 5)                      # past the size ceiling: sweep runs
+
+    assert len(limiter._hits) < 100, f"{len(limiter._hits)} rows left — nothing was swept"
+    assert ("login", "10.9.9.9") in limiter._hits, "a live lockout was pruned away"
+
+
+def test_the_csp_knows_the_same_origin_the_mail_uses(client):
+    """The console renders a mail preview inside a `srcdoc` iframe, whose images are fetched by
+    absolute URL — and a srcdoc document is a *different* origin to CSP. So the public origin has to
+    be in img-src, and it has to be the same value the preview links and the mail are built from,
+    or a host change silences the art while the send keeps working."""
+    csp = client.get("/").headers["content-security-policy"]
+    assert f"img-src 'self' data: {main.KNOWN_PUBLIC_ORIGIN};" in csp
+
+    # The coupling that actually bit: a send made from inside the container carries
+    # `Host: 127.0.0.1:8000`, which is refused as a mail base — so the preview falls back to the
+    # known origin, and that is the same value the CSP allows. Two different constants here is how
+    # the art went blank while the mail itself was fine.
+    preview = client.post("http://127.0.0.1:8000/api/admin/emails/preview", headers=ADMIN,
+                          json={"state": "ready"}).json()
+    assert f"{main.KNOWN_PUBLIC_ORIGIN}/static/email-gift.png" in preview["html"]
+    assert "127.0.0.1" not in preview["html"]
+
+
 def test_static_assets_are_embeddable_by_another_origin(client):
     """/static is loaded by other origins on purpose; everything else stays same-origin.
 
@@ -285,7 +319,8 @@ def test_redaction_only_replaces_token_shaped_segments():
 
     assert fake("/api/draw/6f1d2c3a-0b0b-4c1a-9d2e-7f8a9b0c1d2e") == "/api/draw/<token>"
     assert fake("/api/draw/6F1D2C3A-0B0B-4C1A-9D2E-7F8A9B0C1D2E/wishlist") == "/api/draw/<token>/wishlist"
-    # the /draw/<uuid> bounce for the links already mailed: same credential, same redaction
+    # any other path that carries a token-shaped segment is redacted the same way, so a bookmark,
+    # a proxy log line or a future route cannot quietly become the one place a link is written down
     assert fake("/draw/6f1d2c3a-0b0b-4c1a-9d2e-7f8a9b0c1d2e") == "/draw/<token>"
     # the real participant URL keeps its token in the query string, which the audit trail never logs
     assert fake("/") == "/"

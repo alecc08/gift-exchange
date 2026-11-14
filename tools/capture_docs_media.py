@@ -30,6 +30,10 @@ from playwright.sync_api import sync_playwright
 
 BASE = os.environ.get("GE_BASE", "http://127.0.0.1:8085").rstrip("/")
 PASSWORD = os.environ.get("ADMIN_PASSWORD", "admin")
+# Where the console lives, and it is not the site root: "/" is the family's page, so every organizer
+# shot has to open this path. Pass GE_ADMIN_PATH when the instance runs with ADMIN_PATH set, the same
+# way GE_BASE is passed — the app never advertises the path, on purpose.
+ADMIN_PATH = os.environ.get("GE_ADMIN_PATH", "/admin")
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SHOTS = REPO / "docs" / "screenshots"
 MEDIA = REPO / "docs" / "media"
@@ -37,6 +41,21 @@ VIDEOS = pathlib.Path(os.environ.get("GE_VIDEO_DIR", "/tmp/opencode/videos"))
 
 sys.path.insert(0, str(REPO / "tools"))
 import seed_demo  # noqa: E402  same roster the gallery is built from
+
+
+def goto_console(page, **kwargs):
+    """Open the organizer console — the only screen with the password field."""
+    page.goto(BASE + ADMIN_PATH, wait_until="networkidle", **kwargs)
+    page.wait_for_selector("#pw")
+
+
+def goto_family_page(page):
+    """Open the page a relative reaches by typing the hostname: no token, no login, no console.
+    The landing card is the proof; anything else on screen means the route moved again."""
+    page.goto(BASE + "/", wait_until="networkidle")
+    page.wait_for_selector("h2")
+    if page.query_selector("#pw"):
+        raise SystemExit("the site root is serving the console again — nothing here is worth shooting")
 
 
 def bearer_headers():
@@ -125,10 +144,20 @@ def capture_email_console(page):
     time.sleep(0.4)
 
 
+def capture_family_page(page):
+    """The page behind the hostname itself: what a relative sees instead of the login form.
+
+    No auth, no token, no roster — which is the point of the still. It is also the response a
+    mistyped address gets, since every unmatched path renders this screen.
+    """
+    goto_family_page(page)
+    time.sleep(1.0)
+    shot(page, "22-family-landing.png")
+
+
 def capture_admin_page(page):
     """Organizer flow: login, rules, warnings, roster, filters, clipboard, draw, EN."""
-    page.goto(BASE, wait_until="networkidle")
-    page.wait_for_selector("#pw")
+    goto_console(page)
     time.sleep(1.2)
     shot(page, "01-login.png")
 
@@ -209,8 +238,7 @@ def capture_relaxed_draw(browser, auth):
     context = browser.new_context(viewport={"width": 1440, "height": 900},
                                   device_scale_factor=2, locale="fr-CA")
     page = context.new_page()
-    page.goto(BASE, wait_until="networkidle")
-    page.wait_for_selector("#pw")
+    goto_console(page)
     page.fill("#pw", PASSWORD)
     page.press("#pw", "Enter")
     enter_console(page, shoot_list=False)     # 18-draw-list.png belongs to the demo roster, not this one
@@ -372,6 +400,11 @@ def main():
         reveal.close()
         view.close()
 
+        # ---- the page behind the hostname (before any login touches the state) ----
+        landing = browser.new_page()
+        capture_family_page(landing)
+        landing.close()
+
         # ---- organizer flow, recorded (unlock -> panels -> toast) ----
         view = browser.new_context(viewport={"width": 1180, "height": 760},
                                    record_video_dir=str(VIDEOS),
@@ -379,8 +412,7 @@ def main():
         view.grant_permissions(["clipboard-read", "clipboard-write"], origin=BASE)
         flow = view.new_page()
         started = time.monotonic()
-        flow.goto(BASE, wait_until="networkidle")
-        flow.wait_for_selector("#pw")
+        goto_console(flow)
         time.sleep(1.0)
         typed_at = time.monotonic() - started
         flow.type("#pw", PASSWORD, delay=90)
@@ -409,7 +441,7 @@ def main():
         time.sleep(2.2)
         shot(mob, "14-mobile-participant.png", full=True)
         mob2 = mobile.new_page()
-        mob2.goto(BASE, wait_until="networkidle")
+        goto_console(mob2)
         mob2.fill("#pw", PASSWORD)
         mob2.press("#pw", "Enter")
         enter_console(mob2, shoot_list=False)

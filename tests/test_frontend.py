@@ -15,7 +15,9 @@ APP_SCRIPT_RE = re.compile(r"<script[^>]*>(?:(?!</script>).)*function giftExchan
 # Methods of the component object. Markup may call them bare (`x-text="formatDate(...)"` — Alpine
 # puts the component on its scope chain); code inside the component cannot.
 COMPONENT_METHODS = ("formatDate", "relative", "locale", "t", "toast", "drawsOf", "looksLikeEmail",
-                     "drawPath", "showAdminError", "clearAdminError", "loadState", "loadDraws")
+                     "drawPath", "showAdminError", "clearAdminError", "loadState", "loadDraws",
+                     "parseDate", "tallyBy", "addressKey", "participantUrl", "consoleUrl",
+                     "flashFlag", "enterAdmin")
 CALL_RE = re.compile(r"([\w$]*)\s*\(")
 API_CALL_RE = re.compile(r"this\.api\((`[^`]*`|'[^']*')")
 # Not draw-scoped by design: the list of draws, and the two calls that happen before a draw exists.

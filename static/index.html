@@ -11,10 +11,16 @@
 <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
 <link rel="manifest" href="/static/site.webmanifest">
 
+<!-- Which screen this document is, stamped by the server (route_tag in main.py): the family's
+     page at "/" and at any mistyped address, the organizer console at its own path. Injected rather
+     than read off the URL so the page cannot be fooled into showing the login form. -->
+<!--app-route-->
+
 <!-- The share card (og:* / twitter:*) is injected by the server, because only the server knows
      which host the family was given — see share_meta() in main.py. It is deliberately generic and
      identical for "/" and for a private "/?t=<uuid>": crawlers read this block, so nothing about a
-     real family may ever appear in it. -->
+     real family may ever appear in it. The organizer console is served this same document with the
+     block left empty: a console is not something anybody shares. -->
 <!--share-meta-->
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -171,7 +177,6 @@
       border: 1px solid rgba(20,60,46,.12); border-radius: 1rem; padding: .9rem 1rem;
       margin-bottom: .7rem; background: #fff;
     }
-    #roster-table tr.part + tr.part { margin-top: 0; }
     #roster-table td { padding: .3rem 0; text-align: left; }
     #roster-table td[data-label]::before {
       content: attr(data-label); display: block; margin-bottom: .2rem;
@@ -294,11 +299,13 @@
         <button @click="setLang('en')" :class="lang === 'en' ? 'bg-pine-700 text-white shadow-sm' : 'text-pine-600 hover:text-pine-800'"
                 :title="t('lang.enTitle')" class="px-3 py-1.5 rounded-full transition">EN</button>
       </div>
-      <button x-show="mode === 'admin' && authed" @click="lock()" class="btn btn-quiet px-3 py-2 text-xs" x-text="t('admin.signout')"></button>
+      <button x-show="authed" @click="lock()" class="btn btn-quiet px-3 py-2 text-xs" x-text="t('admin.signout')"></button>
     </div>
   </header>
 
-  <!-- ===================== ADMIN ===================== -->
+  <!-- ===================== ORGANIZER CONSOLE =====================
+       Served at its own path only (ORGANIZER_PATH in main.py), and nothing on the family's page
+       links here: the password form used to be the first thing a relative met at the hostname. -->
   <template x-if="mode === 'admin'">
     <div>
 
@@ -862,6 +869,27 @@
     </div>
   </template>
 
+  <!-- ===================== FAMILY LANDING (the hostname, no token) =====================
+       What a relative sees when they type the address from the email, or fat-finger it. Its only
+       job is to say where their link really is. It shows no form and no hint that a console
+       exists: this is the page people used to stumble into by accident. -->
+  <template x-if="mode === 'landing'">
+    <div class="max-w-2xl mx-auto px-5 pt-10 pb-28 space-y-6">
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-8 md:p-10 text-center relative overflow-hidden pop-in">
+        <svg class="absolute -right-8 -top-8 w-32 h-32 text-pine-100 pointer-events-none"><use href="#i-flake"/></svg>
+        <svg class="absolute -left-10 bottom-0 w-24 h-24 text-gold-100 pointer-events-none"><use href="#i-flake"/></svg>
+
+        <p class="label" x-text="t('landing.kicker')"></p>
+        <h2 class="font-display text-3xl md:text-4xl text-pine-800 mt-1.5" x-text="t('landing.title')"></h2>
+
+        <svg class="w-16 h-16 text-pine-300 wrapped mx-auto mt-7"><use href="#i-gift"/></svg>
+
+        <p class="text-pine-700 mt-5" x-text="t('landing.help')"></p>
+        <p class="text-[11px] text-pine-600/70 mt-4" x-text="t('p.privateNote')"></p>
+      </section>
+    </div>
+  </template>
+
   <!-- ===================== PARTICIPANT ===================== -->
   <template x-if="mode === 'participant'">
     <div class="max-w-2xl mx-auto px-5 pt-10 pb-28 space-y-6">
@@ -1043,6 +1071,13 @@
 const I18N = {
   fr: {
     'brand': 'Temps des Fêtes',
+
+    /* The screen at the site's own address, for a relative who types it instead of using their
+       link. Nothing about a console or a password appears here. */
+    'landing.kicker': 'Ton lien personnel',
+    'landing.title': 'Le tirage ne s’ouvre pas ici',
+    'landing.help': 'Ton lien arrive par courriel, ou l’organisateur te le donne en main propre. Ouvre-le pour écrire tes idées de cadeaux et pour voir qui tu gâtes dès que le tirage est lancé.',
+
     'admin.title': 'Espace organisateur',
     'lang.switch': 'Choisir la langue',
     'lang.frTitle': 'Français québécois',
@@ -1250,6 +1285,11 @@ const I18N = {
   },
   en: {
     'brand': 'Gift exchange',
+
+    'landing.kicker': 'Your own link',
+    'landing.title': 'Your draw does not open here',
+    'landing.help': 'Your link arrives by email, or the organizer hands it to you in person. Open it to write down your gift ideas, and to see who you are buying for once the draw has run.',
+
     'admin.title': 'Organizer space',
     'lang.switch': 'Language choice',
     'lang.frTitle': 'Quebec French',
@@ -1474,7 +1514,11 @@ function asAdminConfig(config) {
 function giftExchange() {
   return {
     lang: localStorage.getItem('ge_lang') || 'fr',
-    mode: 'admin',
+    /* Which screen this document is. The server stamps it (see spa_shell/route_tag in main.py):
+       the console is served at its own path, and every other path is the family's page. Absent
+       (opened from a file, a stale cache) counts as the family's page — never as the console. */
+    route: { organizer: window.__GE_ORGANIZER__ === true },
+    mode: 'landing',
     token: null,
     limits: { ...DEFAULT_LIMITS },
 
@@ -1489,11 +1533,13 @@ function giftExchange() {
     participants: [], locked: false, groupFilter: '',
     draft: { name: '', role: 'ADULT', family_group: '', group_key: '', wishlist: '', email: '' },
     copiedId: null, copiedAll: false,
+    /* The setTimeout handles for the "copied" flags, declared so they can be cancelled. */
+    _timers: {},
     emailEnabled: false, emailBusyId: null, sendingAll: false, previewOpen: false, previewBody: null,
 
     participant: null, data: { status: '', assignments: [] }, pError: false,
     revealed: false, burstOn: false, wishlistDraft: '', savedWishlist: '', savedAt: null,
-    wishlistSaved: false, copiedList: false, poll: null,
+    copiedList: false, poll: null,
     burst: [],
 
     /* ---------- helpers ---------- */
@@ -1505,6 +1551,7 @@ function giftExchange() {
     },
     get pageTitle() {
       if (this.mode === 'participant') return this.data.event_title || this.t('brand');
+      if (this.mode === 'landing') return this.t('landing.kicker');
       // The list screen is not about one draw, so it must not borrow a title from the last one
       // the organizer had open.
       if (this.activeDraw === null) return this.t('draws.title');
@@ -1526,27 +1573,22 @@ function giftExchange() {
     },
     /* Two different labels on purpose: `family_group` is a surname people share, `group_key` is the
        household the rule actually works on. Chips and filters use the household. */
-    get householdGroups() {
+    /* Household chips and surname chips are the same tally over a different field: display name,
+       case-insensitive count, biggest first then alphabetical. An empty value is nobody's household
+       and nobody's surname, so it never becomes a chip. */
+    tallyBy(field) {
       const counts = new Map();
-      for (const p of this.participants) {
-        const key = p.group_key.trim().toLowerCase();
+      for (const person of this.participants) {
+        const key = (person[field] || '').trim().toLowerCase();
         if (!key) continue;
         const found = counts.get(key);
         if (found) found.count += 1;
-        else counts.set(key, { name: p.group_key, count: 1 });
+        else counts.set(key, { name: person[field], count: 1 });
       }
       return [...counts.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
     },
-    get familyNames() {
-      const counts = new Map();
-      for (const p of this.participants) {
-        const key = p.family_group.trim().toLowerCase();
-        const found = counts.get(key);
-        if (found) found.count += 1;
-        else counts.set(key, { name: p.family_group, count: 1 });
-      }
-      return [...counts.values()].sort((x, y) => y.count - x.count || x.name.localeCompare(y.name));
-    },
+    get householdGroups() { return this.tallyBy('group_key'); },
+    get familyNames() { return this.tallyBy('family_group'); },
     get visibleParticipants() {
       if (!this.groupFilter) return this.participants;
       const wanted = this.groupFilter.trim().toLowerCase();
@@ -1561,10 +1603,9 @@ function giftExchange() {
        leave. Twelve cousins at five addresses is five sends, and saying so here is what makes the
        « Envoyer » click predictable instead of a guess. */
     get mailboxCount() {
-      const seen = new Set(this.participants
+      return new Set(this.participants
         .filter(p => this.looksLikeEmail(p.email))
-        .map(p => p.email.trim().toLowerCase()));
-      return seen.size;
+        .map(p => this.addressKey(p))).size;
     },
     looksLikeEmail(value) {
       // Mirrors the server's EMAIL_RE intent: something @ something.tld, no spaces. Deliberately
@@ -1655,16 +1696,21 @@ function giftExchange() {
     /* Quebec French for dates/relative times ("il y a 5 minutes", 24 h clock);
        Canadian English for the EN switch. */
     locale() { return this.lang === 'fr' ? 'fr-CA' : 'en-CA'; },
-    formatDate(value) {
-      if (!value) return '';
+    /* A stored ISO timestamp, or null when the string is unusable — both formatters print the raw
+       value in that case, because an invented date is worse than an ugly one. */
+    parseDate(value) {
+      if (!value) return null;
       const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return value;
+      return Number.isNaN(date.getTime()) ? null : date;
+    },
+    formatDate(value) {
+      const date = this.parseDate(value);
+      if (!date) return value || '';
       return new Intl.DateTimeFormat(this.locale(), { dateStyle: 'medium', timeStyle: 'short' }).format(date);
     },
     relative(value) {
-      if (!value) return '';
-      const date = new Date(value);
-      if (Number.isNaN(date.getTime())) return value;
+      const date = this.parseDate(value);
+      if (!date) return value || '';
       const seconds = Math.round((Date.now() - date.getTime()) / 1000);
       const rtf = new Intl.RelativeTimeFormat(this.locale(), { numeric: 'auto' });
       if (Math.abs(seconds) < 60) return rtf.format(-seconds, 'second');
@@ -1693,21 +1739,27 @@ function giftExchange() {
       const params = new URLSearchParams(window.location.search);
       this.token = params.get('t');
       if (this.token) {
+        // A token is a query parameter, so a private link works from any path this shell is
+        // served at; it always wins over the console.
         this.mode = 'participant';
         this.revealed = sessionStorage.getItem('ge_revealed_' + this.token) === '1';
         await this.loadDraw();
-      } else if (sessionStorage.getItem('ge_admin_token') || sessionStorage.getItem('admin_pw')) {
-        this.authed = true;
-        await this.enterAdmin(params);
+      } else if (this.route.organizer) {
+        this.mode = 'admin';
+        if (sessionStorage.getItem('ge_admin_token')) {
+          this.authed = true;
+          await this.enterAdmin();
+        }
       }
     },
 
     /* Where an organizer lands: the draw in the URL if it still exists, otherwise the list. A
        bookmarked console link is worth keeping across a reload, but a deleted draw must not leave
-       the screen pointing at nothing. */
-    async enterAdmin(params) {
+       the screen pointing at nothing. The query string is read here so both callers — boot and a
+       fresh login — get the same answer. */
+    async enterAdmin() {
       await this.loadDraws();
-      const wanted = parseInt(params.get('draw'), 10);
+      const wanted = parseInt(new URLSearchParams(window.location.search).get('draw'), 10);
       if (Number.isInteger(wanted) && this.draws.some(entry => entry.id === wanted)) {
         await this.openDraw(wanted);
       }
@@ -1750,10 +1802,10 @@ function giftExchange() {
     /* ---------- transport ---------- */
     authHeaders() {
       const headers = {};
+      // Only the bearer token: the console never stores the password itself, and a bare
+      // X-Admin-Password header is for curl and scripts, not for the browser.
       const bearer = sessionStorage.getItem('ge_admin_token');
       if (bearer) headers['Authorization'] = 'Bearer ' + bearer;
-      const legacy = sessionStorage.getItem('admin_pw');
-      if (legacy) headers['X-Admin-Password'] = legacy;
       return headers;
     },
     async api(path, options = {}, withAuth = false) {
@@ -1820,10 +1872,17 @@ function giftExchange() {
       this.emailEnabled = !!response.body.email_enabled;
     },
 
+    /* The console's own address, in one place. It used to be the site root, so every rewrite said
+       '/' — which, now that the console is served at its own path, would have bounced the organizer
+       onto the family's landing card mid-session. */
+    consoleUrl(drawId = null) {
+      const path = window.location.pathname;
+      return drawId === null ? path : `${path}?draw=${encodeURIComponent(drawId)}`;
+    },
     async openDraw(id) {
       this.activeDraw = id;
       this.clearAdminError();
-      window.history.replaceState({}, '', '/?draw=' + encodeURIComponent(id));
+      window.history.replaceState({}, '', this.consoleUrl(id));
       await this.loadState();
     },
 
@@ -1831,7 +1890,7 @@ function giftExchange() {
       this.activeDraw = null;
       this.previewOpen = false;
       this.groupFilter = '';
-      window.history.replaceState({}, '', '/');
+      window.history.replaceState({}, '', this.consoleUrl());
       // The tab stops naming one event as soon as the organizer is back among several.
       document.title = this.t('brand');
       this.loadDraws();
@@ -1882,23 +1941,23 @@ function giftExchange() {
         this.loginError = this.errorText(response, 'login.error');
         return;
       }
-      sessionStorage.removeItem('admin_pw');
       sessionStorage.setItem('ge_admin_token', response.body.token);
       this.pwDraft = '';
       this.authed = true;
-      await this.enterAdmin(new URLSearchParams(window.location.search));
+      await this.enterAdmin();
     },
     async lock() {
       await this.api('/api/admin/logout', { method: 'POST', body: '{}' }, true);
       sessionStorage.removeItem('ge_admin_token');
-      sessionStorage.removeItem('admin_pw');
       this.authed = false;
       this.participants = [];
       this.draws = [];
       this.activeDraw = null;
-      window.history.replaceState({}, '', '/');
       this.clearAdminError();
       this.securityNotice = '';
+      // Back to the console's own path, not to "/": signing out must not drop the organizer onto
+      // the family's landing card, which is where the console used to be.
+      window.history.replaceState({}, '', window.location.pathname);
     },
     async loadState() {
       const response = await this.api(this.drawPath('/api/admin/state'), { method: 'GET' }, true);
@@ -1965,24 +2024,33 @@ function giftExchange() {
       helper.remove();
       return copied;
     },
+    /* The participant's URL, built in one place because three things have to agree on it: this
+       console, the mail template (`participant_link()` in main.py) and whatever the family was
+       already mailed. One shape, `/?t=<uuid>`, and the token is a credential. */
+    participantUrl(person) {
+      return `${window.location.origin}/?t=${person.token}`;
+    },
+    /* A "copied" flag that turns itself back off. Three controls need it, and the third copy of
+       the clearTimeout/setTimeout pair is how a timer leaks into a button the user already left. */
+    flashFlag(flag, onValue, offValue, ms) {
+      clearTimeout(this._timers[flag]);
+      this[flag] = onValue;
+      this._timers[flag] = setTimeout(() => { this[flag] = offValue; }, ms);
+    },
     async copyLink(person) {
-      const url = `${window.location.origin}/?t=${person.token}`;
+      const url = this.participantUrl(person);
       if (!(await this.writeClipboard(url))) { window.prompt(this.t('err.copy'), url); return; }
-      this.copiedId = person.id;
-      clearTimeout(this._copyTimer);
-      this._copyTimer = setTimeout(() => { this.copiedId = null; }, 1800);
+      this.flashFlag('copiedId', person.id, null, 1800);
     },
     async copyAllLinks() {
       const lines = this.participants
         .map(p => `${p.name} (${this.t('role.' + p.role)}, ${p.family_group}`
           + `${p.group_key ? ' · ' + this.t('roster.group') + ' ' + p.group_key : ''}`
-          + `) — ${window.location.origin}/?t=${p.token}`)
+          + `) — ${this.participantUrl(p)}`)
         .join('\n');
       if (!(await this.writeClipboard(lines))) { window.prompt(this.t('err.copy'), lines); return; }
-      this.copiedAll = true;
+      this.flashFlag('copiedAll', true, false, 2200);
       this.toast(this.t('roster.copied'));
-      clearTimeout(this._copyAllTimer);
-      this._copyAllTimer = setTimeout(() => { this.copiedAll = false; }, 2200);
     },
 
     /* ---------- email ---------- */
@@ -2022,12 +2090,17 @@ function giftExchange() {
       if (failed.length) this.toast(this.t('roster.bulk_failed', { names: failed.join(', ') }), 'warn');
       await this.loadState();
     },
+    /* The same grouping the server applies when it bundles a household into one mail
+       (`_group_by_address` in main.py): compare the trimmed, lowercased address. */
+    addressKey(person) {
+      return (person.email || '').trim().toLowerCase();
+    },
     /* Who else shares this person's address, in this draw. That is the household the one-mail rule
        sends to, and the console should say so before the click, not after the surprise. */
     emailHousehold(person) {
-      const address = (person.email || '').trim().toLowerCase();
+      const address = this.addressKey(person);
       if (!address) return [];
-      return this.participants.filter(other => (other.email || '').trim().toLowerCase() === address);
+      return this.participants.filter(other => this.addressKey(other) === address);
     },
     sendHelpFor(person) {
       const shared = this.emailHousehold(person).length;
@@ -2119,8 +2192,7 @@ function giftExchange() {
         ? this.data.assignments.map(a => `${a.name} (${this.t('role.' + a.role)})${a.wishlist ? ': ' + a.wishlist : ''}`).join('\n')
         : this.t('p.noGifts');
       if (!(await this.writeClipboard(list))) return;
-      this.copiedList = true;
-      setTimeout(() => { this.copiedList = false; }, 1800);
+      this.flashFlag('copiedList', true, false, 1800);
     },
     queueWishlistSave() {
       clearTimeout(this._saveTimer);
@@ -2137,8 +2209,6 @@ function giftExchange() {
       if (!response.ok) { this.toast(this.errorText(response, 'err.unknown'), 'error'); return; }
       this.savedWishlist = this.wishlistDraft;
       this.savedAt = new Date().toISOString();
-      if (this.data.participant) this.data.participant.wishlist = this.wishlistDraft;
-      this.wishlistSaved = true;
     },
 
     /* ---------- ambience ---------- */

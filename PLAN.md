@@ -1102,3 +1102,100 @@ locales, which is cosmetic because the card carries no name, no event title and 
 decisions — what a string used to say, what it says now, why a form is banned — so quoting the French
 *is* the content here, and paraphrasing it would cost the log its evidence. Code, tests and strings
 unchanged: 186 tests, all the same keys.
+
+## The console moves off the site root (addendum, 2026-11-14)
+
+The bug was ordinary: the app had one URL, `/`, and that URL was the **organizer console**. A relative
+who typed the hostname from the email — or who was sent it by a family group — landed on a password
+form they had no business seeing, and every bookmark, dashboard card and screenshot pointed at the
+same page the family was meant to read. Nothing was leaked; the console was always behind the
+password, the login budget and the lockout. What was wrong was the front door.
+
+**The shape now.** One bundle, three screens, one server-stamped flag:
+
+| Path | Screen | Notes |
+|---|---|---|
+| `/` | the family's page | landing card, or one person's own page with `?t=<uuid>` |
+| `/admin` | the organizer console | `ADMIN_PATH` moves it; `X-Robots-Tag: noindex, nofollow`; no share tags |
+| anything else, GET | the family's page | a mistyped address gets an explanation instead of `{"detail":"Not Found"}` |
+
+`spa_shell()` replaces two markers in the same `INDEX_HTML`: the share block (family pages only) and
+`route_tag()`, a boolean — `window.__GE_ORGANIZER__=true|false`. The SPA reads it with `=== true`, so a
+document with no flag opens the family's page, never the console. Nothing on the family's page names
+the console path, and `tests/test_pages.py` fails if it ever does: every `/admin` in the bundle must be
+preceded by `/api`, and `'/?draw=` / `replaceState({}, '', '/')` are banned outright, because those two
+were how a signed-in organizer would have been ejected onto the landing card mid-session.
+
+**`ADMIN_PATH` is validated, not trusted.** `normalize_organizer_path()` corrects the obvious
+(`admin` → `/admin`, `/Admin/` → `/Admin`, `/a/./b` → `/a/b`) and refuses what it cannot make safe: a
+non-ASCII segment, a space, a percent escape, a 200-character segment, `/api`, `/static`,
+`/openapi.json`. A refusal falls back to `/admin` with one audit line rather than refusing to boot —
+a gift exchange that will not start is worse than a console at the expected path. It is read **at
+import**, because that is when routes are registered; the change needs a restart, and
+`test_the_console_route_is_registered_and_the_catch_all_is_last` pins both that the route table
+follows the value and that the catch-all is registered last (registered earlier it would answer
+`/api/*`).
+
+**The `/draw/<uuid>` shim is gone.** That route existed for one mistake: the first real mailing built
+links from the API's path shape, twelve people got `{"detail":"Not Found"}`, and a 302 to `/?t=<uuid>`
+was the repair. The links were re-sent from the one builder (`participant_link()`), the console's copy
+button uses the same shape, and a redirect whose only customer is an address nobody mails any more is
+a route nobody maintains — it also needed its own rate limit, its own UUID-shape check and its own log
+redaction to stay honest. What replaces it is the honest behaviour: the path is not an endpoint, so it
+renders the landing card, which tells the family where their real link is. It never reads a token out
+of a path segment, and a test asserts the token appears nowhere in the response. Two tests that pinned
+the 302 were deleted with it; `test_the_link_shape_the_mail_carries_is_the_shape_the_spa_reads` stays,
+because that is the one holding the console and the mail template together.
+
+**Tidying done on the way** (behaviour unchanged unless noted):
+
+- `_draw_lock` + `BEGIN IMMEDIATE` + `try/COMMIT/except: ROLLBACK` was copy-pasted three times
+  (`run_draw`, `reset_draw`, `delete_draw`), and the 6-line "delete this draw's assignments" statement
+  with it. Now one `draw_transaction()` context manager and one `_clear_assignments()`.
+- The admin config whitelist was a second copy of the rule columns. `EDITABLE_CONFIG_FIELDS` is now
+  derived from `DRAW_RULE_COLUMNS` (minus `is_locked`), so a new column cannot quietly become writable
+  or stay unwritable because somebody forgot a list. The two `UPDATE … SET col = ?` writers share
+  `_update_columns()`, and the participant writer keeps its `AND draw_id = ?` scope.
+- `update_participant` computed the same `model_dump` twice in two branches that produced identical
+  dicts; one computation, and clearing the mail stamp is now a column in the same UPDATE
+  (`email_sent_at = None`) instead of string surgery on the clause list.
+- `admin_state` re-implemented `_all_participants`; now it calls it.
+- Dead code removed: `LimitsOut` (a model never attached to the route it described),
+  `DRAW_TITLE_REQUIRED` (the validator raises `ValueError` instead), `with_email` and `shared_with` in
+  the API payloads (no consumer in the SPA or the suite — and `shared_with`'s docstring claimed the
+  console showed it, which it never did), the SPA's `wishlistSaved` state and its write into
+  `data.participant` (nothing rendered either), and one no-op CSS rule.
+- Unbounded process memory: `RateLimiter.prune()` existed and was never called (now called from
+  `hit()` past 4096 windows), and `_email_gate_at["by_address"]` grew one entry per address forever
+  (now capped at 512, cleared when it reaches the cap — an hour-old gap is no gap).
+- The family's hostname was hard-coded twice — CSP `img-src` and the mail preview's fallback origin —
+  where a host change would silence the preview's art while the mail kept working. One
+  `KNOWN_PUBLIC_ORIGIN`, and a test that ties the CSP entry to the URL the preview actually emits.
+- `sessionStorage.getItem('admin_pw')` was read in two places and never written in any: the browser
+  now sends only the bearer token. The bare `X-Admin-Password` header still works for curl and the
+  tools — it is the API's, not the SPA's.
+- SPA plumbing that had drifted into three copies: one `participantUrl()` (was inlining
+  `${window.location.origin}/?t=` twice), one `flashFlag()` for the copied-flags' timer pairs, one
+  `tallyBy()` for the household and surname chips, one `addressKey()` for the mailbox grouping
+  (mirroring `_group_by_address`), one `parseDate()` behind both formatters, and `enterAdmin()` reading
+  its own query string instead of taking a parsed one from each caller.
+- Comments that had gone wrong rather than merely stale: `list_draws` claimed it touched `assignments`
+  as a COUNT (it never queries that table), the email section header claimed every knob is read per
+  call (the throttle sizes are import-time), `DRAW_RULE_COLUMNS` said three places had to agree (it is
+  four), and `participant_link()` described `/draw/<uuid>` as a route that answers something.
+
+**Verification.** 223 tests, up from 186: `tests/test_pages.py` (35 cases — the two shells, the
+fail-closed flag, the catch-all leaving `/api` and `/static` alone, and `ADMIN_PATH` normalization),
+the CSP/preview-origin test, and the rewritten stale-link test. `tools/check_organizer_ui.py` passes
+clean against a live instance at `/admin` (login → draw list → rules → roster → group filter →
+predicted crossing → second draw → delete → 390 px → EN, no console errors, no raw keys), and a
+Playwright pass over the family's page confirms: root, `/Reveillon` and a stale `/draw/<uuid>` all
+render the landing card with no `#pw` anywhere and the token never echoed; the card switches to
+English; `/?t=<uuid>` still opens the participant page; and the card does not overflow a 390 px
+viewport. New gallery still `22-family-landing.jpg`; the rest of the gallery is unchanged because no
+console screen moved visually.
+
+**Deployment consequence, stated before it surprises anyone:** organizer bookmarks and dashboard cards
+pointing at the bare hostname now land on the family's page. Point them at `/admin`. Participant links
+are untouched — the token was always a query parameter — so nobody in an inbox is affected, which is
+the one thing that had to stay true.
