@@ -210,18 +210,53 @@ def main() -> int:
             ".filter(tr => tr.offsetParent !== null).length === 4")
         assert page.locator("#roster-table tbody tr.part:visible").count() == 4, \
             "opening a second draw changed the first one's roster"
+        drawn_tokens = set(page.evaluate(f"{DATA}.participants.map(p => p.token)"))
+
+        # ------------------------------------------------------------------ #
+        # "Rejouer avec ces personnes": the per-card shortcut to `copy_participants_from`, which is
+        # the only way an organizer is likely to reach it. Three things are worth pinning: the button
+        # only fills the form (nothing is created until "Créer"), the people come across, and the
+        # links do not — a last season's pairing must not become this season's credential.
+        # ------------------------------------------------------------------ #
+        page.get_by_role("button", name="Tous les tirages").click()
+        page.wait_for_selector("text=Choisis un tirage")
+        source_id = page.evaluate(f"{DATA}.draws.find(d => d.event_title === {first_title!r}).id")
+        page.locator("#draw-cards article", has_text=first_title).get_by_role(
+            "button", name="Rejouer avec ces personnes").click()
+        page.wait_for_function(f"Number({DATA}.drawDraft.copy_from) === {source_id}", timeout=5000)
+        assert page.locator("#d-copy").input_value() == str(source_id), \
+            "the card button did not name the source draw in the form"
+        assert page.input_value("#d-title") == first_title, \
+            "the card button offered a different name than the card it was clicked on"
+        assert cards.count() == 2, "the copy button created a draw by itself"
+
+        page.fill("#d-title", "Copie du roster")     # renaming is the normal move, and it keeps the
+        page.get_by_role("button", name="Créer le tirage").click()   # two cards tellable apart below
+        page.wait_for_selector("#roster-table")
+        page.wait_for_function(f"{DATA}.cfg.is_locked === 0")
+        assert page.locator("#roster-table tbody tr.part:visible").count() == 4, \
+            "the copy did not bring the four people across"
+        copied_tokens = set(page.evaluate(f"{DATA}.participants.map(p => p.token)"))
+        assert copied_tokens and not (copied_tokens & drawn_tokens), \
+            "a copied draw reused links that are already sitting in somebody's inbox"
 
         # This draw has been drawn, so deleting it has to be refused *and said*.
         page.get_by_role("button", name="Tous les tirages").click()
         page.wait_for_selector("text=Choisis un tirage")
+        page.wait_for_function(f"{DATA}.draws.length === 3")   # the list is a fetch, the heading is not
+        assert cards.count() == 3, "the copied draw is not on the list"
         page.once("dialog", lambda dialog: dialog.accept())
         problems.allow("status of 400")   # the refusal this check is proving
         page.locator("#draw-cards article", has_text=first_title).get_by_role("button", name="Supprimer").click()
         page.wait_for_selector("text=Le tirage est verrouillé")
-        assert cards.count() == 2, "a locked draw was deleted"
+        assert cards.count() == 3, "a locked draw was deleted"
 
         page.once("dialog", lambda dialog: dialog.accept())
         page.locator("#draw-cards article", has_text="Échange du bureau").get_by_role("button", name="Supprimer").click()
+        page.wait_for_function(f"{DATA}.draws.length === 2")
+
+        page.once("dialog", lambda dialog: dialog.accept())
+        page.locator("#draw-cards article", has_text="Copie du roster").get_by_role("button", name="Supprimer").click()
         page.wait_for_function(f"{DATA}.draws.length === 1")
 
         # ------------------------------------------------------------------ #

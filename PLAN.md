@@ -1299,3 +1299,48 @@ to the flexibility and fairness sections — one viewport of a two-screen page d
 scrolls by measurement rather than with `scroll_into_view_if_needed`, which decided that an already
 partly visible section needed no scrolling and re-shot the top instead. `tests/test_docs.py` keeps the
 pair honest: a still with no README row fails, and a README row with no still fails.
+
+## The mail that said "not yet", and the one click that starts next season (addendum, 2026-11-14)
+
+**A bug, reported from the real event.** The organizer pressed *Lancer le tirage* with auto-email on.
+The draw ran, the links went out — and every mail said `Le tirage n'a pas encore été fait` while its own
+link opened straight onto the reveal.
+
+It looks like a race and is not one. `run_draw` loads the draw's row at the top of the endpoint, locks
+it, then hands **that same row** to the sender, and the sender picks its copy with
+`ready=bool(config_row["is_locked"])`. So the one send that always launches immediately after a draw
+always said "not yet" — deterministically, twelve times out of twelve. The manual paths (`Send` per
+row, `Email the links`) never had it: they call `_load_config` at send time. Reading the settings once
+and passing the row down is the right shape — it is exactly how `ready` stopped being a re-read of some
+global settings row when several draws share a server — and the trap inside that shape is the single
+column the calling endpoint just changed, in an object that looks freshly named.
+
+Fix: re-read after the commit. Test:
+`test_the_auto_send_after_a_draw_mails_the_ready_copy_not_the_pending_one`, which fails on the code as
+it was shipped. Its first half matters as much as its second: it asserts the *pending* copy on a send
+**before** the draw, because without that a green test here would only prove the flag is stuck on.
+Nothing in the data was wrong and no link was affected — the wording undersold a draw that had in fact
+finished, and a manual re-send from the console already said the right thing on the old build.
+
+**One click to run the same people again.** `copy_participants_from` has been on
+`POST /api/admin/draws` since the multi-draw round, and the new-draw form has had a dropdown for it the
+whole time; what nobody could find was the click. Each card on the list now carries
+*Rejouer avec ces personnes* / *Run again with these people*.
+
+It **fills the form, it does not post**. Three reasons, all deliberate: the title is required and is how
+the cards get read, so the organizer names the next event (the field arrives prefilled and
+selected, so `Réveillon 2025` becomes `Réveillon 2026` in one keystroke); the copy is visible in the
+form's own select rather than assumed; and "new links, no results" should be a thing seen before it
+happens. On an empty roster the button is disabled with a reason, not left to make a hollow draw.
+
+What is worth defending about the copy is the token, and the browser check does exactly that: it clicks
+the button, asserts the click created nothing, renames the copy, creates it, then requires the new draw
+to hold the **same four people** and **not one participant token in common** with the draw it came from.
+A link sitting in last season's inbox must never become this season's credential — that is the property
+`create_draw`'s docstring has always claimed, now pinned from the UI that reaches it.
+
+Small consistency fix found on the way: six English UI strings quoted with curly marks (`Draw “{title}”
+created.`) while every French twin used straight ones. The repository quotes with straight `"`.
+
+Gallery: `18-draw-list.jpg` re-shot — one drawn card, one copied-and-undrawn card, so the still shows
+both the button and what it produces. **235 tests.**

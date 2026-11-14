@@ -381,6 +381,17 @@
                       <svg class="w-3.5 h-3.5"><use href="#i-gift"/></svg>
                       <span x-text="t('draws.open')"></span>
                     </button>
+                    <!-- Next season, same people. The copy already existed as a dropdown in the form
+                         below; the one click per card was the missing part. It fills the form rather
+                         than creating: a draw needs a name, and "new links, no results" should be a
+                         decision the organizer sees before it happens. -->
+                    <button @click="copyIntoNewDraw(entry)" :disabled="busy || !entry.participants"
+                            :title="entry.participants ? t('draws.copyNewHelp', { n: entry.participants })
+                                                       : t('draws.copyNewEmpty')"
+                            class="btn btn-quiet px-3 py-2 text-xs">
+                      <svg class="w-3.5 h-3.5"><use href="#i-refresh"/></svg>
+                      <span x-text="t('draws.copyNew')"></span>
+                    </button>
                     <button @click="deleteDraw(entry)" :disabled="busy" class="btn btn-danger px-3 py-2 text-xs"
                             :title="entry.is_locked ? t('draws.deleteLockedHelp') : ''"
                             x-text="t('draws.delete')"></button>
@@ -391,8 +402,9 @@
           </section>
 
           <!-- New draw. Rules and roster live inside it once it exists; here the only required
-               thing is the name, because that is what the cards above are read by. -->
-          <section class="bg-white rounded-3xl ring-1 ring-black/5 shadow-card p-5 sm:p-8">
+               thing is the name, because that is what the cards above are read by. The id exists for
+               the card button above: "same people" lands the organizer here. -->
+          <section id="draw-new" class="bg-white rounded-3xl ring-1 ring-black/5 shadow-card p-5 sm:p-8">
             <p class="label" x-text="t('draws.new')"></p>
             <h2 class="font-display text-xl text-pine-800 mt-0.5" x-text="t('draws.newTitle')"></h2>
             <form @submit.prevent="createDraw()" class="mt-5 grid gap-3 sm:grid-cols-2">
@@ -1240,6 +1252,9 @@ const I18N = {
     'draws.copyField': 'Copier les participants de…',
     'draws.copyNone': 'Personne (roster vide)',
     'draws.copyHelp': 'Les personnes et leurs adresses viennent avec ; pas les liens, pas les résultats.',
+    'draws.copyNew': 'Rejouer avec ces personnes',
+    'draws.copyNewHelp': 'Pré-remplit le nouveau tirage avec les {n} personnes de celui-ci : nouveaux liens, pas de résultats.',
+    'draws.copyNewEmpty': 'Ce tirage n’a encore personne à copier.',
     'draws.create': 'Créer le tirage',
     'draws.back': 'Tous les tirages',
     'draws.opened_on': 'Ouvert le {at}',
@@ -1474,6 +1489,9 @@ const I18N = {
     'draws.copyField': 'Copy the participants from…',
     'draws.copyNone': 'Nobody (empty roster)',
     'draws.copyHelp': 'People and addresses come along; links and results do not.',
+    'draws.copyNew': 'Run again with these people',
+    'draws.copyNewHelp': 'Fills the new draw with these {n} people: new links, no results.',
+    'draws.copyNewEmpty': 'This draw has nobody to copy yet.',
     'draws.create': 'Create the draw',
     'draws.back': 'All draws',
     'draws.opened_on': 'Created {at}',
@@ -1481,9 +1499,9 @@ const I18N = {
     'draws.status_locked': 'Drawn',
     'draws.status_drawn': 'Drawn {at}',
     'draws.counts': '{people} people · {mailed} link(s) sent · {opened} opened',
-    'draws.created': 'Draw “{title}” created.',
-    'draws.deleted': 'Draw “{title}” deleted.',
-    'draws.confirmDelete': 'Delete the draw “{title}” and its {n} participant(s)? Their links will stop working.',
+    'draws.created': 'Draw "{title}" created.',
+    'draws.deleted': 'Draw "{title}" deleted.',
+    'draws.confirmDelete': 'Delete the draw "{title}" and its {n} participant(s)? Their links will stop working.',
     'err.drawGone': 'That draw no longer exists.',
     'err.pickDraw': 'Pick a draw from the list.',
 
@@ -1492,7 +1510,7 @@ const I18N = {
     'warn.childrenNeed': 'Each adult must draw {need} child(ren), but there are only {available} children in the roster.',
     'warn.childAdultsNeed': 'Each child must draw {need} adult(s), but there are only {available} adults in the roster.',
     'warn.childChildrenNeed': 'Each child must draw {need} child(ren), but there are only {available} children in the roster.',
-    'warn.noReceivers': 'No receiver is possible for the “{role}” role: nobody is left to give to.',
+    'warn.noReceivers': 'No receiver is possible for the "{role}" role: nobody is left to give to.',
     'warn.selfOnly': 'There is only one participant: nobody can draw anybody.',
     'note.title': 'Before you run the draw',
     'note.crossingsNeeded': 'Groups this big force the draw to pick inside one of them at least {n} time(s).',
@@ -1588,7 +1606,7 @@ const I18N = {
     'draw.crossingsNone': 'Nobody drew inside their own group.',
     'draw.reset': 'Reset draw',
     'draw.resetHint': 'Clears the pairings and reopens editing.',
-    'draw.confirmReset': 'Reset the draw? Pairings and “viewed” markers will be cleared.',
+    'draw.confirmReset': 'Reset the draw? Pairings and "viewed" markers will be cleared.',
     'draw.resetDone': 'Draw reset. Rules and roster are editable again.',
     'draw.forecast': '{gifts} gift(s) in total: {toAdults} to adults, {toChildren} to children',
     'draw.auto_email_done': '{sent} email(s) sent automatically.',
@@ -1598,7 +1616,7 @@ const I18N = {
     'mail.preview_sub': 'This is a template: nothing was sent and the link is a sample.',
     'mail.subject': 'Subject',
     'mail.close': 'Close',
-    'mail.sample': 'Sample name: “Aline”.',
+    'mail.sample': 'Sample name: "Aline".',
 
     'p.hello': 'Hi',
     'p.pending': 'the draw hasn’t been finalized yet. Check back soon!',
@@ -2049,6 +2067,24 @@ function giftExchange() {
       // The tab stops naming one event as soon as the organizer is back among several.
       document.title = this.t('brand');
       this.loadDraws();
+    },
+
+    /* "Same people, next year" from the card itself. The API has taken `copy_participants_from`
+       since the multi-draw round, and the form below has always had a dropdown for it — what was
+       missing was the one click, on the card, that names this draw as the source.
+
+       It fills the form instead of posting: the title is required and is how the cards get read, and
+       the consequence worth seeing before a click is that the twelve links in last year's inbox are
+       not this year's credentials. So the copy is chosen, the name is offered, and "Créer" stays the
+       thing that actually writes. */
+    copyIntoNewDraw(entry) {
+      if (!entry.participants) return;
+      this.drawDraft = { event_title: entry.event_title, budget_note: '', copy_from: String(entry.id) };
+      this.$nextTick(() => {
+        document.getElementById('draw-new')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        const title = document.getElementById('d-title');
+        if (title) { title.focus(); title.setSelectionRange(0, title.value.length); }
+      });
     },
 
     async createDraw() {

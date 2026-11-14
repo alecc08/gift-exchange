@@ -2248,6 +2248,13 @@ def run_draw(
     # refused, and the rest are the organizer's to hand out in person.
     emailed = None
     if config_row["auto_email_on_draw"]:
+        # Re-read the row. The mail's copy is chosen by `ready=bool(config_row["is_locked"])`, and the
+        # row in hand was read at the top of this endpoint, *before* the lock above — so it still says
+        # 0, and every link mailed by "draw and send" introduced itself as "Le tirage n'a pas encore
+        # été fait" while its own link opened straight onto the reveal. The object looks freshly named
+        # and every other column in it is still current, which is what makes the trap. The manual send
+        # paths never had it: they call `_load_config` at send time.
+        config_row = _load_config(conn, target)
         base_url = mail_base_url(request)
         with_email = [p for p in _all_participants(conn, target) if p["email"]]
         emailed = send_link_emails(conn, with_email, config_row, base_url)
