@@ -53,7 +53,7 @@ def test_no_component_method_is_called_without_this_in_javascript():
 def test_every_draw_scoped_admin_call_carries_the_draw():
     """A new admin endpoint that forgets `drawPath()` silently acts on the wrong event.
 
-    With one draw the server still resolves it; with two it answers 400 « Choisis un tirage », which
+    With one draw the server still resolves it; with two it answers 400 "Choisis un tirage", which
     only shows up once somebody opens the office exchange. So the rule is checked in code.
     """
     js, _ = app_script()
@@ -72,10 +72,10 @@ def test_every_draw_scoped_admin_call_carries_the_draw():
 
 
 def test_the_one_mail_per_mailbox_rule_is_visible_before_the_click():
-    """The console has to say « un courriel par boîte » in three places, or the rule looks broken.
+    """The console has to say "un courriel par boîte" in three places, or the rule looks broken.
 
     A twelve-person roster with five addresses produces five sends. If the only place that says so is
-    the README, an organizer who clicks « Envoyer » on each relative thinks the app forgot people. So
+    the README, an organizer who clicks "Envoyer" on each relative thinks the app forgot people. So
     the row hint, the bulk counter and the report all have to be wired, and a multi-link preview has
     to exist to show what a shared mail looks like.
     """

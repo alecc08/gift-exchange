@@ -51,11 +51,16 @@ def goto_console(page, **kwargs):
 
 def goto_family_page(page):
     """Open the page a relative reaches by typing the hostname: no token, no login, no console.
-    The landing card is the proof; anything else on screen means the route moved again."""
+
+    The check is the server's own route flag rather than a caption, so it cannot go stale the way a
+    text match does when the copy is reworded.
+    """
     page.goto(BASE + "/", wait_until="networkidle")
-    page.wait_for_selector("h2")
+    if page.evaluate("window.__GE_ORGANIZER__ !== false"):
+        raise SystemExit("the site root is not the family's page any more — nothing here is worth shooting")
     if page.query_selector("#pw"):
-        raise SystemExit("the site root is serving the console again — nothing here is worth shooting")
+        raise SystemExit("the login form is on the family's page")
+    page.wait_for_selector("h2")
 
 
 def bearer_headers():

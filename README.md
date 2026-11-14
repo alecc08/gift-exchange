@@ -36,11 +36,6 @@ openssl rand -hex 32       # -> SESSION_SECRET   (signs the admin session tokens
 
 Then open **http://localhost:8085/admin**, sign in, and:
 
-The site root is the **family's** page, not the console: it tells a relative that their link arrives
-by email and nothing more. The organizer console lives at `/admin` (`ADMIN_PATH` moves it), it is not
-linked from the family's page, and it asks search engines not to index it. Same app, same bundle — the
-server stamps each document with the one flag that says which screen to open.
-
 1. **Panel 1** — event title, budget note (e.g. "$25 CAD each, taxes included"), who draws what,
    and whether picks inside the same group should be avoided.
 2. **Panel 2** — add the family: name, adult/child, family name, and the **group** (the household the
@@ -50,6 +45,11 @@ server stamps each document with the one flag that says which screen to open.
    you, sees the pairings.
 4. Each person opens their link, unwraps the gift, and can edit their wishlist at any time —
    it saves itself.
+
+The site root is the **family's** page, not the console: it tells a relative that their link arrives
+by email and nothing more. The console lives at `/admin` (`ADMIN_PATH` moves it), it is not linked
+from the family's page, and it asks search engines not to index it. One bundle, one document — the
+server stamps each response with the single flag that says which screen to open.
 
 Want to look around before adding real people?
 
@@ -114,8 +114,11 @@ Traefik (add to the service in `docker-compose.hardened.yml`):
 ```bash
 bash run_tests.sh                      # creates .venv, installs deps, runs the suite
 ADMIN_PASSWORD=<pw> SESSION_SECRET=<hex> \
-  .venv/bin/uvicorn main:app --host 127.0.0.1 --port 8085
+  .venv/bin/uvicorn main:app --host 127.0.0.1 --port 8085 --no-access-log
 ```
+
+`--no-access-log` because the app logs its own API lines, already `X-Forwarded-For`-aware; without it
+a request is recorded twice, once with the proxy's address and once with the container's.
 
 ### Backups (do one — and keep it private)
 
@@ -189,8 +192,8 @@ delete and re-add the participant.
 | Unbounded input | Pydantic length caps on every text field (name 80, family name 60, group 60, wishlist 1000, title 120, budget 500); the SPA mirrors them via `GET /api/limits`. |
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
 | Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` ("already locked, reset first") instead of silently invalidating links people already opened. |
-| Organizer blindness | No admin route ever reads the `assignments` table — the console physically cannot show pairings. |
-| Debug noise vs leaks | One line per **API** request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency. Only paths under `/api` are logged at all: page routes — `/`, `/admin`, `/static/…` — never reach the log, so a participant link cannot be recovered from it by reading the lines. For the requests that *are* logged, the path is **redacted** anyway: any UUID-shaped segment becomes `<token>`, so `/api/draw/<uuid>` logs as `/api/draw/<token>` — that path *is* a family member's credential, and the log outlives the event. A first link opening is audited as `link_opened participant_id=…`, never as the token. Error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
+| Organizer blindness | No admin route ever returns a pairing. The one thing read out of the `assignments` table is a single `COUNT` of same-group pairs for `/api/admin/state` — enough to admit a draw had to relax a rule, never enough to name one. |
+| Debug noise vs leaks | One line per **API** request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency. Only paths under `/api` are logged at all: page routes — `/`, `/admin`, `/static/…` — never reach the log, so a participant link cannot be recovered from it by reading the lines. For the requests that *are* logged, the path is **redacted** anyway: any UUID-shaped segment becomes `<token>`, so `/api/draw/<uuid>` logs as `/api/draw/<token>` — that path *is* a family member's credential, and the log outlives the event. A first link opening is audited as `link_opened participant_id=…`, never as the token. Error bodies are the fixed `detail` strings, never stack traces. `/docs`, `/redoc` and `/openapi.json` are switched off, and an unmatched path that asks for one of them (or for a file, like `/favicon.ico`) answers the API's JSON `404` rather than the family's page. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
 
 ### Tuning knobs
 
@@ -206,6 +209,15 @@ delete and re-add the participant.
 | `DRAW_RATE_LIMIT` / `API_RATE_LIMIT` | `120` / `300` | Per-minute budgets for participant links / everything else. |
 | `MAX_BODY_BYTES` | `16384` | Request body cap → `413`. |
 | `SESSION_TTL_SECONDS` | `43200` | Admin session lifetime. |
+| `DB_PATH` | `data/exchange.db` | SQLite file. Both compose files set it to `/app/data/exchange.db` and mount that directory. |
+| `RESEND_API_KEY` | unset | Mail is **off** without it: the send endpoints answer `503` and the console says so. Read per call, so a restart is not needed to change it. |
+| `RESEND_FROM` | unset | Verified sender to send from; a domain you have verified in Resend. |
+| `RESEND_TIMEOUT` | `15` | Seconds per outbound request to Resend. |
+| `RESEND_USER_AGENT` | a browser UA | Cloudflare answers `403 / 1010` to `Python-urllib/3.x`, so the app sends an ordinary browser agent. The override exists for the same reason the header exists. |
+| `RESEND_BASE_URL` | `https://api.resend.com` | Test hook: points sends at a local stub. Nothing in a real deployment should change it. |
+| `EMAIL_RATE_LIMIT` | `60` | Sends per minute per organizer client (not per person — one mailbox is one send). |
+| `EMAIL_SEND_INTERVAL_MS` / `EMAIL_SAME_ADDRESS_GAP_S` | `1200` / `4` | Spacing between any two sends, and the longer spacing before a second mail to the same mailbox. |
+| `EMAIL_RETRY_AFTER_S` | `3` | Sleep after a provider `429`, then retry once — never a retry loop. |
 
 ### What this app does *not* protect against
 
@@ -224,6 +236,9 @@ Full threat/control write-up: [`PLAN.md`](PLAN.md#security-hardening-addendum).
 
 ```bash
 curl -s localhost:8085/api/health                       # {"status":"ok"}
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8085/         # 200 — the family's page
+curl -s -o /dev/null -w '%{http_code}\n' localhost:8085/admin    # 200 — the console, at its own path
+curl -s localhost:8085/openapi.json                             # {"detail":"Not Found"} — no map
 curl -s localhost:8085/api/limits | grep default_password
 #   "default_password": false   <-- must be false
 ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py  # ends with: ACCEPTANCE: PASS
@@ -476,8 +491,8 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 The address the family is given is not the console: it is the card below, which says where their link
 is. Nobody has to find the site to take part — they start from the email — but the page behind the
 hostname still has to explain that to an aunt who typed it, and to a cousin whose address was one
-character off. Every unmatched path renders it, and it carries no login form and no hint that one
-exists.
+character off. Every address that is not the console, the API or a file renders it, and it carries
+no login form and no hint that one exists.
 
 <table>
   <tr>
@@ -526,9 +541,10 @@ Québec family wants.
 
 What makes "two locales" a fact rather than a claim:
 
-* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **193 keys each** — and
+* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **196 keys each** — and
   `tests/test_i18n.py` fails on a key that exists in one and not the other. A missing key would render
-  its raw name on screen, which is exactly how a half-translated UI gets born.
+  its raw name on screen, which is exactly how a half-translated UI gets born. The same test fails when
+  the README quotes a different number, because that count is the sentence a translator checks.
 * The same `{placeholder}` names on both sides of every key, asserted key by key, so a sentence built
   from quotas and gift counts cannot break in one language only.
 * The mail has its own parallel dictionary (`EMAIL_STRINGS` in `main.py`), so the subject, the greeting,
@@ -543,9 +559,11 @@ What makes "two locales" a fact rather than a claim:
 * Labels are collision-checked: two different controls may not answer to one label. That guard paid for
   itself during a rename, when the sign-out button briefly carried the draw button's label and a capture
   script clicked the wrong control.
-* One honest gap: the Open Graph share title is fixed French in both locales (`SHARE_TITLE` in
-  `main.py`). The card is generic — no name, no event title, no token — so this is cosmetic, not a
-  leak.
+* One honest gap: the card's title is fixed French in both locales — `SHARE_TITLE` is
+  "Échange de cadeaux · Père Noël secret", and *Père Noël secret* is what the family calls the game.
+  The same name opens the browser tab before the SPA switches to the localized brand, and it is the
+  kicker above the greeting in the mail. The card itself is generic — no name, no event title, no
+  token — so this is cosmetic, not a leak.
 
 And how the copy sounds, since it is the part a family actually reads: the French is ordinary Québec
 French rather than the stage version — the words people really use for the game (*piger*, *gâter*) and
@@ -554,10 +572,12 @@ heading is "The gifts you give", not a word-for-word transfer of the French one.
 
 ### Sharing the link: what the preview shows
 
-The organizer hands out links, so the link preview is the front door. Every page carries Open
-Graph + Twitter card tags — the gift-card title, the description, and
+The organizer hands out links, so the link preview is the front door. Every **family** page carries
+Open Graph + Twitter card tags — the gift-card title, the description, and
 `static/og-image.png` (1200×630 PNG), plus `favicon.svg`, `apple-touch-icon.png`, `icon-512.png`
-and a `site.webmanifest` so "add to home screen" looks intentional on a phone.
+and a `site.webmanifest` so "add to home screen" looks intentional on a phone. The console document
+is the same file with the block left empty: nobody shares a login page, and `og:url` pointing at the
+family's page from a console would be a lie.
 
 Three decisions in it are deliberate:
 
@@ -603,8 +623,9 @@ console reports.
 ## Tests
 
 ```bash
-bash run_tests.sh          # 223 tests: engine invariants (incl. per-person fairness), grouping
-                           # bounds, API contract, page routing, security, previews, email delivery
+bash run_tests.sh          # 233 tests: engine invariants (incl. per-person fairness), grouping
+                           # bounds, API contract, page routing, security, previews, email
+                           # delivery, and the guards over the copy and the gallery itself
 ```
 
 `run_tests.sh` creates its own virtualenv (`uv` if present) and adds `httpx` + `pytest` there only,
@@ -623,12 +644,12 @@ gift-exchange/
 ├── docker-compose.hardened.yml   # localhost-only, read-only FS, no capabilities, uid 1000
 ├── .env.example                  # copy to .env (git-ignored)
 ├── Dockerfile                    # python:3.12-slim + pinned fastapi/uvicorn
-├── main.py                       # API + matching engine + SQLite schema
+├── main.py                       # API + matching engine + SQLite schema + the two page routes
 ├── static/index.html             # SPA: landing card + participant view + organizer console
 │                                 # (one bundle, three screens, FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README
-├── tests/                        # 223 tests
+├── tests/                        # 233 tests
 ├── tools/                        # seed_demo, verify_acceptance, browser + docs media, share-card build
 ├── run_tests.sh
 ├── LICENSE · NOTICE              # MIT + third-party artwork attribution

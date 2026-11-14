@@ -132,7 +132,7 @@ def test_the_spa_builds_a_participant_link_in_exactly_one_place():
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize("path", ["/nope", "/Reveillon", "/nope/deep", "/static"])
+@pytest.mark.parametrize("path", ["/nope", "/Reveillon", "/nope/deep", "/Réveillon-2026"])
 def test_a_mistyped_address_gets_the_landing_page_not_a_json_error(client, path):
     page = client.get(path)
     assert page.status_code == 200
@@ -167,6 +167,21 @@ def test_the_console_path_with_anything_after_it_is_not_a_welcome_page(client):
         assert "text/html" not in response.headers["content-type"], path
 
 
+@pytest.mark.parametrize("path", ["/favicon.ico", "/apple-touch-icon.png", "/openapi.json",
+                                  "/docs", "/redoc", "/api", "/.well-known/security.txt"])
+def test_an_asset_or_a_schema_path_is_never_answered_with_the_landing_card(client, path):
+    """The catch-all is for relatives who fat-fingered a hostname, not for every unmatched GET.
+
+    A browser asking for `/favicon.ico` and getting 200 `text/html` renders nothing visible and hides
+    a missing icon for months; a scanner asking for `/openapi.json` and getting a festive card is
+    being told "this page exists" by a server that means the opposite. Both get the API's 404.
+    """
+    response = client.get(path)
+    assert response.status_code == 404, f"{path} answered {response.status_code}"
+    assert "text/html" not in response.headers["content-type"], path
+    assert response.json() == {"detail": "Not Found"}
+
+
 # --------------------------------------------------------------------------- #
 # ADMIN_PATH
 # --------------------------------------------------------------------------- #
@@ -186,6 +201,8 @@ def test_the_console_path_with_anything_after_it_is_not_a_welcome_page(client):
     ("/api/v1", "/admin"),
     ("/static", "/admin"),
     ("/openapi.json", "/admin"),
+    ("/docs", "/admin"),                       # switched off on purpose; don't hide behind them
+    ("/redoc", "/admin"),
     ("/../etc", "/admin"),                     # nothing that would have to be escaped again
     ("/a b", "/admin"),
     ("/a%20b", "/admin"),

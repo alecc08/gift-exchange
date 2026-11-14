@@ -9,7 +9,7 @@ shows about groups, the draw list, and the phone-width layout. Those break silen
 throws renders an empty box), so this walks the exact paths:
 
   1. land on the **draw list**, open a draw, and come back to the list;
-  2. turn « Éviter les piges dans le même groupe » off, save, reload — it must still be off and the
+  2. turn "Éviter les piges dans le même groupe" off, save, reload — it must still be off and the
      panel must not read "unsaved changes" (the bug that would happen if one copy kept 0 and the
      other kept false);
   3. add a roster with two households, one of them two people deep, and filter by group;
@@ -19,7 +19,10 @@ throws renders an empty box), so this walks the exact paths:
   6. open a **second draw**, check its roster is empty and the first one's is untouched, that a
      locked draw refuses to be deleted, and that deleting the second one works;
   7. at 390 px, check the roster renders as cards and nothing sticks out of the viewport;
-  8. switch to EN and fail on any raw i18n key left on screen.
+  8. switch to EN and fail on any raw i18n key left on screen;
+  9. leave the console and check the family's half of the same bundle at 390 px: the hostname, a
+     mistyped address and a stale link from the first mailing all render the landing card, with no
+     password field, no echoed token, no horizontal scroll and no raw key in either language.
 
 Exits non-zero on a failed assertion, a console error, or a page error. The Tailwind CDN warning is
 ignored: it is the documented cost of a no-build frontend.
@@ -226,6 +229,10 @@ def main() -> int:
         # ------------------------------------------------------------------ #
         page.locator("#draw-cards article").first.get_by_role("button", name="Ouvrir").click()
         page.wait_for_selector("#roster-table")
+        # A real token, for the stale-link case at the end. It is never printed and never sent
+        # anywhere: the only question asked about it is "does this string appear in the response".
+        participant_token = page.evaluate(f"{DATA}.participants[0].token") or \
+            "00000000-0000-0000-0000-000000000000"
         for width in (390, 360):
             page.set_viewport_size({"width": width, "height": 844})
             page.wait_for_timeout(300)
@@ -253,10 +260,35 @@ def main() -> int:
         page.get_by_role("button", name="EN", exact=True).click()
         page.wait_for_selector("text=Avoid picks within the same group")
         page.wait_for_selector("text=Nobody drew inside their own group.")
-        # `landing` is in the list because the family's page is rendered by this same bundle: a raw
-        # key there is what a relative would see, and this script never visits that page.
-        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z]+/").count(), \
+        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z_.]+/").count(), \
             "a raw i18n key is visible on screen"
+
+        # ------------------------------------------------------------------ #
+        # The family's half of the same bundle: the root, a mistyped address and a stale link are
+        # all the landing card. The console is guarded by the password; this half is guarded by
+        # nothing, and its whole job is to not be a login form, so it gets checked here too.
+        # ------------------------------------------------------------------ #
+        page.set_viewport_size({"width": 390, "height": 844})
+        for path, why in (("/", "the hostname the email carries"),
+                          ("/Reveillon", "a fat-fingered address"),
+                          (f"/draw/{participant_token}", "a link from the first mailing")):
+            page.goto(BASE + path, wait_until="networkidle")
+            assert page.evaluate("window.__GE_ORGANIZER__ === false"), f"{path}: not the family's page"
+            if page.query_selector("#pw"):
+                problems.record(f"{path}: a password field on the page that is only {why}")
+            heading = page.locator("h2").first.inner_text().strip()
+            assert heading, f"{path}: the landing card rendered an empty heading"
+            if participant_token in page.content():
+                problems.record(f"{path}: the token came back in the served document")
+            width_check = page.evaluate(
+                "document.documentElement.scrollWidth - document.documentElement.clientWidth")
+            assert width_check <= 1, f"{path}: horizontal scroll at 390 px ({width_check}px)"
+            page.get_by_role("button", name="EN", exact=True).click()
+            page.wait_for_timeout(200)
+            assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z_.]+/").count(), \
+                f"{path}: a raw i18n key on the family's page in English"
+            page.get_by_role("button", name="FR", exact=True).click()
+            page.wait_for_timeout(200)
         browser.close()
 
     for problem in dict.fromkeys(problems.problems):

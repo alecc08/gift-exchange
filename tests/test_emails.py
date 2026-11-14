@@ -292,7 +292,7 @@ def test_bulk_sends_one_email_per_mailbox_carrying_every_link(client, monkeypatc
 
 
 def test_a_single_row_send_still_groups_the_household(client, monkeypatch):
-    """« Envoyer » on one row sends the household, so clicking it per relative cannot stack mails."""
+    """One row's "Envoyer" click sends the household, so clicking it per relative cannot stack mails."""
     configure_emails(monkeypatch)
     stub = StubTransport()
     monkeypatch.setattr(main, "send_email", stub)

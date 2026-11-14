@@ -155,13 +155,13 @@
 
   /* ---- responsive ----
      There were no breakpoints here at all: at phone width the roster's seven columns simply
-     overflowed their scroll container and the status chips (« Pas encore ouvert », « Lien envoyé
-     il y a 2 h ») ran into the next cell. Below 900 px the roster stops being a table and becomes
+     overflowed their scroll container and the status chips ("Pas encore ouvert", "Lien envoyé
+     il y a 2 h") ran into the next cell. Below 900 px the roster stops being a table and becomes
      one card per person, with the column names rendered inside each cell; below 640 px the controls
      get thumb-sized and the mail preview stops pretending to be a desktop window. */
 
-  /* A chip is a fact, not a fixed width: it has to survive « Pas encore ouvert » in French and
-     « Unopened » in English in the same column without stacking on top of its neighbour. */
+  /* A chip is a fact, not a fixed width: it has to survive "Pas encore ouvert" in French and
+     "Unopened" in English in the same column without stacking on top of its neighbour. */
   .chip { max-width: 100%; flex-wrap: wrap; row-gap: .15rem; }
   .chip > span { overflow-wrap: anywhere; }
 
@@ -201,7 +201,7 @@
   }
 
   @media (max-width: 480px) {
-    /* The chip keeps the fact (« Lien envoyé »); the when moves to the tooltip it already carries.
+    /* The chip keeps the fact ("Lien envoyé"); the when moves to the tooltip it already carries.
        Same information, one line, no overlap with the cell next to it. */
     .chip-time { display: none; }
   }
@@ -1120,9 +1120,9 @@ const I18N = {
     'draws.status_locked': 'Tiré',
     'draws.status_drawn': 'Tiré le {at}',
     'draws.counts': '{people} personne(s) · {mailed} lien(s) envoyé(s) · {opened} ouvert(s)',
-    'draws.created': 'Tirage « {title} » créé.',
-    'draws.deleted': 'Tirage « {title} » supprimé.',
-    'draws.confirmDelete': 'Supprimer le tirage « {title} » et ses {n} participant(s)? Leurs liens ne fonctionneront plus.',
+    'draws.created': 'Tirage "{title}" créé.',
+    'draws.deleted': 'Tirage "{title}" supprimé.',
+    'draws.confirmDelete': 'Supprimer le tirage "{title}" et ses {n} participant(s)? Leurs liens ne fonctionneront plus.',
     'err.drawGone': 'Ce tirage n’existe plus.',
     'err.pickDraw': 'Choisis un tirage dans la liste.',
 
@@ -1131,7 +1131,7 @@ const I18N = {
     'warn.childrenNeed': 'Chaque adulte doit piger {need} enfant(s), mais il n’y en a que {available} en tout dans la liste.',
     'warn.childAdultsNeed': 'Chaque enfant doit piger {need} adulte(s), mais il n’y en a que {available} en tout dans la liste.',
     'warn.childChildrenNeed': 'Chaque enfant doit piger {need} enfant(s), mais il n’y en a que {available} en tout dans la liste.',
-    'warn.noReceivers': 'Pour le rôle « {role} », il n’y a personne à gâter.',
+    'warn.noReceivers': 'Pour le rôle "{role}", il n’y a personne à gâter.',
     'warn.selfOnly': 'Il n’y a qu’une seule personne dans la liste : le tirage ne peut pas se faire.',
     'note.title': 'À savoir avant de lancer',
     'note.crossingsNeeded': 'Avec des groupes gros comme ceux-là, le tirage devra bien piger {n} fois à l’intérieur d’un groupe.',
@@ -1227,7 +1227,7 @@ const I18N = {
     'draw.crossingsNone': 'Personne a pigé dans son propre groupe.',
     'draw.reset': 'Recommencer le tirage',
     'draw.resetHint': 'Efface les résultats et ça rouvre la place.',
-    'draw.confirmReset': 'Recommencer le tirage ? Les résultats et les marques « ouvert » s’en vont.',
+    'draw.confirmReset': 'Recommencer le tirage ? Les résultats et les marques "ouvert" s’en vont.',
     'draw.resetDone': 'Tirage recommencé. Tu peux changer les règles et la liste.',
     'draw.forecast': '{gifts} cadeau(s) en tout : {toAdults} pour des adultes, {toChildren} pour des enfants',
     'draw.auto_email_done': '{sent} courriel(s) envoyé(s) automatiquement.',
@@ -1237,7 +1237,7 @@ const I18N = {
     'mail.preview_sub': 'C’est un modèle : rien n’a été envoyé et le lien est un exemple.',
     'mail.subject': 'Sujet',
     'mail.close': 'Fermer',
-    'mail.sample': 'Nom d’exemple : « Aline ».',
+    'mail.sample': 'Nom d’exemple : "Aline".',
 
     'p.hello': 'Bonjour',
     'p.pending': 'le tirage n’est pas encore fait. Ça s’en vient, repasse plus tard !',
@@ -1601,7 +1601,7 @@ function giftExchange() {
     get emailReadyCount() { return this.participants.filter(p => this.looksLikeEmail(p.email)).length; },
     /* Distinct mailboxes among the people with an address: the number of emails that will actually
        leave. Twelve cousins at five addresses is five sends, and saying so here is what makes the
-       « Envoyer » click predictable instead of a guess. */
+       "Envoyer" click predictable instead of a guess. */
     get mailboxCount() {
       return new Set(this.participants
         .filter(p => this.looksLikeEmail(p.email))

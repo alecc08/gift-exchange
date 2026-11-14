@@ -5,6 +5,9 @@ FastAPI + SQLite, single-file backend:
     short-lived signed session token
   * public per-participant API guarded only by a UUID token
   * a randomized slot-allocation + backtracking matching engine
+  * one SPA document, served twice: the family's page at `/` (and at any mistyped address) and the
+    organizer console at `ORGANIZER_PATH`. The document is stamped with one boolean so it knows which
+    screen to open — see `spa_shell()` and `route_tag()`.
 
 The organizer is deliberately kept blind: no admin endpoint returns a pairing, and the only thing
 read from the `assignments` table is one COUNT of same-group pairs — enough to admit that a draw had
@@ -1241,8 +1244,8 @@ def send_email(*, to: str, subject: str, html_body: str, text_body: str, ref_id:
 # The mail follows the site: pine header, ivory card, gold rules, Fraunces/Inter with the same
 # serif/sans fallbacks the CSS uses (mail clients rarely have the webfonts, the fallbacks are the
 # plan, not the excuse). Inline styles only — that is the only CSS email clients agree on.
-# Copy rule: plain Quebec French, the words the interface already uses (« liste d'idées »,
-# « qui gâtes », « jamais dans la même famille »), never the caricature version.
+# Copy rule: plain Quebec French, the words the interface already uses ("liste d'idées",
+# "qui gâtes", "jamais dans la même famille"), never the caricature version.
 EMAIL_STRINGS = {
     "fr": {
         "kicker": "Tirage de Noël · Père Noël secret",
@@ -1352,7 +1355,7 @@ def _email_copy(language: str) -> dict[str, str]:
 
 def _join_names(names: list[str], copy: dict[str, str]) -> str:
     """"Alec, Gabrielle et Hugo" — and a cut for a big household, because the subject is what a
-    family scans on a phone and an unbounded list pushes the words « vos liens » off the screen."""
+    family scans on a phone and an unbounded list pushes the words "vos liens" off the screen."""
     if len(names) == 1:
         return names[0]
     if len(names) > MAX_SUBJECT_NAMES:
@@ -1578,7 +1581,8 @@ class ConfigUpdate(BaseModel):
     # draw exists otherwise. When off, groups are not consulted at all.
     avoid_same_group: Optional[bool] = None
     # One language for the whole event, not per participant: at a family event the organizer picks
-    # once. Unknown values are rejected by the Literal, so the template lookup can never miss.
+    # once. The Literal means the console cannot send a value the template lookup has never seen,
+    # which is why there is no guard against a missing language downstream.
     email_language: Optional[Literal["fr", "en"]] = None
     # Off by default: an accidental click should not mail the whole family.
     auto_email_on_draw: Optional[bool] = None
@@ -1700,7 +1704,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Family Gift Exchange", lifespan=lifespan, docs_url=None, redoc_url=None)
+# No docs UI and no schema route: `/docs`, `/redoc` and `/openapi.json` are all unanswered, so the
+# API surface is not something a visitor can enumerate. Nothing in this repository reads the schema —
+# the SPA calls the endpoints by hand and the tests call the functions directly.
+app = FastAPI(title="Family Gift Exchange", lifespan=lifespan,
+              docs_url=None, redoc_url=None, openapi_url=None)
 
 
 @app.middleware("http")
@@ -2314,7 +2322,7 @@ def email_participant_link(
 ) -> dict[str, Any]:
     """Send this person's link — as one mail per mailbox, like every other send.
 
-    Clicking « Envoyer » on one row of a family of three at one address used to mean three mails in
+    Clicking "Envoyer" on one row of a family of three at one address used to mean three mails in
     one inbox, and clicking it three times meant six. So the row sends the *household*: one mail
     carrying every link at that address in this draw, and the response names the others so the
     console can say what actually went out.
@@ -2497,10 +2505,16 @@ DEFAULT_ORGANIZER_PATH = "/admin"
 # One path segment the server is willing to name a console after: no `..`, no spaces, no percent
 # escapes, nothing that would have to be escaped again on its way back out into an HTML document.
 _PATH_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._~-]{0,63}$")
-# First path segments the server already owns: the API, the static mount and the schema route. A
-# console registered under one of these would be shadowed and look broken in a way nobody would
-# think to check. (`/docs` and `/redoc` are disabled at construction, so they are free to use.)
-RESERVED_PATHS = ("api", "static", "openapi.json")
+# Paths that are never the family's page, in either direction: `api` and `static` are routes this
+# server owns; `openapi.json`, `docs` and `redoc` are the schema and the docs pages it switches off
+# on purpose (see the FastAPI constructor). A console registered under one of the first two would be
+# shadowed and look broken in a way nobody would think to check; a stray GET for any of the five is a
+# machine probing the API surface, so it gets the API's JSON 404 rather than a warm card.
+RESERVED_PATHS = ("api", "static", "openapi.json", "docs", "redoc")
+# A path whose last segment looks like a file (`favicon.ico`, `apple-touch-icon.png`) is either a
+# broken reference or a probe. Either way the answer is a 404, never the landing card: a 200 full of
+# HTML where an asset was expected is how a missing icon turns into a silently wrong page for weeks.
+FILE_SEGMENT_RE = re.compile(r"\.[A-Za-z0-9]{1,8}$")
 
 
 def normalize_organizer_path(raw: Optional[str]) -> str:
@@ -2648,11 +2662,17 @@ def unmatched_path(request: Request) -> HTMLResponse:
     the family needs to know either way. POST/PUT/DELETE on a nonsense path are untouched, because
     this route is GET-only and the API routes are registered first.
 
-    Two things stay JSON even here: a `/api/…` typo is a machine asking for an endpoint, and handing
-    it HTML is how a broken client fails silently, and the console path with anything after it is a
-    probe, not a family member — both answer the API's own 404 rather than rendering a page.
+    Three kinds of unmatched GET stay JSON 404s, because for them a card would be a wrong answer:
+    a path under a segment the server owns or deliberately leaves unanswered (`/api/…` typo,
+    `/openapi.json`, `/docs`) is a machine asking for an endpoint and HTML is how a broken client
+    fails silently; a path whose last segment looks like a file (`/favicon.ico`) is a broken
+    reference, and a 200 full of HTML where an icon was expected hides that for months; and anything
+    hanging under the console path (`/admin/settings`) is a probe, not a relative.
     """
-    if request.url.path.startswith("/api/") or request.url.path.startswith(f"{ORGANIZER_PATH}/"):
+    path = request.url.path
+    head = path.lstrip("/").split("/")[0].lower()
+    if (head in RESERVED_PATHS or FILE_SEGMENT_RE.search(path.rsplit("/", 1)[-1])
+            or path.startswith(f"{ORGANIZER_PATH}/")):
         raise HTTPException(status_code=404, detail="Not Found")
     return spa_shell(organizer=False, request=request)
 
