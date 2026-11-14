@@ -256,7 +256,7 @@ other ([Languages](#languages-french-and-english)).
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/01-login.jpg" alt="Organizer sign-in card on the festive background"><br><b>The door</b> — one password, rate limited and locked out after five failures; the whole organizer surface sits behind it. It lives at `/admin`, not at the hostname the family was given.</td>
-    <td width="50%"><img src="docs/screenshots/18-draw-list.jpg" alt="Draw list: two draws, one not yet drawn and one locked, plus the form that opens another"><br><b>Sign in, pick a draw</b> — the first screen is the list: one card per draw with its status, its people, how many links went out and how many were opened. Everything below is one draw at a time.</td>
+    <td width="50%"><img src="docs/screenshots/18-draw-list.jpg" alt="Draw list: one drawn and one not yet drawn, each with Open, Run again with these people and Delete, plus the empty form that opens another"><br><b>Sign in, pick a draw</b> — the first screen is the list: one card per draw with its status, its people, how many links went out and how many were opened, and a button that starts the next exchange from this same roster. Everything below is one draw at a time.</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/02-admin-rules.jpg" alt="Rules and quotas panel with live totals and character counters"><br><b>Rules &amp; quotas</b> — live gift totals, character counters, and a warning while the admin password is still the default.</td>
@@ -315,6 +315,12 @@ event instead of dropping you on the list.
 | `POST /api/admin/draws` | `{event_title, budget_note?, copy_participants_from?}`. Copies **people** (names, households, wishlists, addresses) with **fresh tokens** and no `viewed_at` / `email_sent_at`: a link that already went out with last year's pairing must not become this year's credential. |
 | `DELETE /api/admin/draws/{id}` | Removes the draw, its roster and its pairings. A **locked** draw is refused (`400`) rather than forced: relatives are holding links that reveal it, so the sequence is *reset*, then delete. |
 | every other `/api/admin/*` | Takes `?draw_id=`. Omitted, it means "the only draw there is" — the contract every older client and the whole pre-multi-draw test suite was written against. With two draws and no `draw_id` the server refuses to guess: `400 No draw selected`. Unknown id: `404 This draw does not exist`. Empty server: `400 There is no draw yet`. |
+
+The list exposes the copy as one button per card — *Rejouer avec ces personnes* / *Run again with
+these people*. It does not post: it fills the form below with that draw named as the source and its
+title already in the name field, because the title is how the cards get read and **Créer** should stay
+the click that writes. `tools/check_organizer_ui.py` clicks it, renames the copy, and asserts the new
+draw has the same four people and not one participant token in common with the draw it came from.
 
 Participant ids are global, so the console cannot reach across either: editing, mailing or deleting
 a person who belongs to another draw answers `404`. A participant's link never carries a draw id —
@@ -450,7 +456,10 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   `with: [names]` so the console can say what really left), **Email the links** for
   everyone with an address (per-person report, skipped addresses listed not hidden, plus
   `messages` = how many mails actually left), and an opt-in `auto_email_on_draw` config switch that
-  mails *after* the draw commits — a dead Resend can never leave a half-drawn event.
+  mails *after* the draw commits — a dead Resend can never leave a half-drawn event. That mail carries
+  the **ready** copy ("The draw is done. Open your link…"), which means it reads the lock this same
+  request just wrote: the settings row is re-read after the commit, because the row in hand predates it
+  and every *other* column in it is still current.
 * **Throttling:** sends are paced by one process-wide gate — a global spacing
   (`EMAIL_SEND_INTERVAL_MS`, default 1200 ms, since Resend's free tier 429s above ~1 req/s) and
   a longer per-address spacing (`EMAIL_SAME_ADDRESS_GAP_S`, default 4 s). Since one mailbox gets one
@@ -545,7 +554,7 @@ Québec family wants.
 
 What makes "two locales" a fact rather than a claim:
 
-* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **218 keys each** — and
+* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **221 keys each** — and
   `tests/test_i18n.py` fails on a key that exists in one and not the other. A missing key would render
   its raw name on screen, which is exactly how a half-translated UI gets born. The same test fails when
   the README quotes a different number, because that count is the sentence a translator checks.
