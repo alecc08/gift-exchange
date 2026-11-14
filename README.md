@@ -1,11 +1,13 @@
-# Family Gift Exchange · Échange de cadeaux
+# Family Gift Exchange
 
 Configurable Secret Santa for a big family: role-based draw quotas (adult / child), a group rule
 that keeps a household out of its own draw, one private link per person, and an organizer who
 **never sees the pairings**.
 
-FastAPI + SQLite · single-page frontend (Tailwind CDN + Alpine.js, no build step) · UI in
-**Québec French** (`fr-CA`) with a one-click EN switch · amounts in Canadian dollars.
+FastAPI + SQLite · single-page frontend (Tailwind CDN + Alpine.js, no build step) · **two locales —
+Québec French (`fr-CA`) and English — every string in both**, one click to switch · amounts in
+Canadian dollars. This README is English; [Languages](#languages-french-and-english) says what each locale
+actually says.
 
 | The gift-box reveal | Unlock → snowfall → copy every link |
 |---|---|
@@ -34,12 +36,12 @@ openssl rand -hex 32       # -> SESSION_SECRET   (signs the admin session tokens
 
 Then open **http://localhost:8085**, sign in, and:
 
-1. **Panel 1** — event title, budget note (« 25 $ par personne, taxes incluses »), who draws what,
+1. **Panel 1** — event title, budget note (e.g. "$25 CAD each, taxes included"), who draws what,
    and whether picks inside the same group should be avoided.
 2. **Panel 2** — add the family: name, adult/child, family name, and the **group** (the household the
    rule actually works on — see [Grouping](#grouping-a-family-name-is-not-a-household)). Hit
-   **Copier tous les liens** to put every private link on the clipboard.
-3. **Panel 3** — **Lancer le tirage**. Everyone gets their own link; nobody, not even
+   **Copy all links** to put every private link on the clipboard.
+3. **Panel 3** — **Generate & lock draw**. Everyone gets their own link; nobody, not even
    you, sees the pairings.
 4. Each person opens their link, unwraps the gift, and can edit their wishlist at any time —
    it saves itself.
@@ -133,7 +135,7 @@ delete and re-add the participant.
 
 1. **Set a real `ADMIN_PASSWORD`.** The spec default `admin` is refused by the hardened compose
    file, and while it is in use the container logs a warning and the organizer console shows a
-   yellow banner (« Le mot de passe d'administration est encore celui de départ… »). If you see
+   yellow banner saying the admin password is still the default one. If you see
    that banner, you are not ready to send links. A **blank** value (an unset `${VAR}` in a
    compose file) shuts the console entirely: every login and admin call answers `503`.
 2. **Set `SESSION_SECRET`.** Without it the signing key is derived from the password, so every
@@ -180,7 +182,7 @@ delete and re-add the participant.
 | Private-link leakage | `Referrer-Policy: no-referrer` + `<meta name="referrer" content="no-referrer">`, so `/?t=<uuid>` never rides out in a Referer. |
 | Unbounded input | Pydantic length caps on every text field (name 80, family name 60, group 60, wishlist 1000, title 120, budget 500); the SPA mirrors them via `GET /api/limits`. |
 | Torn writes | Draws and resets are serialised by a process lock inside one SQLite transaction; a rejected draw writes nothing. |
-| Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` (« already locked, reset first ») instead of silently invalidating links people already opened. |
+| Accidental re-draw | `POST /api/admin/draw` on a locked event → `409` ("already locked, reset first") instead of silently invalidating links people already opened. |
 | Organizer blindness | No admin route ever reads the `assignments` table — the console physically cannot show pairings. |
 | Debug noise vs leaks | One line per **API** request (`request ip=… method=… path=… status=… ms=…`) plus auth/draw/reset/link events, with IP, status and latency. Only paths under `/api` are logged at all: page routes — `/`, `/static/…`, and `/draw/<token>` — never reach the log, so a participant link cannot be recovered from it by reading the lines. For the requests that *are* logged, the path is **redacted** anyway: any UUID-shaped segment becomes `<token>`, so `/api/draw/<uuid>` logs as `/api/draw/<token>` — that path *is* a family member's credential, and the log outlives the event. A first link opening is audited as `link_opened participant_id=…`, never as the token. Error bodies are the fixed `detail` strings, never stack traces; `/docs`, `/redoc` and `/openapi.json` are disabled. The image starts uvicorn with `--no-access-log` so the app's own X-Forwarded-For-aware line is the single record. |
 
@@ -224,18 +226,22 @@ ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py  # ends with: ACCEPTANCE:
 
 ## The organizer console
 
+The gallery is shot in the app's default locale, Québec French; the captions below quote the
+English labels, because both dictionaries are complete and every string in one has a twin in the
+other ([Languages](#languages-french-and-english)).
+
 <table>
   <tr>
     <td width="50%"><img src="docs/screenshots/01-login.jpg" alt="Organizer sign-in card on the festive background"><br><b>The door</b> — one password, rate limited and locked out after five failures; the whole organizer surface sits behind it.</td>
-    <td width="50%"><img src="docs/screenshots/18-draw-list.jpg" alt="Draw list: two draws, one not yet drawn and one locked, plus the form that opens another"><br><b>Sign in, choose a tirage</b> — the first screen is the list: one card per draw with its status, its people, how many links went out and how many were opened. Everything below is one draw at a time.</td>
+    <td width="50%"><img src="docs/screenshots/18-draw-list.jpg" alt="Draw list: two draws, one not yet drawn and one locked, plus the form that opens another"><br><b>Sign in, pick a draw</b> — the first screen is the list: one card per draw with its status, its people, how many links went out and how many were opened. Everything below is one draw at a time.</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/02-admin-rules.jpg" alt="Rules and quotas panel with live totals and character counters"><br><b>Rules &amp; quotas</b> — live gift totals, character counters, and a warning while the admin password is still the default.</td>
     <td width="50%"><img src="docs/screenshots/03-warnings.jpg" alt="Warning that the draw cannot succeed with these quotas"><br><b>Feasibility warnings</b> — the quota arithmetic is checked while you type, so an impossible draw is explained instead of failing after a click.</td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/04-roster.jpg" alt="Roster table with surname, group, address, status and action columns"><br><b>Roster</b> — per-person gift count, a column for the surname, one for the household, one for the address the mail will go to, and its own « Envoyer ».</td>
-    <td><img src="docs/screenshots/05-group-filter.jpg" alt="Roster filtered to one household by its group chip"><br><b>Filter by household</b> — the group chips carry counts; one click narrows the roster to that table, which is how you check « chez Gaétan » without scanning the whole family.</td>
+    <td><img src="docs/screenshots/04-roster.jpg" alt="Roster table with surname, group, address, status and action columns"><br><b>Roster</b> — per-person gift count, a column for the surname, one for the household, one for the address the mail will go to, and its own <b>Send</b> button.</td>
+    <td><img src="docs/screenshots/05-group-filter.jpg" alt="Roster filtered to one household by its group chip"><br><b>Filter by household</b> — the group chips carry counts; one click narrows the roster to that table, which is how you check one household's rows without scanning the whole family.</td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/06-toast-clipboard.jpg" alt="Toast confirming all links were copied"><br><b>Copy all links</b> — one click, one toast; each row keeps its own copy state, for the families who would rather get their link in person.</td>
@@ -254,7 +260,7 @@ ADMIN_PASSWORD=<pw> python3 tools/verify_acceptance.py  # ends with: ACCEPTANCE:
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/19-roster-phone.jpg" alt="Roster at 390 px: each person is a card with every field labelled"><br><b>The roster, re-built</b> — below 900 px a person is a card, and each cell repeats its column name (« COURRIEL », « STATUT », « ACTIONS »), so nothing is silently dropped on the way to the small screen.</td>
+    <td width="50%"><img src="docs/screenshots/19-roster-phone.jpg" alt="Roster at 390 px: each person is a card with every field labelled"><br><b>The roster, re-built</b> — below 900 px a person is a card, and each cell repeats its column name (Email, Status, Actions), so nothing is silently dropped on the way to the small screen.</td>
     <td width="50%"><img src="docs/screenshots/15-mobile-admin.jpg" alt="Organizer console on a phone with the draw summary and the first panel"><br><b>The console, not a shrunken console</b> — the draw summary, the panel headings and the buttons stay readable one-handed; 40 px targets below 640 px, and inputs at 16 px so Mobile Safari never zooms in and leaves you there.</td>
   </tr>
 </table>
@@ -264,8 +270,8 @@ narrow screen. Below **900 px** the roster stops being a seven-column table and 
 person, each field labelled with its column name (`td[data-label]`, so the labels are the same
 strings as the table headers and translate with the UI). Below **640 px** buttons get a 40 px target
 and inputs go to 16 px — under that, Mobile Safari zooms the page on focus and never gives the zoom
-back. Below **480 px** the status chips drop the *when* (« il y a 2 h ») and keep the *what*
-(« Lien envoyé »); the full timestamp stays in the chip's `title` and in the tooltip, so the fact
+back. Below **480 px** the status chips drop the *when* ("2 hours ago") and keep the *what*
+("Link emailed"); the full timestamp stays in the chip's `title` and in the tooltip, so the fact
 survives and the chip stops running into the cell next to it. The quota table, the mail preview and
 the toasts reflow with the screen; the toasts go full-width. `tools/check_organizer_ui.py` asserts
 this at 390 px and 360 px: no element outside the viewport, no horizontal scroll, and the roster
@@ -273,10 +279,10 @@ rendered as cards.
 
 ### Several draws on one server
 
-One deployment can hold more than one exchange — the Réveillon, the office, the cousins' — and each
+One deployment can hold more than one exchange — the holiday party, the office, the cousins' — and each
 one has its **own** roster, rules, links, pairings and mail history. Signing in lands on
-**« Choisis un tirage »**: one card per draw with its status (« Pas encore tiré » / « Tiré le
-13 nov. »), how many people are in it, how many links went out and how many were opened. Opening a
+**Pick a draw**: one card per draw with its status ("Not drawn yet" / "Drawn Nov 13"), how many
+people are in it, how many links went out and how many were opened. Opening a
 draw puts it in the URL (`/?draw=7`), so a reload or a bookmarked console comes back to the same
 event instead of dropping you on the list.
 
@@ -302,33 +308,33 @@ migration was rehearsed on a copy of the production file before anything was dep
 
 ### Grouping: a family name is not a household
 
-A big family has two different things people call "la famille": the **surname**, and the **household
+A big family has two different things people call "family": the **surname**, and the **household
 the rule is about**. Cousins can carry the same surname as you and live in a different house, and two
 surnames can share one roof. So the participant record carries both:
 
 | Field | Label | What it does |
 |---|---|---|
-| `family_group` | « Nom de famille » | A label for the roster. Never used by the engine. |
-| `group_key` | « Groupe » | The unit of the rule. Two people with the same group_key are one household. |
+| `family_group` | Family name | A label for the roster. Never used by the engine. |
+| `group_key` | Group | The unit of the rule. Two people with the same group_key are one household. |
 
 An empty `group_key` means *in no group* — and two empties are **not** one group: each one becomes a
 private key (`#solo:<id>` internally), so someone with nothing filled in can be drawn by anyone
 except themselves.
 
-The rule is a **preference, not an axiom** (Panel 1: « Éviter les piges dans le même groupe »):
+The rule is a **preference, not an axiom** (Panel 1: "Avoid picks within the same group"):
 
 * The solver first tries a draw with **zero** same-group picks. Most rosters finish there.
 * If none exists, it does **not** answer `422`. It computes a lower bound on how many gifts *must*
   cross (`_min_crossings()`), then tries that budget, then one more, until a draw exists — so the
   relaxation is as small as the arithmetic allows. A 2-person household in a 3-person roster draws,
   with exactly one crossing.
-* The console says so, in both directions: before the draw the note predicts it (« le tirage devra
-  bien piger 1 fois à l'intérieur d'un groupe »), after the draw the panel reports the number
-  (« Le tirage a pigé 1 fois dans le même groupe : avec ces groupes-là, il fallait bien ça. »).
+* The console says so, in both directions: before the draw the note predicts it ("Groups this big
+  force the draw to pick inside one of them at least 1 time(s)."), after the draw the panel reports
+  the number ("The draw picked inside the same group 1 time(s): with these groups, it had to.").
   A prediction this exact is not a coincidence — the frontend runs the same bound, ported from
   `main.py`.
-* Only the **quota arithmetic** can block the button. Group tightness never disables *Lancer le
-  tirage*, because the engine can still deliver a draw.
+* Only the **quota arithmetic** can block the button. Group tightness never disables *Generate &
+  lock draw*, because the engine can still deliver a draw.
 * Unchecking the box switches groups off entirely (`#solo:<id>` for everyone), which is also what
   keeps a 2-person household from drawing itself.
 
@@ -345,8 +351,8 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/20-email-panel.jpg" alt="Draw panel with the mail button, the household copy and the mailbox counter"><br><b>The send is counted in mailboxes</b> — the chip says « 8 personne(s) · 4 boîte(s) · 4 courriel(s) »: what you are about to pay for is addresses, not people, and the copy under the button says so in one sentence.</td>
-    <td width="50%"><img src="docs/screenshots/21-email-preview.jpg" alt="The household mail: art, intro, and three labelled buttons, one per person"><br><b>One mail, one household</b> — the subject carries their names, the gift art is a PNG served from <code>/static</code>, and there is one labelled button each (« Voir le lien de Aline », …). Nothing in the mail belongs to anybody outside that mailbox.</td>
+    <td width="50%"><img src="docs/screenshots/20-email-panel.jpg" alt="Draw panel with the mail button, the household copy and the mailbox counter"><br><b>The send is counted in mailboxes</b> — the chip says "8 people · 4 mailbox(es) · 4 email(s)": what you are about to pay for is addresses, not people, and the copy under the button says so in one sentence.</td>
+    <td width="50%"><img src="docs/screenshots/21-email-preview.jpg" alt="The household mail: art, intro, and three labelled buttons, one per person"><br><b>One mail, one household</b> — the subject carries their names, the gift art is a PNG served from <code>/static</code>, and there is one labelled button each ("Open Aline's link", …). Nothing in the mail belongs to anybody outside that mailbox.</td>
   </tr>
 </table>
 
@@ -358,31 +364,32 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 * **One email per mailbox.** `_group_by_address()` bundles participants by the address they gave,
   and every send path (bulk, per-row, auto-on-draw) goes through it, so the rule cannot be forgotten
   in one place while obeyed in another. Twelve cousins at five addresses is five provider calls, and
-  a mail to a family of three carries **three labelled links** — « Voir le lien de Alec », and so on
+  a mail to a family of three carries **three labelled links** — "Open Alec's link", and so on
   — never anyone else's. `deliver_household_email()` stamps `email_sent_at` on the whole group, so
   the roster cannot show two people "mailed" and a third forgotten. Blank and unsendable addresses
   stay a group of one: the report still names the uncle who was skipped.
 * **Two templates, one shell.** `build_email()` (one link) and `build_links_email()` (a household)
   share `_email_shell()`/`_email_assets()`, so the art and the palette cannot drift apart. The
   household copy is its own set of strings (`hello_many`, `body_many_*`, `privacy_many`,
-  `link_label`, …) rather than the singular wording stretched: « ton lien » in a mail that holds
+  `link_label`, …) rather than the singular wording stretched: "your link" in a mail that holds
   three links is a lie, and a template full of `s` conditionals reads worse than a second template.
 * **What a mail contains:** the event name, the participants' names, and their own links — never a
   pairing, never an outsider's name. Names are escaped before they touch the HTML.
   `X-Entity-Ref-ID` is the participant id(s) joined, so repeats thread into one conversation.
 * **The link is `/?t=<uuid>`, built by `participant_link()` and nobody else.** That is the URL the
-  SPA reads and the one the console's « Copier le lien » hands out. The first real send built it
+  SPA reads and the one the console's "Copy link" hands out. The first real send built it
   from the API's path shape instead (`/draw/<uuid>`), and twelve inboxes got
   `{"detail":"Not Found"}` — the API lives under `/api`, so the pretty path was never a route.
   `GET /draw/<uuid>` now 302s to `/?t=<uuid>` (UUID-shaped only, rate-limited, logged as
   `/draw/<token>`), because emails cannot be unsent; the test that would have caught the original
   follows the link out of the mail body and demands `200 text/html`.
-* **The subject leads with the people:** `Ghislaine — ton lien secret · Réveillon chez Gaétan` for
-  one person, `Alec, Gabrielle et Hugo — vos liens · Pige Adultes` for a household. A family shares
+* **The subject leads with the people:** `Ghislaine — your secret link · New Year at Gaétan's` for
+  one person, `Alec, Gabrielle and Hugo — your links · Adult draw` for a household. A family shares
   one inbox, so mails from one sender with one subject are impossible to tell apart in a phone's
   list view — and the event title, being last, is the part Gmail truncates. Past
-  `MAX_SUBJECT_NAMES` (3) the list becomes « A, B, C et 2 autre(s) » rather than pushing the words
-  « vos liens » off the screen.
+  `MAX_SUBJECT_NAMES` (3) the list becomes "A, B, C and 2 other(s)" rather than pushing the
+  words "your links" off the screen. Which language a mail is written in is the draw's
+  `email_language` setting, not a guess: Québec French unless the organizer switches it.
 * **Theme:** the site's palette (pine/gold/ivory) in inline styles, with the snowflake, the big gift
   and the gift strip served from `/static` as `<img>`. **They are PNG, not SVG.** Gmail serves every
   image through its own proxy and that proxy does not serve SVG — Google has said so publicly, and
@@ -414,23 +421,23 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   that cannot be written correctly never rolls back a draw. (Share tags deliberately keep following the
   request's own `Host`: a crawler wants the host it visited, and those URLs are validated against
   injection separately.)
-* **Triggers:** « Envoyer » per row (which sends that row's whole *household*, and answers with
-  `with: [names]` so the console can say what really left), « Envoyer les liens par courriel » for
+* **Triggers:** **Send** per row (which sends that row's whole *household*, and answers with
+  `with: [names]` so the console can say what really left), **Email the links** for
   everyone with an address (per-person report, skipped addresses listed not hidden, plus
   `messages` = how many mails actually left), and an opt-in `auto_email_on_draw` config switch that
   mails *after* the draw commits — a dead Resend can never leave a half-drawn event.
 * **Throttling:** sends are paced by one process-wide gate — a global spacing
   (`EMAIL_SEND_INTERVAL_MS`, default 1200 ms, since Resend's free tier 429s above ~1 req/s) and
   a longer per-address spacing (`EMAIL_SAME_ADDRESS_GAP_S`, default 4 s). Since one mailbox gets one
-  mail, the per-address gap now covers the case that is left: the organizer clicking « Envoyer » on
+  mail, the per-address gap now covers the case that is left: the organizer clicking **Send** on
   a relative in the middle of a bulk run, or re-sending after fixing an address. The rate limit
   counts *sends*, not people — billing twelve relatives at five mailboxes as twelve would throttle
   the wrong thing. A 429 from the provider gets exactly one retry after `EMAIL_RETRY_AFTER_S`
   (default 3 s) — never a retry loop.
 * **Preview:** `POST /api/admin/emails/preview` renders the template with sample names (`Aline`,
   `Gabrielle`, `Hugo`) and a sample all-zeros link, so the modal is screenshot-able and cannot leak
-  the roster. `links: 1..3` chooses which template to show; the console has two buttons, « Aperçu du
-  courriel » and « Aperçu à plusieurs liens », because a family mail is only believable once you
+  the roster. `links: 1..3` chooses which template to show; the console has two buttons, **Email
+  preview** and **Multi-link preview**, because a family mail is only believable once you
   have seen it. The preview resolves its origin through `mail_base_url()`, the same function the send
   uses: it used to read the request's `Host`, so an organizer on the server itself saw `127.0.0.1`
   links in the modal while the real mail would have carried the configured hostname — a preview that
@@ -459,8 +466,8 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/07-participant-pending.jpg" alt="Participant page before the draw"><br><b>Before the draw</b> — « pas encore réglé »; it polls, and offers a manual check.</td>
-    <td width="50%"><img src="docs/screenshots/10-reveal-tease.jpg" alt="The closed gift and the button that opens it"><br><b>The box is shut</b> — the pairing is already there, and the page says so without saying what it is: « Ton tirage t’attend. »</td>
+    <td width="50%"><img src="docs/screenshots/07-participant-pending.jpg" alt="Participant page before the draw"><br><b>Before the draw</b> — "the draw hasn't been finalized yet"; it polls, and offers a manual check.</td>
+    <td width="50%"><img src="docs/screenshots/10-reveal-tease.jpg" alt="The closed gift and the button that opens it"><br><b>The box is shut</b> — the pairing is already there, and the page says so without saying what it is: "Your draw is ready. Open the gift."</td>
   </tr>
   <tr>
     <td><img src="docs/screenshots/11-reveal-mid.jpg" alt="Gift mid-reveal, lid off, snow falling"><br><b>…and something inside is trying to come out</b> — one click, the lid jumps, the snow falls, then the names. The reveal is a moment, not a page refresh.</td>
@@ -474,24 +481,63 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 
 UX details worth knowing:
 
-* **The French is ordinary Quebec French** (`fr-CA`), not the caricature of it: « Règles et
-  quotas », « Les personnes que tu vas gâter », « Lancer le tirage », « Fermer la session »,
-  « Ouvre ton lien », dates like « il y a 5 minutes ». The words people actually use — *piger*,
-  *gâter*, *liste d’idées* — and no performed joual (no « pis », no « toé », no « frette »).
-  `tests/test_i18n.py` keeps the two languages on the same keys and the same `{placeholders}`,
-  refuses the caricature forms, and refuses two different controls that would share one label.
-  Amounts are CAD (« 25 $ par personne, taxes incluses »); the EN switch says `$25 CAD`.
+* **Both locales everywhere.** Every label, notice and error the organizer or the participant sees
+  exists in Québec French and English — [Languages](#languages-french-and-english) below.
+  Money is Canadian dollars in both, formatted per locale (`25 $` in French, `$25 CAD` in English).
 * **Nothing destructive without a confirm**, and failures keep their message on screen with a
-  translated explanation (« Mot de passe pas correct. », « Trop de demandes. Réessa dans 300
-  seconde(s). ») instead of a raw `detail` string.
+  translated explanation ("Incorrect password.", "Too many requests. Try again in 300
+  second(s).") instead of a raw `detail` string.
 * **Field limits come from the server** (`GET /api/limits`) and are applied as `maxlength` with
   counters, so the frontend can never drift from the API's Pydantic caps.
 * **Reveal is sticky per link** (`sessionStorage`): a refresh does not replay the surprise.
 
+### Languages: French and English
+
+Two complete locales ship in the box, and neither one is an after-the-fact translation: **Québec
+French (`fr-CA`) is the default** — the family this was built for reads French — and **English** is
+one click in the top bar. There are two language switches on purpose, because they serve different
+people:
+
+| What | Which switch | Default |
+|---|---|---|
+| Console and participant page | the FR / EN buttons in the top bar, remembered per browser (`localStorage: ge_lang`) | `fr` |
+| The mail — subject, greeting, per-person button labels, privacy line | Panel 1: **Email language** (`config.email_language`) | `fr` |
+
+So an organizer who works in English can still send the family a French mail, which is usually what a
+Québec family wants.
+
+What makes "two locales" a fact rather than a claim:
+
+* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **193 keys each** — and
+  `tests/test_i18n.py` fails on a key that exists in one and not the other. A missing key would render
+  its raw name on screen, which is exactly how a half-translated UI gets born.
+* The same `{placeholder}` names on both sides of every key, asserted key by key, so a sentence built
+  from quotas and gift counts cannot break in one language only.
+* The mail has its own parallel dictionary (`EMAIL_STRINGS` in `main.py`), so the subject, the greeting,
+  the labelled buttons and the privacy note are each written twice instead of machine-stitched from the
+  singular copy.
+* Dates, the 24-hour clock and the relative "2 hours ago" chips go through `locale()`, which answers
+  `fr-CA` or `en-CA`, and `<html lang>` is set to the same value.
+* The copy rule is tested, not trusted. `tests/test_i18n.py` carries the list of French forms that are
+  **banned** — the phonetic spellings and spoken contractions that turn Québécois copy into a
+  caricature — each with the reason it is banned, so a contributor who does not read French can still
+  see why a string was refused. `PLAN.md` records the mirror image: what stays deliberately Quebec.
+* Labels are collision-checked: two different controls may not answer to one label. That guard paid for
+  itself during a rename, when the sign-out button briefly carried the draw button's label and a capture
+  script clicked the wrong control.
+* One honest gap: the Open Graph share title is fixed French in both locales (`SHARE_TITLE` in
+  `main.py`). The card is generic — no name, no event title, no token — so this is cosmetic, not a
+  leak.
+
+And how the copy sounds, since it is the part a family actually reads: the French is ordinary Québec
+French rather than the stage version — the words people really use for the game (*piger*, *gâter*) and
+the informal `tu` address, with no performed joual. The English is plain rather than literal: the reveal
+heading is "The gifts you give", not a word-for-word transfer of the French one.
+
 ### Sharing the link: what the preview shows
 
 The organizer hands out links, so the link preview is the front door. Every page carries Open
-Graph + Twitter card tags — title « Échange de cadeaux · Père Noël secret », the description, and
+Graph + Twitter card tags — the gift-card title, the description, and
 `static/og-image.png` (1200×630 PNG), plus `favicon.svg`, `apple-touch-icon.png`, `icon-512.png`
 and a `site.webmanifest` so "add to home screen" looks intentional on a phone.
 
@@ -594,7 +640,7 @@ GE_BASE=http://127.0.0.1:8085 ADMIN_PASSWORD=<pw> python3 tools/check_organizer_
 
 * Names, wishlists and events in the screenshots are **fictional demo data** from
   `tools/seed_demo.py`; `data/` is git-ignored and nothing about a real family is in this repo.
-  Two of the demo households are deliberately both surnamed Tremblay — that is what the « Groupe »
+  Two of the demo households are deliberately both surnamed Tremblay — that is what the Group
   column is for.
 * Snowfall, the reveal and the burst are CSS/SVG only, disabled under `prefers-reduced-motion`.
 * Icons: one inline SVG sprite — a bespoke crystalline snowflake plus Tabler Icons (MIT), see

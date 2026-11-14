@@ -1072,3 +1072,33 @@ the first place. It now goes through `mail_base_url()` and a test pins the two t
 shows exists, every file in `docs/` is shown by a README row (that is how `18`/`19` went unnoticed:
 the README cannot reference what it does not know about), and no raw PNG capture is committed. The
 gallery is 21 stills + 2 GIFs. 186 tests.
+
+## The README had drifted into two languages (addendum, 2026-11-13)
+
+Somewhere along the mail work the README stopped being one language. Captions and bullets quoted the
+French UI in the middle of English sentences — 46 guillemets, a bilingual H1 — and a reader who does
+not read French could not follow the feature description, while a reader who does could not tell
+whether the app is French-only. None of those quotations were evidence of anything: the sentence
+around them already said what the feature does, and the French was decoration inside it.
+
+**The rule now: the README is English.** Where it names a control it names the **English** label
+(`Generate & lock draw`, `Send`, `Email the links`, `Multi-link preview`, `Pick a draw`, `Not drawn
+yet`, `Open Alec's link`), which is verifiable against `I18N.en` rather than being a paraphrase. The
+**screenshots stay French**, because French is the locale the app boots in — so the README says that
+out loud above the gallery instead of leaving the reader to reconcile a French screen with English
+captions.
+
+**What replaced the deleted French** is a `Languages: French and English` section, i.e. the language
+support moved from being implied by stray quotations to being a claim with its receipts: `fr-CA` is the
+default and English is one click away (`localStorage: ge_lang`); the mail has its **own** language
+switch (`config.email_language`, Panel 1), so an organizer who works in English still sends a Québec
+family a French mail; 193 keys per dictionary with identical `{placeholders}`; `EMAIL_STRINGS` as the
+mail's parallel dictionary; `locale()` answering `fr-CA`/`en-CA` for dates, the 24-hour clock and the
+relative chips, and setting `<html lang>`; the banned-French-forms list with the reason for each; the
+label-collision guard. Plus one gap stated instead of hidden: `SHARE_TITLE` is fixed French in both
+locales, which is cosmetic because the card carries no name, no event title and no token.
+
+**Deliberately not touched:** the French quotations in `PLAN.md`. This file is the record of copy
+decisions — what a string used to say, what it says now, why a form is banned — so quoting the French
+*is* the content here, and paraphrasing it would cost the log its evidence. Code, tests and strings
+unchanged: 186 tests, all the same keys.
