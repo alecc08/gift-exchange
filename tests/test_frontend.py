@@ -21,7 +21,9 @@ COMPONENT_METHODS = ("formatDate", "relative", "locale", "t", "toast", "drawsOf"
                      # The participant page's note composer: `mine(a)` in markup is fine, `mine(a)` in
                      # JavaScript is a ReferenceError, and Alpine's absence of an error message made
                      # that expensive once.
-                     "mine", "planOpen", "startPlan", "closePlan", "savePlan")
+                     "mine", "planOpen", "startPlan", "closePlan", "savePlan",
+                      # The reminder send and the wishlist counters behind it.
+                      "hasIdeas", "sendReminders")
 CALL_RE = re.compile(r"([\w$]*)\s*\(")
 API_CALL_RE = re.compile(r"this\.api\((`[^`]*`|'[^']*')")
 # Not draw-scoped by design: the list of draws, and the two calls that happen before a draw exists.

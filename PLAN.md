@@ -1406,3 +1406,60 @@ watch it disappear from the other screen, keep the sentence off the person it is
 revealed card at 360, 390, 768, 1024 and 1440 px. The overflow check learned a second rule while doing
 that: an element that a parent clips cannot hang off the screen, which is what the family card's corner
 flakes have always been doing behind `overflow-hidden`. **248 tests.**
+
+## Who has not written their ideas, and the reminder (addendum, 2026-11-14)
+
+**The organizer's question is not "who opened their link", it is "who is going to get a bad gift".**
+The console already tracked opened links and sent links; it never said that eleven of twenty relatives
+have written nothing about themselves. That is the fact worth a column, and the action worth a button.
+
+**The rule lives once.** A wishlist of spaces counts as empty: `_missing_ideas` in `main.py`, and
+`hasIdeas(p)` in the SPA, same trim, because the marker, the counter and the recipient list have to
+agree or the button lies about its own count. Whitespace-only is exactly the relative who typed a space
+and stopped — the person the reminder is for.
+
+**The marker is for the absence, not the presence.** A blank cell is invisible in a twenty-row table.
+Every row with nothing written carries a gold *Aucune idée écrite* chip, and one chip above the table
+counts them (`Idées écrites : 14 sur 21`) — counted across the whole draw even while the table is
+filtered, because the number is about the event, not about what happens to be on screen.
+
+**A reminder is a different email, not a re-send.** The link invite promises something ("ton lien secret
+est prêt"); the reminder asks something ("ta liste d'idées est vide"). Two different asks in one template
+set would produce copy that reads like a bug, so the mail's copy is chosen by a `state` —
+`pending` / `ready` / `reminder` — with one key table (`EMAIL_KEYS`) instead of six `if ready else`
+ternaries. The reminder deliberately has **no before/after-draw pair**: the ask does not depend on the
+draw, and every extra paragraph is another thing a parent's inbox has to sort.
+
+**Same send machinery, same privacy.** `POST /api/admin/emails/reminder` filters the roster and hands
+the survivors to `_send_rows_or_422` → `_group_by_address` → `deliver_household_email`. So: one mail per
+mailbox, and a mail carries the links of **only** the people it names — nudging the Bernier parents
+about two of them does not re-mail the third person's credential. A test writes a real coordination
+note and asserts neither the sentence nor any note handle appears in a reminder: the mail is sent while
+the draw is locked, which is precisely when the server knows everything about who-picks-who.
+
+**The empty case has its own sentence.** The bulk send's 422 is "no email address"; on a roster where
+everybody wrote their ideas that answer sends the organizer hunting for a field that is fine, so the
+reminder refuses with `Everyone has written their gift ideas`. Small, but wrong diagnoses are how a
+family stops trusting the console.
+
+**It spends the same budget.** A reminder is a mail, so it burns the per-minute email quota like any
+other send — one counter, not one per button. A test shrinks the quota and shows the reminder's second
+click and the bulk send both getting refused by it.
+
+**One timestamp, stated.** `email_sent_at` means "the last mail about this person's link left at…",
+which includes a reminder; the roster's *Lien envoyé* chip moves. A second column for reminders would
+be a migration and a second thing to explain, and nobody has asked how many nudges went out; the audit
+log's `email_reminders` line has that if it ever matters.
+
+**A sharp edge found on the way.** `email_enabled()` used to mean "there is an API key". A deployment
+with a key and no `RESEND_FROM` then lit up every button and each row of the report came back as "the
+provider refused the send" — a configuration problem dressed up as somebody else's mail server. It now
+requires both halves, so the panel says "not configured on this server", which is the sentence whose
+fix the organizer actually controls.
+
+**258 tests**, plus the browser pass now walks the counters (marker on the right rows, count following a
+person just added), refuses the reminder button on a server that cannot send, checks it in English, and
+holds the two email rows at 390 and 360 px. A separate local run pointed `RESEND_BASE_URL` at a stub on
+127.0.0.1 and clicked the real button: confirm dialog with the real numbers, one envelope to the shared
+mailbox carrying exactly the two relatives being reminded, the address-less one named as not sent, and
+the counters moving when a relative finally wrote their ideas.

@@ -213,7 +213,8 @@ def test_the_frontend_still_understands_the_servers_own_error_text():
               main.EMAIL_NOT_CONFIGURED, main.EMAIL_NO_ADDRESS, main.EMAIL_SEND_FAILED,
               main.EMAIL_BAD_BASE_URL,
               main.DRAW_NOT_FOUND, main.DRAW_ID_REQUIRED, main.DRAW_NONE,
-              main.NOTE_TOO_EARLY, main.NOTE_NOT_A_PICK)
+              main.NOTE_TOO_EARLY, main.NOTE_NOT_A_PICK,
+              main.NO_MISSING_IDEAS)
     dead = [fragment for fragment in fragments if not any(fragment in text for text in server)]
     assert not dead, f"matchers that can never fire again: {dead}"
     untranslated = [text for text in server if not any(fragment in text for fragment in fragments)]

@@ -45,6 +45,9 @@ def client(tmp_path, monkeypatch):
     main.LIMITER.reset("login", "testclient")
     main.LIMITER.reset("api", "testclient")
     main.LIMITER.reset("draw", "testclient")
+    # Sends have their own budget, and several tests here shrink it on purpose; a leftover count from
+    # the previous test would make one of them answer 429 for the wrong reason.
+    main.LIMITER.reset("email", "testclient")
     main.init_db()
     with TestClient(main.app) as test_client:
         yield test_client

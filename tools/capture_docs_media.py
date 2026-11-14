@@ -177,6 +177,58 @@ def enter_console(page, shoot_list=True):
     page.wait_for_selector("text=Copier tous les liens")
 
 
+def seed_missing_ideas():
+    """Blank one relative's own wishlist, so the reminder stills have something to point at.
+
+    The console cannot write or erase ideas for a relative — that is the family's own route — so this
+    goes through that person's link, exactly as they would. `Marc` is chosen on purpose: he is not the
+    participant the reveal and wishlist stills follow, and his household's mail still has his wife's
+    ideas in it. The demo roster is re-seeded at the end of the run, so the instance is left as the
+    other captions describe it.
+    """
+    auth = bearer_headers()
+    people = admin_api("/api/admin/state", auth)["participants"]
+    target = next((person for person in people if person["name"] == "Marc"), people[0])
+    admin_api(f"/api/draw/{target['token']}/wishlist", {}, "PUT", {"wishlist": ""})
+    print(f"  wishlist: {target['name']} now has nothing written about himself")
+
+
+def capture_wishlist_status(page):
+    """The wishlists half of the roster: the counter with a marked row, then the two asks in the block.
+
+    Two stills rather than one tall one: the counter sits above the table and the reminder button two
+    panels further down, and a 2 000 px strip is not something a reader can look at.
+
+    The first still filters to one household on purpose. The counter counts the whole draw either way
+    (which is worth showing), but the *marked* row is five rows down in an unfiltered table, and a
+    still of a number with nothing to point at proves nothing. Scroll positions are measured rather
+    than guessed, the same reason as the landing-page stills: `scroll_into_view_if_needed` is happy
+    with a partly visible element and the frame repeats the previous still.
+    """
+    page.get_by_role("button", name=re.compile(r"^Tremblay \(chez Réjean\)")).first.click()
+    page.wait_for_timeout(500)
+    counter = page.evaluate("""() => {
+      const chip = [...document.querySelectorAll('.chip')].find(el => el.innerText.includes('Idées écrites'));
+      return chip ? Math.round(chip.getBoundingClientRect().top + window.scrollY - 24) : 0;
+    }""")
+    assert counter > 0, "the wishlist counter is not on the page: the roster changed shape"
+    page.evaluate("y => window.scrollTo(0, y)", counter)
+    time.sleep(0.6)
+    shot(page, "25-wishlist-counters.png")
+    page.get_by_role("button", name="Montre tout le monde").click()
+    time.sleep(0.4)
+
+    panel = page.evaluate("""() => {
+      const send = [...document.querySelectorAll('button')].find(b => b.innerText.includes('Envoyer les liens'));
+      const block = send && send.closest('div.rounded-2xl');
+      return block ? Math.round(block.getBoundingClientRect().top + window.scrollY - 140) : 0;
+    }""")
+    assert panel > 0, "the email block is not on the page: the console changed shape"
+    page.evaluate("y => window.scrollTo(0, y)", panel)
+    time.sleep(0.6)
+    shot(page, "26-email-reminders.png")
+
+
 def capture_email_console(page):
     """The mail panel and the mail itself — one email per mailbox, art included.
 
@@ -270,6 +322,8 @@ def capture_admin_page(page):
     shot(page, "05-group-filter.png")
     page.get_by_role("button", name="Montre tout le monde").click()
     time.sleep(0.4)
+
+    capture_wishlist_status(page)     # 25-wishlist-counters.png + 26-email-reminders.png
 
     # the same roster at phone width: below 900 px each person becomes a card, which is the whole
     # answer to "the console hides the excess on a phone". Viewport-sized, not full page: the console
@@ -383,6 +437,7 @@ def main():
     # groups and wishlists, so the run has to start from them and not from whatever the instance
     # happens to hold. (The same seed runs again at the end, to leave the instance demo-ready.)
     seed_demo.seed(auth)
+    seed_missing_ideas()              # one relative with nothing written: what 25/26 document
     snapshot = admin_api("/api/admin/state", auth)
     if snapshot["config"]["is_locked"]:
         admin_api("/api/admin/reset", auth, "POST")      # the open-state shots need an open draw

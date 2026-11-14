@@ -708,6 +708,16 @@
                     x-text="t('roster.filterOff')"></button>
           </div>
 
+          <!-- Wishlist progress, counted here rather than left to be eyeballed: this is the number
+               that decides whether a reminder is worth sending, and the reminder button below quotes
+               the same two getters. A row of gold chips is a lot of scrolling at twenty people. -->
+          <div class="flex flex-wrap items-center gap-2 mt-3">
+            <span class="chip" :class="noIdeasCount ? 'bg-gold-100 text-gold-600' : 'bg-pine-100 text-pine-700'"
+                  x-text="t('roster.ideasChip', { done: ideasWrittenCount, total: participants.length })"></span>
+            <span x-show="noIdeasCount" x-cloak class="text-xs text-pine-600/75"
+                  x-text="t('roster.ideasHint')"></span>
+          </div>
+
           <div class="mt-5 overflow-x-auto">
             <table id="roster-table" class="w-full text-sm">
               <thead>
@@ -729,8 +739,13 @@
                   <tr class="part hover:bg-pine-50/40 transition">
                     <td :data-label="t('roster.name')">
                       <p class="font-semibold text-pine-800" x-text="p.name"></p>
-                      <p x-show="p.wishlist" x-cloak class="text-xs text-pine-600/75 mt-0.5 max-w-[22rem] truncate"
+                      <p x-show="hasIdeas(p)" x-cloak class="text-xs text-pine-600/75 mt-0.5 max-w-[22rem] truncate"
                          :title="p.wishlist" x-text="t('roster.wishlistIs') + ' ' + p.wishlist"></p>
+                      <!-- The absence is the useful half: the organizer scans this table to find the
+                           people nobody knows what to buy. A blank cell is invisible; this is a row
+                           they can act on. -->
+                      <span x-show="!hasIdeas(p)" x-cloak class="chip bg-gold-100 text-gold-600 mt-1"
+                            x-text="t('roster.noIdeas')"></span>
                     </td>
                     <td :data-label="t('roster.role')">
                       <span class="chip" :class="p.role === 'ADULT' ? 'bg-pine-50 text-pine-600' : 'bg-gold-100 text-gold-600'"
@@ -833,7 +848,7 @@
 
           <div class="mt-6 rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3.5">
             <div class="flex flex-wrap items-center gap-3">
-              <button @click="sendAllEmails()" :disabled="busy || sendingAll || !emailEnabled"
+              <button @click="sendAllEmails()" :disabled="busy || sendingAll || sendingReminders || !emailEnabled"
                       class="btn btn-primary px-5 py-2.5 text-sm">
                 <svg class="w-4 h-4"><use href="#i-mail"/></svg>
                 <span x-text="sendingAll ? t('roster.sending') : t('roster.send_all')"></span>
@@ -845,6 +860,27 @@
                     x-text="t('roster.mailboxes', { people: emailReadyCount, mailboxes: mailboxCount })"></span>
               <span class="chip" :class="mailedCount ? 'bg-pine-100 text-pine-700' : 'bg-black/5 text-pine-600/70'"
                     x-text="t('roster.mailed') + ' · ' + mailedCount + '/' + emailReadyCount"></span>
+            </div>
+
+            <!-- The second ask. "Send the links" and "write down your ideas" are different emails with
+                 different words, so they are different buttons; the grouping, the rate budget and the
+                 per-mailbox rule are shared with the send above, which is why this row quotes the same
+                 mailbox arithmetic. -->
+            <div class="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-pine-500/10">
+              <button @click="sendReminders()"
+                      :disabled="busy || sendingAll || sendingReminders || !emailEnabled || noIdeasCount === 0"
+                      class="btn btn-quiet px-5 py-2.5 text-sm">
+                <svg class="w-4 h-4"><use href="#i-mail"/></svg>
+                <span x-text="sendingReminders ? t('roster.reminding') : t('roster.remind', { n: noIdeasCount })"></span>
+              </button>
+              <button @click="previewEmail(1, 'reminder')" :disabled="busy"
+                      class="btn btn-quiet px-3 py-1.5 text-xs" x-text="t('rules.preview')"></button>
+              <span class="text-xs text-pine-600/75" x-text="t('roster.remind_help')"></span>
+              <span x-show="noIdeasCount" x-cloak class="chip"
+                    :class="reminderMailboxes ? 'bg-pine-100 text-pine-700' : 'bg-gold-100 text-gold-600'"
+                    x-text="reminderMailboxes
+                            ? t('roster.mailboxes', { people: noIdeasCount, mailboxes: reminderMailboxes })
+                            : t('roster.remind_noaddress', { n: noIdeasCount })"></span>
             </div>
             <p x-show="!emailEnabled" x-cloak class="text-xs text-gold-600 mt-2" x-text="t('rules.email_off')"></p>
           </div>
@@ -1389,6 +1425,17 @@ const I18N = {
     'roster.send_all_help': 'Un courriel par boîte : douze cousins à cinq adresses, ça fait cinq courriels. Chaque lien reste privé — les personnes d’une même boîte reçoivent leurs liens à eux, réunis dans un seul message.',
     'roster.bulk_done': '{sent} personne(s) par mail, en {messages} courriel(s).',
     'roster.mailboxes': '{people} personne(s) · {mailboxes} boîte(s) · {mailboxes} courriel(s)',
+    // Wishlists: what the organizer looks for when the gifts have to be bought in a hurry.
+    'roster.noIdeas': 'Aucune idée écrite',
+    'roster.ideasChip': 'Idées écrites : {done} sur {total}',
+    'roster.ideasHint': 'Le bouton « Relancer » est plus bas, dans le bloc des courriels.',
+    'roster.remind': 'Relancer les {n} sans idées',
+    'roster.reminding': 'Envoi des rappels…',
+    'roster.remind_help': 'Un rappel demande deux ou trois idées pour soi-même. Un courriel par boîte, avec leur lien à elles.',
+    'roster.remind_confirm': '{people} personne(s) n’ont rien écrit pour elles-mêmes : ça fait {mailboxes} courriel(s). Personne ne reçoit le lien d’une autre.',
+    'roster.remind_done': 'Rappel envoyé à {people} personne(s), en {messages} courriel(s).',
+    'roster.remind_noaddress': '{n} personne(s) sans idées et sans adresse',
+    'roster.remind_none': 'Tout le monde a déjà écrit ses idées.',
     'rules.preview_many': 'Aperçu à plusieurs liens',
     'roster.bulk_failed': 'Pas envoyé à : {names}',
     'roster.add': 'Ajouter',
@@ -1644,6 +1691,16 @@ const I18N = {
     'roster.send_all_help': 'One email per mailbox: twelve cousins at five addresses is five emails. Each link stays private — people sharing a mailbox get their own links together in one message.',
     'roster.bulk_done': '{sent} person(s) emailed, in {messages} email(s).',
     'roster.mailboxes': '{people} people · {mailboxes} mailbox(es) · {mailboxes} email(s)',
+    'roster.noIdeas': 'No ideas written',
+    'roster.ideasChip': 'Wishlists filled: {done} of {total}',
+    'roster.ideasHint': 'The “Remind” button is below, in the email block.',
+    'roster.remind': 'Remind the {n} with no ideas',
+    'roster.reminding': 'Sending reminders…',
+    'roster.remind_help': 'A reminder asks for two or three ideas about themselves. One email per mailbox, carrying only their own links.',
+    'roster.remind_confirm': '{people} person(s) have written nothing about themselves: that is {mailboxes} email(s). Nobody receives somebody else’s link.',
+    'roster.remind_done': 'Reminder sent to {people} person(s), in {messages} email(s).',
+    'roster.remind_noaddress': '{n} person(s) with no ideas and no address',
+    'roster.remind_none': 'Everyone has already written their ideas.',
     'rules.preview_many': 'Multi-link preview',
     'roster.bulk_failed': 'Not sent to: {names}',
     'roster.add': 'Add',
@@ -1788,7 +1845,8 @@ function giftExchange() {
     copiedId: null, copiedAll: false,
     /* The setTimeout handles for the "copied" flags, declared so they can be cancelled. */
     _timers: {},
-    emailEnabled: false, emailBusyId: null, sendingAll: false, previewOpen: false, previewBody: null,
+    emailEnabled: false, emailBusyId: null, sendingAll: false, sendingReminders: false,
+    previewOpen: false, previewBody: null,
 
     participant: null, data: { status: '', assignments: [] }, pError: false,
     revealed: false, burstOn: false, wishlistDraft: '', savedWishlist: '', savedAt: null,
@@ -1863,6 +1921,21 @@ function giftExchange() {
     get mailboxCount() {
       return new Set(this.participants
         .filter(p => this.looksLikeEmail(p.email))
+        .map(p => this.addressKey(p))).size;
+    },
+    /* ---------- who has written their own ideas ----------
+       The same rule the server applies when it picks the reminder recipients (`_missing_ideas` in
+       main.py): a wishlist of nothing but spaces is not something a gift giver can buy. Both numbers
+       are shown in the roster and quoted by the reminder button, so the two must not drift. */
+    hasIdeas(person) { return !!((person.wishlist || '').trim()); },
+    get ideasWrittenCount() { return this.participants.filter(p => this.hasIdeas(p)).length; },
+    get noIdeasCount() { return this.participants.length - this.ideasWrittenCount; },
+    /* Mailboxes the reminder would actually reach: the people with nothing written, grouped by the
+       address the server would accept. Zero here means the button would report every row as skipped,
+       so the chip says so in plain words instead of letting a click look like a success. */
+    get reminderMailboxes() {
+      return new Set(this.participants
+        .filter(p => !this.hasIdeas(p) && this.looksLikeEmail(p.email))
         .map(p => this.addressKey(p))).size;
     },
     looksLikeEmail(value) {
@@ -2105,6 +2178,9 @@ function giftExchange() {
       if (detail.includes('cannot be satisfied')) return this.t('err.unsolvable');
       if (detail.includes('empty target group')) return this.t('err.emptyTarget');
       if (detail.includes('no email address')) return this.t('err.noAddress');
+      // The reminder's "nothing to do": not a missing address, but a roster that has already written
+      // its ideas. The organizer should be told which one it was.
+      if (detail.includes('written their gift ideas')) return this.t('roster.remind_none');
       if (detail.includes('refused the send')) return this.t('err.sendFailed');
       if (detail.includes('locked')) return this.t('err.locked');
       if (detail.includes('no participants')) return this.t('err.noParticipants');
@@ -2376,6 +2452,26 @@ function giftExchange() {
       if (failed.length) this.toast(this.t('roster.bulk_failed', { names: failed.join(', ') }), 'warn');
       await this.loadState();
     },
+    async sendReminders() {
+      // Confirmed with real numbers, because this is the send that writes to relatives who already
+      // got their link: the organizer should see who and how many before the click, not after.
+      if (!window.confirm(this.t('roster.remind_confirm', {
+        people: this.noIdeasCount, mailboxes: this.reminderMailboxes }))) return;
+      this.sendingReminders = true;
+      this.clearAdminError();
+      const response = await this.api(this.drawPath('/api/admin/emails/reminder'),
+        { method: 'POST', body: '{}' }, true);
+      this.sendingReminders = false;
+      if (!response.ok) { this.showAdminError(response); return; }
+      // `sent` and not `asked`: the roster may hold people with no address at all, and a toast that
+      // claims they were reminded would be a lie about mail that never left. The skipped rows are
+      // named in the warning right after.
+      this.toast(this.t('roster.remind_done', { people: response.body.sent,
+                                               messages: response.body.messages }));
+      const skipped = (response.body.results || []).filter(r => !r.ok).map(r => r.name);
+      if (skipped.length) this.toast(this.t('roster.bulk_failed', { names: skipped.join(', ') }), 'warn');
+      await this.loadState();
+    },
     /* The same grouping the server applies when it bundles a household into one mail
        (`_group_by_address` in main.py): compare the trimmed, lowercased address. */
     addressKey(person) {
@@ -2392,12 +2488,15 @@ function giftExchange() {
       const shared = this.emailHousehold(person).length;
       return shared > 1 ? this.t('roster.sendSharedHelp', { n: shared }) : this.t('roster.sendHelp');
     },
-    async previewEmail(links = 1) {
+    async previewEmail(links = 1, state = null) {
+      // `state` is the template to show: null means "whatever this draw really is" (an invite before
+      // the draw, a reveal after it); the reminder button passes 'reminder' so the organizer can read
+      // the words before they go out to seven relatives.
       this.clearAdminError();
       const response = await this.api(this.drawPath('/api/admin/emails/preview'), {
         method: 'POST',
         body: JSON.stringify({ language: this.cfg.email_language,
-                               state: this.locked ? 'ready' : 'pending',
+                               state: state || (this.locked ? 'ready' : 'pending'),
                                links: links }),
       }, true);
       if (!response.ok) { this.showAdminError(response); return; }

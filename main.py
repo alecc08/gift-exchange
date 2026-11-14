@@ -102,6 +102,9 @@ NOTE_NOT_A_PICK = "That note handle is not one of your picks"
 TOO_LARGE = "Request body too large"
 EMAIL_NOT_CONFIGURED = "Email sending is not configured on this server"
 EMAIL_NO_ADDRESS = "This participant has no email address"
+# The reminder's own "nothing to do": EMAIL_NO_ADDRESS would send the organizer off looking for a
+# missing address when what actually happened is that the whole roster already wrote their ideas.
+NO_MISSING_IDEAS = "Everyone has written their gift ideas"
 EMAIL_SEND_FAILED = "The email provider refused the send"
 # A mail whose links point at 127.0.0.1 is worse than no mail: it looks delivered, and every link in
 # it is dead for the person holding it. Seen for real — an admin call made from inside the container
@@ -170,7 +173,14 @@ def resend_api_key() -> str:
 
 
 def email_enabled() -> bool:
-    return bool(resend_api_key())
+    """Can this server mail anybody?
+
+    Both halves are required. A key with no verified sender address is a deployment that will refuse
+    every send, and the organizer should be told that up front: the panel says "not configured on this
+    server" (the fix is `RESEND_FROM`) instead of lighting up buttons whose every row comes back as
+    "the provider refused the send", which reads like somebody else's problem.
+    """
+    return bool(resend_api_key() and resend_from())
 
 
 def resend_from() -> str:
@@ -276,15 +286,15 @@ def _skip_rows(people: list[dict[str, Any]], reason: str) -> list[dict[str, Any]
 
 
 def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], event_title: str,
-                            language: str, base_url: str, ready: bool) -> list[dict[str, Any]]:
+                            language: str, base_url: str, state: str) -> list[dict[str, Any]]:
     """Send one email covering everyone at one address, and stamp every one of them.
 
     Returns a row per participant, because that is how the roster is read: a household of three is
     three rows, and the caller counts `messages` to know that only one mail left.
 
-    `ready` (has this draw been drawn?) is an argument, not a re-read of a settings row: with
-    several draws on one server there is no single row to read, and the caller knows which draw it
-    is mailing.
+    `state` (pending / ready / reminder) chooses the copy; it is an argument, not a re-read of a
+    settings row: with several draws on one server there is no single row to read, and the caller
+    knows which draw it is mailing.
 
     Never raises: a batch of twelve must not die on the fourth address.
     """
@@ -304,7 +314,7 @@ def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], eve
     _throttle_before_send(address.lower())
     links = [{"name": person["name"], "link": participant_link(base_url, person["token"])}
              for person in people]
-    content = build_links_email(links, event_title, language, ready, assets_base=base_url)
+    content = build_links_email(links, event_title, language, state, assets_base=base_url)
     ids = [person["id"] for person in people]
     try:
         message_id = send_email(to=address, subject=content["subject"], html_body=content["html"],
@@ -1327,6 +1337,19 @@ EMAIL_STRINGS = {
                         "des personnes qu’ils nomment.",
         "subject_many": "{names} — vos liens · {event}",
         "subject_many_pending": "{names} — vos liens pour l’échange de cadeaux · {event}",
+        # The reminder: same link, same layout, one different question — "you have written nothing
+        # about yourself". There is no before/after-draw pair here on purpose: the ask is the same in
+        # both states, and one more mail in a parent's inbox has to be worth the write.
+        "title_reminder": "Ta liste d’idées est vide",
+        "body_reminder": ("Tu n’as encore rien écrit dans ta liste d’idées. Ouvre ton lien et ajoute "
+                          "deux ou trois mots — un livre, un jeu, une sortie. Ça ne prend pas une "
+                          "minute, et la personne qui te gâte sera bien contente de les lire."),
+        "subject_reminder": "{name} — ta liste d’idées · {event}",
+        "title_many_reminder": "Des listes d’idées sont vides",
+        "body_many_reminder": ("Vous êtes {n} ici à n’avoir encore rien écrit dans votre liste "
+                               "d’idées. Ouvrez vos liens et ajoutez deux ou trois mots chacun : les "
+                               "personnes qui vous gâtent seront bien contentes de les lire."),
+        "subject_many_reminder": "{names} — vos listes d’idées · {event}",
         # The hero art is not decoration for a screen reader: it is the whole idea of the mail
         # (le résultat est dans la boîte, et toi seul peux l’ouvrir), so it gets described.
         "gift_alt": "Un cadeau bien fermé : le couvercle a sauté et quelqu’un à l’intérieur "
@@ -1366,8 +1389,41 @@ EMAIL_STRINGS = {
                         "the people named on them.",
         "subject_many": "{names} — your links · {event}",
         "subject_many_pending": "{names} — your links for the gift exchange · {event}",
+        "title_reminder": "Your wishlist is empty",
+        "body_reminder": ("You have not written anything on your wishlist yet. Open your link and add "
+                          "two or three words — a book, a game, an outing. It takes a minute, and "
+                          "whoever is shopping for you will be glad to read them."),
+        "subject_reminder": "{name} — your wishlist · {event}",
+        "title_many_reminder": "Some wishlists are empty",
+        "body_many_reminder": ("There are {n} of you at this address with nothing written on their "
+                               "wishlist yet. Open your links and add two or three words each — the "
+                               "people shopping for you will be glad to read them."),
+        "subject_many_reminder": "{names} — your wishlists · {event}",
         "gift_alt": "A tightly closed gift: the lid has popped off and somebody inside is "
                     "pushing to get out.",
+    },
+}
+
+# Which strings each kind of mail reads. The three states are the three things this app can put in an
+# envelope: an invite before the draw, the same invite after it (different promise — the gift is there
+# now), and a reminder that the person's own ideas are missing. Keys rather than `if ready else`
+# chains, because the household copy has its own set and a ternary per field stops being readable at
+# six of them.
+EMAIL_KEYS = {
+    "pending": {
+        "subject": "subject_pending", "heading": "title_pending", "body": "body_pending",
+        "many_subject": "subject_many_pending", "many_heading": "title_many_pending",
+        "many_body": "body_many_pending",
+    },
+    "ready": {
+        "subject": "subject_ready", "heading": "title_ready", "body": "body_ready",
+        "many_subject": "subject_many", "many_heading": "title_many_ready",
+        "many_body": "body_many_ready",
+    },
+    "reminder": {
+        "subject": "subject_reminder", "heading": "title_reminder", "body": "body_reminder",
+        "many_subject": "subject_many_reminder", "many_heading": "title_many_reminder",
+        "many_body": "body_many_reminder",
     },
 }
 
@@ -1481,23 +1537,28 @@ font-size:12px;line-height:1.7">{html.escape(privacy)}<br>{html.escape(copy['foo
     return {"subject": subject, "html": html_body, "text": text_body}
 
 
-def build_email(name: str, event_title: str, link: str, language: str, ready: bool,
+def build_email(name: str, event_title: str, link: str, language: str, state: str,
                 assets_base: str = "") -> dict[str, str]:
     """Render the single-link email: one person, one link, one "ton lien".
 
     The household case (several participants sharing one mailbox) is `build_links_email`, and it has
     its own copy on purpose: "Salut Alec," and "ton lien" cannot be stretched over three people
     without reading like a bug.
+
+    `state` picks the strings — see EMAIL_KEYS. It is an argument rather than a re-read of a settings
+    row because with several draws on one server there is no single row to read, and the caller knows
+    which draw it is mailing.
     """
     copy = _email_copy(language)
+    keys = EMAIL_KEYS[state]
     title = event_title or copy["kicker"]
     # The name comes first, deliberately: a family shares one inbox, and six mails from the same
     # sender with one subject are impossible to tell apart in a phone's list view — which is where
     # the truncation happens anyway. Subject order is the only thing the mailbox sorts by.
-    subject = copy["subject_ready" if ready else "subject_pending"].format(event=title, name=name)
-    heading = copy["title_ready" if ready else "title_pending"]
+    subject = copy[keys["subject"]].format(event=title, name=name)
+    heading = copy[keys["heading"]]
     hello = copy["hello"].format(name=name)
-    body = copy["body_ready" if ready else "body_pending"]
+    body = copy[keys["body"]]
     link_note = copy["link_note"]
     safe_link = html.escape(link, quote=True)
 
@@ -1516,7 +1577,7 @@ def build_email(name: str, event_title: str, link: str, language: str, ready: bo
                                     f"{link_note}\n{link}"])
 
 
-def build_links_email(people: list[dict[str, str]], event_title: str, language: str, ready: bool,
+def build_links_email(people: list[dict[str, str]], event_title: str, language: str, state: str,
                       assets_base: str = "") -> dict[str, str]:
     """One email covering several people at one address: each person's link, each one labelled.
 
@@ -1530,17 +1591,17 @@ def build_links_email(people: list[dict[str, str]], event_title: str, language: 
     """
     if len(people) == 1:
         only = people[0]
-        return build_email(only["name"], event_title, only["link"], language, ready, assets_base)
+        return build_email(only["name"], event_title, only["link"], language, state, assets_base)
 
     copy = _email_copy(language)
+    keys = EMAIL_KEYS[state]
     title = event_title or copy["kicker"]
     names = [person["name"] for person in people]
     joined = _join_names(names, copy)
-    subject = copy["subject_many" if ready else "subject_many_pending"].format(event=title,
-                                                                              names=joined)
-    heading = copy["title_many_ready" if ready else "title_many_pending"]
+    subject = copy[keys["many_subject"]].format(event=title, names=joined)
+    heading = copy[keys["many_heading"]]
     hello = copy["hello_many"].format(names=joined)
-    body = copy["body_many_ready" if ready else "body_many_pending"].format(n=len(people))
+    body = copy[keys["many_body"]].format(n=len(people))
 
     blocks, text_lines = [], [hello, body, copy["links_note"]]
     for person in people:
@@ -1579,19 +1640,23 @@ def _all_participants(conn: sqlite3.Connection, draw_id: int | None = None) -> l
 
 
 def send_link_emails(conn: sqlite3.Connection, participants: list[dict[str, Any]],
-                     config_row: sqlite3.Row, base_url: str) -> dict[str, Any]:
+                     config_row: sqlite3.Row, base_url: str,
+                     state: str | None = None) -> dict[str, Any]:
     """Mail a set of participants: at most one email per address, all links inside it.
 
     The report stays one row per participant — that is how the roster is read, including the people
     with no address, so the console can show who was skipped instead of silently omitting an uncle —
     and it adds `messages`, the number of sends that actually went out. Twelve people at five
     mailboxes is five sends, and the console should say so rather than imply twelve.
+
+    `state` defaults to the draw's own (locked → the gift is waiting, unlocked → the link is an
+    invite); a reminder passes its own state because the ask, not the draw, is the subject.
     """
+    chosen = state or ("ready" if config_row["is_locked"] else "pending")
     results, messages = [], 0
     for group in _group_by_address(participants):
         rows = deliver_household_email(conn, group, config_row["event_title"],
-                                       config_row["email_language"], base_url,
-                                       ready=bool(config_row["is_locked"]))
+                                       config_row["email_language"], base_url, chosen)
         if any(row["ok"] for row in rows):
             messages += 1
         results += rows
@@ -1750,7 +1815,7 @@ class EmailPreviewRequest(BaseModel):
     meant to be screenshot-able, and real names should not end up in one. `links` picks the
     template — one link, or the household mail that carries several people's links in one mail."""
     language: Optional[Literal["fr", "en"]] = None
-    state: Literal["pending", "ready"] = "ready"
+    state: Literal["pending", "ready", "reminder"] = "ready"
     links: int = Field(default=1, ge=1, le=len(PREVIEW_NAMES))
 
 
@@ -2335,12 +2400,13 @@ def run_draw(
     # refused, and the rest are the organizer's to hand out in person.
     emailed = None
     if config_row["auto_email_on_draw"]:
-        # Re-read the row. The mail's copy is chosen by `ready=bool(config_row["is_locked"])`, and the
-        # row in hand was read at the top of this endpoint, *before* the lock above — so it still says
-        # 0, and every link mailed by "draw and send" introduced itself as "Le tirage n'a pas encore
-        # été fait" while its own link opened straight onto the reveal. The object looks freshly named
-        # and every other column in it is still current, which is what makes the trap. The manual send
-        # paths never had it: they call `_load_config` at send time.
+        # Re-read the row. The mail's copy is chosen by `send_link_emails`'s default state, read from
+        # `config_row["is_locked"]`, and the row in hand was read at the top of this endpoint, *before*
+        # the lock above — so it still says 0, and every link mailed by "draw and send" introduced
+        # itself as "Le tirage n'a pas encore été fait" while its own link opened straight onto the
+        # reveal. The object looks freshly named and every other column in it is still current, which
+        # is what makes the trap. The manual send paths never had it: they call `_load_config` at
+        # send time.
         config_row = _load_config(conn, target)
         base_url = mail_base_url(request)
         with_email = [p for p in _all_participants(conn, target) if p["email"]]
@@ -2392,18 +2458,32 @@ def _email_rate_check(request: Request, attempts: int) -> None:
 
 
 def _send_rows_or_422(request: Request, conn: sqlite3.Connection, people: list[dict[str, Any]],
-                      config_row: sqlite3.Row) -> dict[str, Any]:
+                      config_row: sqlite3.Row, state: str | None = None,
+                      nothing: str = EMAIL_NO_ADDRESS) -> dict[str, Any]:
     # The limit counts *sends*, not people: twelve relatives at five mailboxes cost five provider
     # calls, and billing the organizer for twelve would throttle the wrong thing.
     _email_rate_check(request, max(1, len(_group_by_address(people))))
     if not people:
-        raise HTTPException(status_code=422, detail=EMAIL_NO_ADDRESS)
+        # `nothing` names the real reason. The bulk send has no people because nobody has an address;
+        # the reminder has no people because everybody already wrote their ideas, and sending the
+        # organizer off to look for a missing address would be a wrong diagnosis.
+        raise HTTPException(status_code=422, detail=nothing)
     if not email_enabled():
         raise HTTPException(status_code=503, detail=EMAIL_NOT_CONFIGURED)
     base_url = mail_base_url(request)
     if not base_url:
         raise HTTPException(status_code=503, detail=EMAIL_BAD_BASE_URL)
-    return send_link_emails(conn, people, config_row, base_url)
+    return send_link_emails(conn, people, config_row, base_url, state)
+
+
+def _missing_ideas(participants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The people who have written nothing about themselves.
+
+    Whitespace counts as nothing — a stray space left in the box is not something a gift giver can
+    buy. This is the rule the console's roster shows and counts, so the reminder button's number and
+    the mail it sends can only agree while both use it.
+    """
+    return [person for person in participants if not (person["wishlist"] or "").strip()]
 
 
 @app.post("/api/admin/participants/{participant_id}/email", dependencies=[Depends(enforce_api_limit)])
@@ -2460,6 +2540,33 @@ def email_all_links(
     return {"status": "OK", **report}
 
 
+@app.post("/api/admin/emails/reminder", dependencies=[Depends(enforce_api_limit)])
+def email_reminders(
+    request: Request,
+    draw_id: int | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Ask the people who have written no gift ideas for themselves to write some.
+
+    A separate call rather than a filter on the bulk send because the two asks carry different words:
+    "here is your link" and "nobody knows what to buy you" are different emails, and the second one is
+    answered by reading the roster. Everything else is deliberately the same machinery — one mail per
+    mailbox, and each mail carries the links of only the people it names, so nudging one parent never
+    shows another household their link.
+
+    What the reminder can say is small by construction: the reader's own empty wishlist and their own
+    link. It names nobody else's gifts, no pairing, and no other family.
+    """
+    target = select_draw_id(conn, draw_id)
+    missing = _missing_ideas(_all_participants(conn, target))
+    report = _send_rows_or_422(request, conn, missing, _load_config(conn, target),
+                               state="reminder", nothing=NO_MISSING_IDEAS)
+    audit("email_reminders", ip=client_ip(request), draw_id=target, asked=len(missing),
+          sent=report["sent"], failed=report["failed"])
+    return {"status": "OK", "asked": len(missing), **report}
+
+
 @app.post("/api/admin/emails/preview", dependencies=[Depends(enforce_api_limit)])
 def email_preview(
     payload: EmailPreviewRequest,
@@ -2481,8 +2588,8 @@ def email_preview(
     sample = "00000000-0000-0000-0000-000000000000"
     people = [{"name": name, "link": participant_link(base_url, sample)}
               for name in PREVIEW_NAMES[:max(1, payload.links)]]
-    content = build_links_email(people, config_row["event_title"], language,
-                                ready=payload.state == "ready", assets_base=base_url)
+    content = build_links_email(people, config_row["event_title"], language, payload.state,
+                                assets_base=base_url)
     audit("email_previewed", ip=client_ip(request), language=language, state=payload.state,
           links=len(people))
     return {"status": "OK", "language": language, "state": payload.state,

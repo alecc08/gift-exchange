@@ -12,7 +12,10 @@ throws renders an empty box), so this walks the exact paths:
   2. turn "Éviter les piges dans le même groupe" off, save, reload — it must still be off and the
      panel must not read "unsaved changes" (the bug that would happen if one copy kept 0 and the
      other kept false);
-  3. add a roster with two households, one of them two people deep, and filter by group;
+  3. add a roster with two households, one of them two people deep, filter by group, and check the
+     wishlist counters: the count of people who wrote their ideas, a marker on every row that did not,
+     and the bulk "Relancer les N sans idées" button — present, counting, and refused on a server that
+     cannot send mail;
   4. check the console *predicts* the crossing the arithmetic forces, that the draw button stays
      enabled (a relaxable rule must not block the draw), and that it then *reports* it;
   5. reset, add a person who makes a clean draw possible, and check the notice flips;
@@ -130,10 +133,12 @@ def main() -> int:
             next click time out for reasons that have nothing to do with the feature."""
             page.wait_for_function(f"{DATA}.busy === false")
 
-        def add_person(name, family, group):
+        def add_person(name, family, group, wishlist=""):
             page.fill("#p-name", name)
             page.fill("#p-family", family)
             page.fill("#p-group", group)
+            if wishlist:
+                page.fill("#p-wish", wishlist)
             page.wait_for_function(f"{DATA}.draftReady === true")
             page.get_by_role("button", name="Ajouter").click()
             idle()
@@ -190,8 +195,11 @@ def main() -> int:
         page.get_by_role("button", name=re.compile("Enregistrer les règles")).click()
         idle()
 
+        # Carole writes her ideas, the others do not: that is the state the wishlist counters and the
+        # reminder button have to describe.
+        WISHLISTS = {"Carole": "Deux vinyles des années 70"}
         for name, family, group in ROSTER:
-            add_person(name, family, group)
+            add_person(name, family, group, WISHLISTS.get(name, ""))
         # The add is a fetch, and the row list is a second one after it: wait for the roster to
         # actually show three people before counting, or the count is whatever happened to be in.
         page.wait_for_function(
@@ -206,6 +214,28 @@ def main() -> int:
         assert rows.count() == 2, "filtering by group did not narrow the table"
         page.get_by_role("button", name="Montre tout le monde").click()
 
+        # ------------------------------------------------------------------ #
+        # Wishlists: the console has to show who has written nothing about themselves, and offer the
+        # nudge. This instance has no RESEND_API_KEY, so the button is checked in the state a family
+        # without mail setup really sees: counted, present, and refused.
+        # ------------------------------------------------------------------ #
+        page.locator("text=Idées écrites :").first.scroll_into_view_if_needed()
+        assert page.locator("text=Idées écrites : 1 sur 3").count() == 1, \
+            "the roster does not count the people who wrote their ideas"
+        # Counted through innerText, not the locator count: an `x-show` chip stays in the DOM with
+        # display:none, so a locator would count the marker on the one row that has ideas too.
+        visible_without_ideas = page.evaluate(
+            "() => [...document.querySelectorAll('#roster-table tr.part')]"
+            ".filter(tr => tr.innerText.includes('Aucune idée écrite')).length")
+        assert visible_without_ideas == 2, \
+            "a roster row with an empty wishlist carries no marker"
+        remind = page.get_by_role("button", name="Relancer les 2 sans idées")
+        assert remind.count() == 1, "no bulk reminder button for the two relatives with no ideas"
+        assert not remind.is_enabled(), \
+            "a reminder can be clicked on a server that cannot send mail"
+        assert page.locator("text=L’envoi de courriels n’est pas configuré").count() >= 1, \
+            "the email block does not say why it cannot send"
+
         page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
         page.wait_for_selector("text=devra bien piger 1 fois")
         draw = page.get_by_role("button", name=re.compile("Lancer le tirage"))
@@ -219,6 +249,13 @@ def main() -> int:
         page.get_by_role("button", name="Recommencer le tirage").click()
         page.wait_for_selector("text=Tirage recommencé")
         add_person("Gaétan", "Tremblay", "Tremblay (chez Réjean)")
+        # The counters follow the roster, they are not a snapshot from page load: a fourth relative
+        # with nothing written is a fourth person the reminder has to reach.
+        page.locator("text=Idées écrites : 1 sur 4").scroll_into_view_if_needed()
+        assert page.locator("text=Idées écrites : 1 sur 4").count() == 1, \
+            "the wishlist counter ignored the person just added"
+        assert page.get_by_role("button", name="Relancer les 3 sans idées").count() == 1, \
+            "the reminder button still quotes the old count"
         page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
         assert page.locator("text=devra bien piger").first.is_hidden(), \
             "the console still predicts a crossing that is no longer needed"
@@ -316,13 +353,22 @@ def main() -> int:
         unlabelled = page.evaluate(
             "[...document.querySelectorAll('#roster-table tr.part td')].filter(td => !td.dataset.label).length")
         assert unlabelled == 0, "a card cell lost the column name it is labelled with"
+        assert page.get_by_role("button", name=re.compile(r"^Relancer les \d+ sans idées$")).count() == 1, \
+            "the reminder row falls off the console at phone width"
+        assert page.evaluate(
+            "() => [...document.querySelectorAll('#roster-table tr.part')]"
+            ".filter(tr => tr.innerText.includes('Aucune idée écrite')).length") >= 1, \
+            "the roster cards lost the no-ideas marker"
         page.set_viewport_size({"width": 1440, "height": 950})
         page.wait_for_timeout(250)
 
         page.get_by_role("button", name="EN", exact=True).click()
         page.wait_for_selector("text=Avoid picks within the same group")
         page.wait_for_selector("text=Nobody drew inside their own group.")
-        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z0-9_.]+/").count(), \
+        assert page.get_by_role("button", name=re.compile(r"^Remind the \d+ with no ideas$")).count() == 1, \
+            "the reminder button has no English label"
+        assert page.locator("text=Wishlists filled:").count() == 1, "the wishlist counter is not translated"
+        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn|plan)\.[a-zA-Z0-9_.]+/").count(), \
             "a raw i18n key is visible on screen"
 
         # ------------------------------------------------------------------ #

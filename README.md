@@ -275,9 +275,45 @@ other ([Languages](#languages-french-and-english)).
     <td><img src="docs/screenshots/17-draw-relaxed.jpg" alt="Locked draw reporting the same-group pick it had to make"><br><b>…and admits what it did</b> — the draw ran, with exactly the one crossing the arithmetic forced. A count, never a pairing.</td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/25-wishlist-counters.jpg" alt="Roster filtered to one household: the counter of filled wishlists above, and a gold 'aucune idée écrite' marker on one row"><br><b>Who has nothing written</b> — the roster counts the people whose own wishlist is empty (<i>9 sur 10</i>), and every one of those rows carries a gold marker. The counter counts the whole draw even while the table is filtered to one household: a blank cell is invisible at twenty people.</td>
+    <td><img src="docs/screenshots/26-email-reminders.jpg" alt="Email block with two rows: send the links, and remind the relative with no ideas, plus the note that email is not configured"><br><b>Two asks, one block</b> — <i>Envoyer les liens</i> and <i>Relancer les 1 sans idées</i>: different emails, the same rules (one per mailbox, each mail carrying only the links of the people it names) and the same send budget. Without a mail setup both are disabled and the block says why.</td>
+  </tr>
+  <tr>
     <td colspan="2"><img src="docs/screenshots/09-admin-english.jpg" alt="Same console in English"><br><b>One-click FR ⇄ EN</b> — every string exists in both languages, remembered per browser, and the parity of the two dictionaries is a test, not a hope.</td>
   </tr>
 </table>
+
+### Wishlists: who has nothing written yet
+
+A gift is easier when the person said what they would like, and a wishlist nobody fills in is invisible
+until a week before the exchange. So the roster answers that question directly, and the console offers
+the nudge that goes with it.
+
+* **Every empty wishlist is marked**, and the roster counts them (`Idées écrites : 14 sur 21`). At twenty
+  people a blank cell is not a signal; a gold *Aucune idée écrite* chip is a row the organizer can act
+  on.
+* **A wishlist of spaces counts as empty.** That is one rule, shared by the marker, the counter and the
+  server's recipient list (`_missing_ideas`) — a relative who typed a space and stopped is precisely the
+  person the reminder is for.
+* **The reminder is a different email, not a re-send.** "Ta liste d'idées est vide" instead of "Ton lien
+  secret est prêt", in both languages, and `state: reminder` in the preview so the organizer reads the
+  words before they leave. Everything else is the same machinery: one mail per mailbox, and each mail
+  carries the links of only the people it names — nudging one parent never hands them another
+  household's link.
+* **The numbers are said out loud** before the click (the confirm dialog: *3 personnes n'ont rien écrit…
+  ça fait 1 courriel*), and after it: who was mailed, how many envelopes, and which relatives could not
+  be reached because they have no address.
+* **It shares the send budget.** A reminder is a mail, so it spends the same per-minute quota as the
+  links — the ceiling is sized for the family's spam filter, not per button.
+* **Nothing to remind says so honestly**: the button is disabled at zero, and
+  `POST /api/admin/emails/reminder` refuses with `Everyone has written their gift ideas` rather than the
+  bulk send's "no email address", which would send the organizer looking for a field that is fine.
+* **The organizer cannot type ideas for a relative.** The roster's edit route has no wishlist field on
+  purpose: the ideas are the person's own, written through their own link.
+
+One deliberate simplification: the roster's *Lien envoyé* stamp is "the last mail about this person's
+link left at…", which includes a reminder. There is one timestamp column for that; if a family ever
+needs to know how many reminders went out, that is the `email_reminders` line in the audit log.
 
 ### On a phone
 
@@ -494,7 +530,8 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 | --- | --- |
 | `POST /api/admin/emails` | Mails everyone with an address in this draw. Answers per person (`results`, so a skipped address is named, not hidden) plus `messages` — twelve people at five addresses answers `sent: 12, messages: 5`. |
 | `POST /api/admin/participants/{id}/email` | Sends that person's **mailbox**: one mail holding every link at that address in this draw, and `with: [names]` says who else was in it. Clicking it three times on three relatives is three mails (each already complete), not nine links' worth of spam. |
-| `POST /api/admin/emails/preview` | `{language?, state?, links?}`. Sample names only, so it can be screenshotted; `links: 3` shows the household template. |
+| `POST /api/admin/emails/reminder` | The same machinery aimed at one question: **who has written no gift ideas for themselves**. Mails only those people, one mail per mailbox, each mail carrying only their own links. Answers `asked` (people with an empty wishlist) plus the usual per-person `results`, and refuses with `Everyone has written their gift ideas` when the roster has nothing to remind. |
+| `POST /api/admin/emails/preview` | `{language?, state?, links?}` where `state` is `pending`, `ready` or `reminder`. Sample names only, so it can be screenshotted; `links: 3` shows the household template. |
 
 ## The participant view
 
@@ -602,7 +639,7 @@ Québec family wants.
 
 What makes "two locales" a fact rather than a claim:
 
-* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **236 keys each** — and
+* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **246 keys each** — and
   `tests/test_i18n.py` fails on a key that exists in one and not the other. A missing key would render
   its raw name on screen, which is exactly how a half-translated UI gets born. The same test fails when
   the README quotes a different number, because that count is the sentence a translator checks.
