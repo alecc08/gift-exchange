@@ -1344,3 +1344,122 @@ created.`) while every French twin used straight ones. The repository quotes wit
 
 Gallery: `18-draw-list.jpg` re-shot — one drawn card, one copied-and-undrawn card, so the still shows
 both the button and what it produces. **235 tests.**
+
+## Notes between the households that drew the same person (addendum, 2026-11-14)
+
+**Why this exists is arithmetic, not a feature request.** Ten adults each drawing one adult and two
+children, ten children: every child ends up being shopped for by **three households**. Nothing in the
+product let those three talk to each other, so three people buy the same cookbook and each child gets
+three of them. The fix is the smallest channel that answers the question — a sentence per giver, on the
+receiver's card, visible to the other givers.
+
+**The note hangs off (author, receiver), not off the pairing.** `UNIQUE(author_id, receiver_id)`: one
+line per person, overwritten as plans change. A thread is more keys, more UI and nothing to maintain
+it; a family that has to moderate a conversation about gift money is a family that stops using the
+feature. An empty `text` deletes the line rather than leaving a blank one.
+
+**Anonymous is a data decision, not a CSS one.** The participant payload carries
+`{text, mine}` and nothing else: no author name, no author id, no timestamp. The timestamp is the one
+people forget — with two co-givers, the order the notes arrived in *is* the pairing, and the pairing is
+the thing this app keeps from everybody including the organizer. The author's own row is marked
+"Ta note", which is the only attribution the page makes, and the only one a relative needs to know
+which sentence they already wrote.
+
+**Two privacy rules that are easy to get wrong and are therefore tested separately.**
+The person the note is about never sees it — three households planning a child's gift do not plan it in
+front of the child, and the same argument holds for an adult. And the organizer never sees notes at
+all: `admin_state` has been pairing-blind since the beginning, and a note names its receiver to whoever
+can list them, so an admin endpoint over `notes` would be the leak. Both tests check the *whole*
+payload for the sentence, because the leak that would matter is a helpful future field.
+
+**A handle, not an id.** `PUT /api/draw/{token}/note` takes `{to, text}` where `to` is the note key the
+reader's own card carried. The participant API has never handed out participant ids and there is no
+reason to start; and the handle is resolved with `giver_id = me` in the `WHERE` clause, so a key copied
+off a cousin's card, a key for somebody you did not draw, and nonsense all answer the same `404`. It is
+a lookup key, not a credential — alone it buys nothing, and a re-draw mints new ones. The column arrives
+by `ALTER TABLE` (SQLite cannot attach `UNIQUE` that way, so the uniqueness is an index in
+`_ensure_indexes`), and the migration **backfills existing pairings**: the household that is mid-event
+right now gets the feature without resetting their draw or mailing new links.
+
+**Notes belong to one draw's result.** `_clear_assignments` became `_clear_draw_results` and deletes
+the notes with the pairings: they were written for the co-givers of a draw that no longer exists, and
+their handles point at nothing anyway. A copied roster (`copy_participants_from`) brings people, never
+last season's conversation — that one is a consequence of how the rows are written, so it is pinned by
+a test instead of by a line of code.
+
+**One number, because the alternative is lying.** The help line used to read "more than one household is
+gâting this person" — which was false on every one-to-one pick. So the payload says `co_givers`, the
+count of people giving to that person, and the whole block is rendered only when it is above 1: with one
+giver there is nobody to warn and the box is a box nobody reads. It is a count rather than a list, which
+keeps it the only piece of draw structure the participant page gets.
+
+**And a poll that survives the draw.** The page already re-read itself while the draw was pending; that
+stopped at READY, which is exactly when two households coordinating need it. Polling now runs in both
+states, with the tab-hidden case skipping requests — and it surfaced an older bug on the way: `loadDraw`
+overwrote the wishlist box from the server, so a poll landing mid-sentence used to wipe what somebody
+was typing. It now only paints the box when it is not dirty.
+
+**Breakpoints, because this page is read on a phone at a kitchen table.** `tools/check_organizer_ui.py`
+now walks the whole note round trip in two browser contexts — write on a card at 1440 px, see it arrive
+on the co-giver's page at 390 px labelled *Anonyme*, switch to EN and fail on a raw key, clear it and
+watch it disappear from the other screen, keep the sentence off the person it is about, and hold the
+revealed card at 360, 390, 768, 1024 and 1440 px. The overflow check learned a second rule while doing
+that: an element that a parent clips cannot hang off the screen, which is what the family card's corner
+flakes have always been doing behind `overflow-hidden`. **248 tests.**
+
+## Who has not written their ideas, and the reminder (addendum, 2026-11-14)
+
+**The organizer's question is not "who opened their link", it is "who is going to get a bad gift".**
+The console already tracked opened links and sent links; it never said that eleven of twenty relatives
+have written nothing about themselves. That is the fact worth a column, and the action worth a button.
+
+**The rule lives once.** A wishlist of spaces counts as empty: `_missing_ideas` in `main.py`, and
+`hasIdeas(p)` in the SPA, same trim, because the marker, the counter and the recipient list have to
+agree or the button lies about its own count. Whitespace-only is exactly the relative who typed a space
+and stopped — the person the reminder is for.
+
+**The marker is for the absence, not the presence.** A blank cell is invisible in a twenty-row table.
+Every row with nothing written carries a gold *Aucune idée écrite* chip, and one chip above the table
+counts them (`Idées écrites : 14 sur 21`) — counted across the whole draw even while the table is
+filtered, because the number is about the event, not about what happens to be on screen.
+
+**A reminder is a different email, not a re-send.** The link invite promises something ("ton lien secret
+est prêt"); the reminder asks something ("ta liste d'idées est vide"). Two different asks in one template
+set would produce copy that reads like a bug, so the mail's copy is chosen by a `state` —
+`pending` / `ready` / `reminder` — with one key table (`EMAIL_KEYS`) instead of six `if ready else`
+ternaries. The reminder deliberately has **no before/after-draw pair**: the ask does not depend on the
+draw, and every extra paragraph is another thing a parent's inbox has to sort.
+
+**Same send machinery, same privacy.** `POST /api/admin/emails/reminder` filters the roster and hands
+the survivors to `_send_rows_or_422` → `_group_by_address` → `deliver_household_email`. So: one mail per
+mailbox, and a mail carries the links of **only** the people it names — nudging the Bernier parents
+about two of them does not re-mail the third person's credential. A test writes a real coordination
+note and asserts neither the sentence nor any note handle appears in a reminder: the mail is sent while
+the draw is locked, which is precisely when the server knows everything about who-picks-who.
+
+**The empty case has its own sentence.** The bulk send's 422 is "no email address"; on a roster where
+everybody wrote their ideas that answer sends the organizer hunting for a field that is fine, so the
+reminder refuses with `Everyone has written their gift ideas`. Small, but wrong diagnoses are how a
+family stops trusting the console.
+
+**It spends the same budget.** A reminder is a mail, so it burns the per-minute email quota like any
+other send — one counter, not one per button. A test shrinks the quota and shows the reminder's second
+click and the bulk send both getting refused by it.
+
+**One timestamp, stated.** `email_sent_at` means "the last mail about this person's link left at…",
+which includes a reminder; the roster's *Lien envoyé* chip moves. A second column for reminders would
+be a migration and a second thing to explain, and nobody has asked how many nudges went out; the audit
+log's `email_reminders` line has that if it ever matters.
+
+**A sharp edge found on the way.** `email_enabled()` used to mean "there is an API key". A deployment
+with a key and no `RESEND_FROM` then lit up every button and each row of the report came back as "the
+provider refused the send" — a configuration problem dressed up as somebody else's mail server. It now
+requires both halves, so the panel says "not configured on this server", which is the sentence whose
+fix the organizer actually controls.
+
+**258 tests**, plus the browser pass now walks the counters (marker on the right rows, count following a
+person just added), refuses the reminder button on a server that cannot send, checks it in English, and
+holds the two email rows at 390 and 360 px. A separate local run pointed `RESEND_BASE_URL` at a stub on
+127.0.0.1 and clicked the real button: confirm dialog with the real numbers, one envelope to the shared
+mailbox carrying exactly the two relatives being reminded, the address-less one named as not sent, and
+the counters moving when a relative finally wrote their ideas.

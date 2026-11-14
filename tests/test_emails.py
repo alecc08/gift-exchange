@@ -198,6 +198,20 @@ def test_without_a_key_the_feature_is_off_everywhere(client, monkeypatch):
     assert client.post("/api/admin/emails/preview", headers=ADMIN, json={}).status_code == 200
 
 
+def test_a_key_with_no_sender_address_is_not_configured(client, monkeypatch):
+    """Half a mail setup has to read as off, not as "your relatives' inbox is broken".
+
+    `send_email` refuses when the sender address is missing; if the console only asked for the key, its
+    buttons would light up and every row of the report would come back blaming the provider.
+    """
+    monkeypatch.setenv("RESEND_API_KEY", "re_test_key_not_real")
+    monkeypatch.delenv("RESEND_FROM", raising=False)
+    roster(client)
+    assert client.get("/api/admin/state", headers=ADMIN).json()["email_enabled"] is False
+    assert client.post("/api/admin/emails", headers=ADMIN).status_code == 503
+    assert client.post("/api/admin/emails/reminder", headers=ADMIN).status_code == 503
+
+
 def test_send_one_stamps_and_carries_only_that_participants_link(client, monkeypatch):
     configure_emails(monkeypatch)
     stub = StubTransport()
@@ -442,11 +456,11 @@ def test_auto_email_on_draw_is_off_by_default_and_sends_when_on(client, monkeypa
 def test_the_auto_send_after_a_draw_mails_the_ready_copy_not_the_pending_one(client, monkeypatch):
     """A mail sent by "draw and send" has to say the draw is done — and this failed once.
 
-    The copy choice is `ready=bool(config_row["is_locked"])`, and `run_draw` reads its settings row
-    *before* it locks. So the one send that always launches immediately after a draw carried the
-    pending copy: "Le tirage n’a pas encore été fait", in a mail whose link opens straight onto the
-    reveal. Reading the row once and passing it along is right everywhere except for the single column
-    that caller just changed.
+    The copy choice is the state `send_link_emails` reads from `config_row["is_locked"]`, and `run_draw`
+    reads its settings row *before* it locks. So the one send that always launches immediately after a
+    draw carried the pending copy: "Le tirage n’a pas encore été fait", in a mail whose link opens
+    straight onto the reveal. Reading the row once and passing it along is right everywhere except for
+    the single column that caller just changed.
 
     The first half matters as much as the second: a send *before* the draw must still say "not yet",
     otherwise a green test here would only prove the flag is stuck on.
@@ -498,6 +512,235 @@ def test_email_language_is_one_event_wide_choice(client, monkeypatch):
 
 
 # --------------------------------------------------------------------------- #
+# The reminder: ask the people whose own wishlist is empty
+# --------------------------------------------------------------------------- #
+
+
+def reminder_roster(client):
+    """Five relatives: one with ideas, two without (one of them a box of spaces), one elsewhere with
+    ideas, one with neither an address nor ideas. That last one is the interesting row — a reminder
+    that cannot go anywhere has to be reported, not counted as sent."""
+    add(client, "Ghislaine", "ADULT", "Bernier", email="ghislaine@exemple.ca", wishlist="Deux coupes à vin")
+    add(client, "Réjean", "ADULT", "Bernier", email="ghislaine@exemple.ca", wishlist="")
+    add(client, "Florent", "CHILD", "Bernier", email="ghislaine@exemple.ca", wishlist="   ")
+    add(client, "Pauline", "ADULT", "Chamberland", email="pauline@exemple.ca", wishlist="Un livre")
+    return add(client, "Odile", "ADULT", "Chamberland", email="", wishlist="")
+
+
+def test_the_reminder_names_only_the_people_with_nothing_written(client, monkeypatch):
+    """The whole feature in one test: one mail per mailbox, and inside it only the people who need it.
+
+    Ghislaine and Florent share the Bernier mailbox with Réjean. A reminder about Réjean and Florent
+    therefore lands in Ghislaine's inbox — which is exactly why the mail must not carry her link too:
+    a nudge about two people is not a licence to re-send a third person's credential.
+    """
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    odile = reminder_roster(client)
+
+    response = client.post("/api/admin/emails/reminder", headers=ADMIN)
+    assert response.status_code == 200, response.text
+    report = response.json()
+    assert report["asked"] == 3, "Réjean, Florent and Odile have nothing written"
+    assert report["sent"] == 2 and report["failed"] == 1, "Odile has no address and cannot be mailed"
+    assert report["messages"] == 1, "two people at one mailbox is one email"
+
+    assert len(stub.sent) == 1
+    mail = stub.sent[0]
+    assert mail["to"] == "ghislaine@exemple.ca"
+    assert "Réjean et Florent" in mail["subject"]
+    state = client.get("/api/admin/state", headers=ADMIN).json()
+    tokens = {person["name"]: person["token"] for person in state["participants"]}
+    assert f"/?t={tokens['Réjean']}" in mail["html"] and f"/?t={tokens['Florent']}" in mail["html"]
+    for name in ("Ghislaine", "Pauline", "Odile"):
+        assert tokens[name] not in mail["html"], f"{name}'s link rode along in a reminder"
+        assert name not in mail["text"], f"{name} was named in a reminder that is not about them"
+
+    skipped = next(row for row in report["results"] if row["name"] == "Odile")
+    assert not skipped["ok"] and skipped["reason"] == main.EMAIL_NO_ADDRESS
+
+    # The shared stamp is deliberate: the column answers "did a mail about this person's link leave?",
+    # and a reminder is one. The two people who already wrote their ideas get nothing and stay blank.
+    sent_at = {person["name"]: person["email_sent_at"] for person in
+               client.get("/api/admin/state", headers=ADMIN).json()["participants"]}
+    assert sent_at["Réjean"] and sent_at["Florent"]
+    assert not sent_at["Ghislaine"] and not sent_at["Pauline"] and not sent_at[odile["name"]]
+
+
+def test_a_box_of_spaces_is_not_an_idea(client, monkeypatch):
+    """The rule the console shows and the rule that picks recipients have to be one rule.
+
+    A wishlist of nothing but spaces saves fine — the participant page trims on send, but a relative
+    who typed a space and left is precisely the person the reminder is for.
+    """
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    add(client, "Florent", "CHILD", "Bernier", email="florent@exemple.ca", wishlist=" \t ")
+
+    assert client.post("/api/admin/emails/reminder", headers=ADMIN).status_code == 200
+    assert len(stub.sent) == 1
+    assert "Ta liste d’idées est vide" in stub.sent[0]["html"]
+
+
+def test_when_everybody_wrote_their_ideas_the_answer_says_so(client, monkeypatch):
+    """Not "no email address": the organizer would go looking for a field that is fine."""
+    configure_emails(monkeypatch)
+    monkeypatch.setattr(main, "send_email", StubTransport())
+    add(client, "Ghislaine", "ADULT", "Bernier", email="ghislaine@exemple.ca", wishlist="Coupes")
+
+    response = client.post("/api/admin/emails/reminder", headers=ADMIN)
+    assert response.status_code == 422
+    assert response.json()["detail"] == main.NO_MISSING_IDEAS
+
+
+def test_the_reminder_is_not_the_link_email(client, monkeypatch):
+    """Same layout, different ask — and the same words before and after the draw, on purpose.
+
+    The link mail changes when the draw locks ("here is your link" → "the gift is waiting"). The
+    reminder's ask does not depend on the draw at all, so it has one pair of strings; inventing a
+    before/after pair would be three more paragraphs for a parent's inbox to sort through.
+    """
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    reminder_roster(client)
+    set_config(client, **FESTIVE)
+
+    before = client.post("/api/admin/emails/reminder", headers=ADMIN)
+    assert before.status_code == 200
+    pending_words = stub.sent[0]["html"]
+    assert "liste d’idées" in pending_words
+    assert "Ton lien secret est prêt" not in pending_words
+    assert "Le tirage n’a pas encore été fait" not in pending_words
+
+    assert client.post("/api/admin/draw", headers=ADMIN).status_code == 200
+    stub.sent.clear()
+    after = client.post("/api/admin/emails/reminder", headers=ADMIN)
+    assert after.status_code == 200, "a reminder is not gated on the draw being open"
+    assert stub.sent[0]["html"] == pending_words, "the reminder changed with the draw"
+
+
+def test_a_reminder_after_a_draw_says_nothing_about_who_picks_who(client, db, monkeypatch):
+    """The reminder is an email the organizer may forward, so it stays as blind as the console.
+
+    It goes out while the draw is locked, which is exactly when the roster knows who is buying for
+    whom — and now the `notes` table exists too, holding sentences like "je prends le livre". The mail
+    may carry the reader's own link and their own blank wishlist; nothing else.
+    """
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    reminder_roster(client)
+    set_config(client, adult_draws_adult=2, adult_draws_child=0,
+               child_draws_adult=0, child_draws_child=0)
+    assert client.post("/api/admin/draw", headers=ADMIN).status_code == 200
+
+    # A real note between two co-givers, so the leak below is a sentence that actually exists.
+    state = client.get("/api/admin/state", headers=ADMIN).json()
+    giver = state["participants"][0]
+    card = client.get(f"/api/draw/{giver['token']}").json()["assignments"][0]
+    note = "je prends le livre de cuisine"
+    assert client.put(f"/api/draw/{giver['token']}/note",
+                      json={"to": card["note_key"], "text": note}).status_code == 200
+
+    assert client.post("/api/admin/emails/reminder", headers=ADMIN).status_code == 200
+    body = " ".join(f"{mail['subject']} {mail['html']} {mail['text']}" for mail in stub.sent)
+    assert note not in body, "a coordination note travelled in an email"
+
+    conn = db()
+    handles = [row["note_key"] for row in conn.execute("SELECT note_key FROM assignments")]
+    conn.close()
+    assert handles, "the draw produced no pairing, so this proves nothing"
+    assert not [handle for handle in handles if handle in body], \
+        "a note handle travelled in an email: it would let a stranger write one"
+
+    # Every recipient's own name may appear; nobody else's may.
+    for person in state["participants"]:
+        if person["name"] in ("Réjean", "Florent"):
+            continue
+        assert person["name"] not in body, f"{person['name']} was named in someone else's reminder"
+
+
+def test_reminders_are_scoped_to_the_draw_being_organised(client, monkeypatch):
+    """Two families on one server: nudging the Bernier exchange must not touch the office swap."""
+    configure_emails(monkeypatch)
+    stub = StubTransport()
+    monkeypatch.setattr(main, "send_email", stub)
+    reminder_roster(client)
+
+    second = client.post("/api/admin/draws", headers=ADMIN,
+                         json={"event_title": "Réveillon au bureau"}).json()["draw"]
+    client.post("/api/admin/participants", headers=ADMIN, params={"draw_id": second["id"]},
+                json={"name": "Alec", "role": "ADULT", "family_group": "Chamberland",
+                      "group_key": "Chamberland", "wishlist": "", "email": "alec@exemple.ca"})
+
+    first = client.post("/api/admin/emails/reminder", headers=ADMIN,
+                        params={"draw_id": 1}).json()
+    assert first["asked"] == 3 and first["messages"] == 1
+    assert [mail["to"] for mail in stub.sent] == ["ghislaine@exemple.ca"], \
+        "the first draw mailed outside itself"
+    stub.sent.clear()
+
+    both = client.post("/api/admin/emails/reminder", headers=ADMIN,
+                       params={"draw_id": second["id"]}).json()
+    assert both["asked"] == 1, "the second draw has exactly one empty wishlist (Alec)"
+    assert [mail["to"] for mail in stub.sent] == ["alec@exemple.ca"]
+
+
+def test_the_reminder_shares_the_budget_of_every_other_send(client, monkeypatch):
+    """A reminder is a send. If it had its own counter, "links + reminders" could double the mail a
+    minute that the provider and the family's spam filter were sized for."""
+    configure_emails(monkeypatch)
+    # Two sends are budgeted by this roster: the Bernier mailbox, plus the person with no address, who
+    # stays a group of one so the report can name them. With that ceiling, the reminder's own second
+    # click — and the bulk send after it — are refused by the same counter.
+    monkeypatch.setattr(main, "EMAIL_SEND_LIMIT", 2)
+    monkeypatch.setattr(main, "send_email", StubTransport())
+    reminder_roster(client)
+
+    assert client.post("/api/admin/emails/reminder", headers=ADMIN).status_code == 200
+    assert client.post("/api/admin/emails/reminder", headers=ADMIN).status_code == 429
+    assert client.post("/api/admin/emails", headers=ADMIN).status_code == 429
+
+
+def test_the_preview_can_show_the_reminder_in_both_languages(client):
+    """The organizer reads the words before firing seven of them at relatives."""
+    single = client.post("/api/admin/emails/preview", headers=ADMIN,
+                         json={"state": "reminder", "language": "fr"}).json()
+    assert "Ta liste d’idées est vide" in single["html"]
+    assert "Salut Aline," in single["text"]
+    assert "Ton lien secret" not in single["subject"]
+
+    many = client.post("/api/admin/emails/preview", headers=ADMIN,
+                       json={"state": "reminder", "language": "fr", "links": 3}).json()
+    assert "Des listes d’idées sont vides" in many["html"]
+    assert "Vous êtes 3 ici à n’avoir encore rien écrit" in many["html"]
+
+    english = client.post("/api/admin/emails/preview", headers=ADMIN,
+                          json={"state": "reminder", "language": "en", "links": 2}).json()
+    assert "Your wishlists are empty" not in english["html"]      # that heading is the *links* mail's
+    assert "Some wishlists are empty" in english["html"]
+    assert "There are 2 of you at this address" in english["html"]
+
+    assert client.post("/api/admin/emails/preview", headers=ADMIN,
+                       json={"state": "nagging", "language": "fr"}).status_code == 422
+
+
+def test_the_reminder_copy_is_plain_french_like_the_rest_of_the_mail(client):
+    """The same copy rules the interface has, applied to the newest strings."""
+    for key in ("title_reminder", "body_reminder", "subject_reminder", "title_many_reminder",
+                "body_many_reminder", "subject_many_reminder"):
+        for language in ("fr", "en"):
+            assert main.EMAIL_STRINGS[language][key].strip(), f"{language}:{key} is empty"
+    french = main.EMAIL_STRINGS["fr"]
+    assert "liste d’idées" in french["body_reminder"].lower()
+    assert "courriel" not in french["body_reminder"]      # nothing about the mail itself, no meta-copy
+    assert "🎁" not in french["body_reminder"] + french["body_many_reminder"]
+
+
+# --------------------------------------------------------------------------- #
 # Templates and preview
 # --------------------------------------------------------------------------- #
 
@@ -527,7 +770,7 @@ def test_preview_follows_the_event_language_and_the_state(client):
 
 
 def test_names_are_escaped_before_they_touch_the_html():
-    content = main.build_email('Al<script>x</script>', "Noël <2026>", "https://x/draw/t", "fr", True)
+    content = main.build_email('Al<script>x</script>', "Noël <2026>", "https://x/draw/t", "fr", "ready")
     assert "<script>" not in content["html"]
     assert "&lt;script&gt;" in content["html"]
     assert "Noël &lt;2026&gt;" in content["html"]
@@ -606,14 +849,14 @@ def test_the_preview_resolves_its_origin_like_a_send_does(monkeypatch, client):
 
 
 def test_template_carries_the_site_art_over_absolute_urls():
-    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
+    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", "ready",
                                assets_base="https://tirage-noel.alserv.org")
     assert 'src="https://tirage-noel.alserv.org/static/email-flake.png"' in content["html"]
     assert 'src="https://tirage-noel.alserv.org/static/email-gift-strip.png"' in content["html"]
     assert 'src="https://tirage-noel.alserv.org/static/email-gift.png"' in content["html"]
     # inline <svg> is stripped by Gmail; the art is always <img>-referenced, never inline
     assert "<svg" not in content["html"]
-    bare = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True)
+    bare = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", "ready")
     assert "<img" not in bare["html"], "no absolute base means no art, not a broken relative src"
 
 
@@ -625,7 +868,7 @@ def test_the_mail_art_is_a_png_because_gmail_does_not_serve_svg():
     art for the site. This test is the difference between fixing that once and re-introducing it the
     next time somebody "improves" the art by pointing at the vector file.
     """
-    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
+    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", "ready",
                                assets_base="https://tirage-noel.alserv.org")
     assert ".svg" not in content["html"], "the mail is pointing at vector art again"
     for name in ("email-flake", "email-gift", "email-gift-strip"):
@@ -648,7 +891,7 @@ def test_the_email_has_no_animation_to_lose():
     them, and half the family reading a mail whose art silently froze is worse than a mail that was
     never animated.
     """
-    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
+    content = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", "ready",
                                assets_base="https://tirage-noel.alserv.org")
     for forbidden in ("<style", "@keyframes", "animation"):
         assert forbidden not in content["html"], forbidden
@@ -668,9 +911,9 @@ def test_the_email_has_no_animation_to_lose():
 
 def test_the_hero_gift_is_described_in_the_language_of_the_mail():
     """A screen reader gets the joke or gets nothing; either way it must not get a raw alt='<'."""
-    french = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", True,
+    french = main.build_email("Aline", "Noël", "https://x.test/draw/t", "fr", "ready",
                               assets_base="https://x.test")["html"]
-    english = main.build_email("Aline", "Noël", "https://x.test/draw/t", "en", True,
+    english = main.build_email("Aline", "Noël", "https://x.test/draw/t", "en", "ready",
                                assets_base="https://x.test")["html"]
     assert 'alt="Un cadeau bien fermé' in french
     assert 'alt="A tightly closed gift' in english
@@ -686,7 +929,7 @@ def test_email_art_assets_exist_and_are_valid_svg():
 
 
 def test_pending_mail_never_promises_a_result():
-    pending = main.build_email("Aline", "Noël", "https://x/draw/t", "fr", ready=False)
+    pending = main.build_email("Aline", "Noël", "https://x/draw/t", "fr", state="pending")
     assert "tirage n’a pas encore été fait" in pending["text"]
     assert "liste d’idées" in pending["text"]  # the link is useful before the draw too
 
@@ -709,11 +952,11 @@ def test_both_email_languages_offer_the_same_subject_placeholders():
 
 def test_the_subject_names_the_person_because_a_family_shares_one_inbox():
     """Six mails from one sender with one subject are indistinguishable in a phone's list view."""
-    ready = main.build_email("Ghislaine", "Réveillon chez Gaétan", "https://x.test/?t=t", "fr", True)
+    ready = main.build_email("Ghislaine", "Réveillon chez Gaétan", "https://x.test/?t=t", "fr", "ready")
     assert ready["subject"].startswith("Ghislaine")
     assert "ton lien" in ready["subject"]
     assert "Réveillon chez Gaétan" in ready["subject"]
-    pending = main.build_email("Enfant", "Réveillon", "https://x.test/?t=t", "en", False)
+    pending = main.build_email("Enfant", "Réveillon", "https://x.test/?t=t", "en", "pending")
     assert pending["subject"].startswith("Enfant") and "your link" in pending["subject"]
 
 
@@ -873,7 +1116,7 @@ def household(**kwargs):
     return main.build_links_email(
         [{"name": name, "link": f"https://x.test/?t={token}"} for name, token in
          (("Alec", "aaaa"), ("Gabrielle", "bbbb"), ("Hugo", "cccc"))][:kwargs.pop("count", 3)],
-        "Pige Adultes", kwargs.get("language", "fr"), kwargs.get("ready", True),
+        "Pige Adultes", kwargs.get("language", "fr"), kwargs.get("state", "ready"),
         assets_base="https://tirage-noel.alserv.org")
 
 
@@ -903,7 +1146,7 @@ def test_the_household_mail_names_every_person_and_carries_every_link():
 
 def test_one_person_at_an_address_still_gets_the_singular_letter():
     content = main.build_links_email([{"name": "Alec", "link": "https://x.test/?t=aaaa"}],
-                                     "Pige Adultes", "fr", True)
+                                     "Pige Adultes", "fr", "ready")
     assert "Salut Alec," in content["text"]
     assert "ton lien" in content["subject"]
     assert "Vous êtes 1 à recevoir" not in content["html"]
@@ -912,7 +1155,7 @@ def test_one_person_at_an_address_still_gets_the_singular_letter():
 def test_household_names_are_escaped_like_every_other_field():
     people = [{"name": "A<script>x</script>", "link": "https://x.test/?t=a"},
               {"name": "B", "link": "https://x.test/?t=b"}]
-    content = main.build_links_email(people, "Noël", "fr", True)
+    content = main.build_links_email(people, "Noël", "fr", "ready")
     assert "<script>" not in content["html"]
     assert "&lt;script&gt;" in content["html"]
 
@@ -931,7 +1174,7 @@ def test_the_household_mail_works_in_english_too():
     language."""
     content = main.build_links_email(
         [{"name": "Alec", "link": "https://x.test/?t=a"}, {"name": "Gaby", "link": "https://x.test/?t=b"}],
-        "Office swap", "en", True, assets_base="https://tirage-noel.alserv.org")
+        "Office swap", "en", "ready", assets_base="https://tirage-noel.alserv.org")
     assert content["subject"].startswith("Alec and Gaby")
     assert "Office swap" in content["subject"]
     assert "your link ·" not in content["subject"], "the singular subject was reused for two people"

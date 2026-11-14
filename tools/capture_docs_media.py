@@ -97,6 +97,68 @@ def open_link(token):
         return response.status
 
 
+def participant_view(token):
+    """What a relative sees: their picks, wishlists and the notes the other givers left."""
+    with urllib.request.urlopen(f"{BASE}/api/draw/{token}") as response:
+        return json.loads(response.read())
+
+
+def participant_note(token, handle, text):
+    """Write one giver's note about one of their picks (no admin token involved: their link is the key)."""
+    return admin_api(f"/api/draw/{token}/note", {}, "PUT", {"to": handle, "text": text})
+
+
+def seed_notes(draw_id):
+    """Two households leave each other a note about the same child, for 24-co-giver-notes.png.
+
+    The pairing is the engine's, so the shared person is found the way a relative could find it: read
+    every participant's own payload and look for a name that shows up on two different cards. Returns
+    (token, person_name) for the card to shoot, or None when nobody drew the same person — in which
+    case the still would document a feature that is not in use, so it is skipped rather than staged.
+
+    `draw_id` is explicit because the run has a second draw by this point, and an unscoped admin call
+    would be the server refusing to guess which family is meant.
+    """
+    auth = bearer_headers()
+    people = admin_api(f"/api/admin/state?draw_id={draw_id}", auth)["participants"]
+    views = {person["token"]: participant_view(person["token"]) for person in people}
+    givers: dict[str, list[dict]] = {}
+    for person in people:
+        for card in views[person["token"]].get("assignments", []):
+            givers.setdefault(card["name"], []).append(person)
+    shared = [(name, group) for name, group in givers.items() if len(group) >= 2]
+    if not shared:
+        print("  notes: nobody drew the same person — 24-co-giver-notes.png skipped")
+        return None
+    # A child with the most households on it: that is the case the feature exists for.
+    name, group = max(shared, key=lambda item: (len(item[1]), item[0]))
+    texts = ("Je prends le livre de cuisine", "Le jeu de société est déjà pris de mon côté")
+    for person, text in zip(group[:2], texts):
+        card = next(card for card in views[person["token"]]["assignments"] if card["name"] == name)
+        participant_note(person["token"], card["note_key"], text)
+    print(f"  notes: {len(group[:2])} households around {name}")
+    return group[0]["token"], name
+
+
+def capture_notes_page(browser, token, person_name):
+    """One giver's card for a person three households are shopping for.
+
+    Shot at a width where the card, its wishlist and the notes under it fit in one frame: the still is
+    worth nothing if the reader cannot see that the note belongs to the person above it.
+    """
+    context = browser.new_context(viewport={"width": 860, "height": 900},
+                                  device_scale_factor=2, locale="fr-FR")
+    page = context.new_page()
+    page.goto(f"{BASE}/?t={token}", wait_until="networkidle")
+    page.wait_for_selector("#reveal-btn")
+    page.click("#reveal-btn")
+    page.wait_for_selector("text=Anonyme")
+    page.locator("article", has_text=person_name).scroll_into_view_if_needed()
+    time.sleep(0.8)
+    shot(page, "24-co-giver-notes.png")
+    context.close()
+
+
 def shot(page, name, full=False):
     page.screenshot(path=str(SHOTS / name), full_page=full, animations="allow")
     print("  still:", name)
@@ -113,6 +175,58 @@ def enter_console(page, shoot_list=True):
         shot(page, "18-draw-list.png", full=True)
     page.locator("#draw-cards article").first.get_by_role("button", name="Ouvrir").click()
     page.wait_for_selector("text=Copier tous les liens")
+
+
+def seed_missing_ideas():
+    """Blank one relative's own wishlist, so the reminder stills have something to point at.
+
+    The console cannot write or erase ideas for a relative — that is the family's own route — so this
+    goes through that person's link, exactly as they would. `Marc` is chosen on purpose: he is not the
+    participant the reveal and wishlist stills follow, and his household's mail still has his wife's
+    ideas in it. The demo roster is re-seeded at the end of the run, so the instance is left as the
+    other captions describe it.
+    """
+    auth = bearer_headers()
+    people = admin_api("/api/admin/state", auth)["participants"]
+    target = next((person for person in people if person["name"] == "Marc"), people[0])
+    admin_api(f"/api/draw/{target['token']}/wishlist", {}, "PUT", {"wishlist": ""})
+    print(f"  wishlist: {target['name']} now has nothing written about himself")
+
+
+def capture_wishlist_status(page):
+    """The wishlists half of the roster: the counter with a marked row, then the two asks in the block.
+
+    Two stills rather than one tall one: the counter sits above the table and the reminder button two
+    panels further down, and a 2 000 px strip is not something a reader can look at.
+
+    The first still filters to one household on purpose. The counter counts the whole draw either way
+    (which is worth showing), but the *marked* row is five rows down in an unfiltered table, and a
+    still of a number with nothing to point at proves nothing. Scroll positions are measured rather
+    than guessed, the same reason as the landing-page stills: `scroll_into_view_if_needed` is happy
+    with a partly visible element and the frame repeats the previous still.
+    """
+    page.get_by_role("button", name=re.compile(r"^Tremblay \(chez Réjean\)")).first.click()
+    page.wait_for_timeout(500)
+    counter = page.evaluate("""() => {
+      const chip = [...document.querySelectorAll('.chip')].find(el => el.innerText.includes('Idées écrites'));
+      return chip ? Math.round(chip.getBoundingClientRect().top + window.scrollY - 24) : 0;
+    }""")
+    assert counter > 0, "the wishlist counter is not on the page: the roster changed shape"
+    page.evaluate("y => window.scrollTo(0, y)", counter)
+    time.sleep(0.6)
+    shot(page, "25-wishlist-counters.png")
+    page.get_by_role("button", name="Montre tout le monde").click()
+    time.sleep(0.4)
+
+    panel = page.evaluate("""() => {
+      const send = [...document.querySelectorAll('button')].find(b => b.innerText.includes('Envoyer les liens'));
+      const block = send && send.closest('div.rounded-2xl');
+      return block ? Math.round(block.getBoundingClientRect().top + window.scrollY - 140) : 0;
+    }""")
+    assert panel > 0, "the email block is not on the page: the console changed shape"
+    page.evaluate("y => window.scrollTo(0, y)", panel)
+    time.sleep(0.6)
+    shot(page, "26-email-reminders.png")
 
 
 def capture_email_console(page):
@@ -208,6 +322,8 @@ def capture_admin_page(page):
     shot(page, "05-group-filter.png")
     page.get_by_role("button", name="Montre tout le monde").click()
     time.sleep(0.4)
+
+    capture_wishlist_status(page)     # 25-wishlist-counters.png + 26-email-reminders.png
 
     # the same roster at phone width: below 900 px each person becomes a card, which is the whole
     # answer to "the console hides the excess on a phone". Viewport-sized, not full page: the console
@@ -321,6 +437,7 @@ def main():
     # groups and wishlists, so the run has to start from them and not from whatever the instance
     # happens to hold. (The same seed runs again at the end, to leave the instance demo-ready.)
     seed_demo.seed(auth)
+    seed_missing_ideas()              # one relative with nothing written: what 25/26 document
     snapshot = admin_api("/api/admin/state", auth)
     if snapshot["config"]["is_locked"]:
         admin_api("/api/admin/reset", auth, "POST")      # the open-state shots need an open draw
@@ -418,6 +535,11 @@ def main():
         manifest["reveal"] = {"video": str(reveal.video.path()), "click_at": round(click_at, 2)}
         reveal.close()
         view.close()
+
+        # ---- the co-givers' notes: one card, several households (24-co-giver-notes.png) ----
+        shared = seed_notes(first_draw)
+        if shared:
+            capture_notes_page(browser, *shared)
 
         # ---- the page behind the hostname (before any login touches the state) ----
         # Its own context, with the viewport named: this page runs long, and a two-still set of it

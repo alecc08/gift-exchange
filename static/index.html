@@ -708,6 +708,16 @@
                     x-text="t('roster.filterOff')"></button>
           </div>
 
+          <!-- Wishlist progress, counted here rather than left to be eyeballed: this is the number
+               that decides whether a reminder is worth sending, and the reminder button below quotes
+               the same two getters. A row of gold chips is a lot of scrolling at twenty people. -->
+          <div class="flex flex-wrap items-center gap-2 mt-3">
+            <span class="chip" :class="noIdeasCount ? 'bg-gold-100 text-gold-600' : 'bg-pine-100 text-pine-700'"
+                  x-text="t('roster.ideasChip', { done: ideasWrittenCount, total: participants.length })"></span>
+            <span x-show="noIdeasCount" x-cloak class="text-xs text-pine-600/75"
+                  x-text="t('roster.ideasHint')"></span>
+          </div>
+
           <div class="mt-5 overflow-x-auto">
             <table id="roster-table" class="w-full text-sm">
               <thead>
@@ -729,8 +739,13 @@
                   <tr class="part hover:bg-pine-50/40 transition">
                     <td :data-label="t('roster.name')">
                       <p class="font-semibold text-pine-800" x-text="p.name"></p>
-                      <p x-show="p.wishlist" x-cloak class="text-xs text-pine-600/75 mt-0.5 max-w-[22rem] truncate"
+                      <p x-show="hasIdeas(p)" x-cloak class="text-xs text-pine-600/75 mt-0.5 max-w-[22rem] truncate"
                          :title="p.wishlist" x-text="t('roster.wishlistIs') + ' ' + p.wishlist"></p>
+                      <!-- The absence is the useful half: the organizer scans this table to find the
+                           people nobody knows what to buy. A blank cell is invisible; this is a row
+                           they can act on. -->
+                      <span x-show="!hasIdeas(p)" x-cloak class="chip bg-gold-100 text-gold-600 mt-1"
+                            x-text="t('roster.noIdeas')"></span>
                     </td>
                     <td :data-label="t('roster.role')">
                       <span class="chip" :class="p.role === 'ADULT' ? 'bg-pine-50 text-pine-600' : 'bg-gold-100 text-gold-600'"
@@ -833,7 +848,7 @@
 
           <div class="mt-6 rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3.5">
             <div class="flex flex-wrap items-center gap-3">
-              <button @click="sendAllEmails()" :disabled="busy || sendingAll || !emailEnabled"
+              <button @click="sendAllEmails()" :disabled="busy || sendingAll || sendingReminders || !emailEnabled"
                       class="btn btn-primary px-5 py-2.5 text-sm">
                 <svg class="w-4 h-4"><use href="#i-mail"/></svg>
                 <span x-text="sendingAll ? t('roster.sending') : t('roster.send_all')"></span>
@@ -845,6 +860,27 @@
                     x-text="t('roster.mailboxes', { people: emailReadyCount, mailboxes: mailboxCount })"></span>
               <span class="chip" :class="mailedCount ? 'bg-pine-100 text-pine-700' : 'bg-black/5 text-pine-600/70'"
                     x-text="t('roster.mailed') + ' · ' + mailedCount + '/' + emailReadyCount"></span>
+            </div>
+
+            <!-- The second ask. "Send the links" and "write down your ideas" are different emails with
+                 different words, so they are different buttons; the grouping, the rate budget and the
+                 per-mailbox rule are shared with the send above, which is why this row quotes the same
+                 mailbox arithmetic. -->
+            <div class="flex flex-wrap items-center gap-3 mt-3 pt-3 border-t border-pine-500/10">
+              <button @click="sendReminders()"
+                      :disabled="busy || sendingAll || sendingReminders || !emailEnabled || noIdeasCount === 0"
+                      class="btn btn-quiet px-5 py-2.5 text-sm">
+                <svg class="w-4 h-4"><use href="#i-mail"/></svg>
+                <span x-text="sendingReminders ? t('roster.reminding') : t('roster.remind', { n: noIdeasCount })"></span>
+              </button>
+              <button @click="previewEmail(1, 'reminder')" :disabled="busy"
+                      class="btn btn-quiet px-3 py-1.5 text-xs" x-text="t('rules.preview')"></button>
+              <span class="text-xs text-pine-600/75" x-text="t('roster.remind_help')"></span>
+              <span x-show="noIdeasCount" x-cloak class="chip"
+                    :class="reminderMailboxes ? 'bg-pine-100 text-pine-700' : 'bg-gold-100 text-gold-600'"
+                    x-text="reminderMailboxes
+                            ? t('roster.mailboxes', { people: noIdeasCount, mailboxes: reminderMailboxes })
+                            : t('roster.remind_noaddress', { n: noIdeasCount })"></span>
             </div>
             <p x-show="!emailEnabled" x-cloak class="text-xs text-gold-600 mt-2" x-text="t('rules.email_off')"></p>
           </div>
@@ -1138,6 +1174,59 @@
                         <span x-text="a.wishlist"></span>
                       </p>
                       <p x-show="!a.wishlist" class="text-xs text-pine-600/60 mt-2 italic" x-text="t('p.noWishlist')"></p>
+
+                      <!-- Coordination between the households that drew the same person, and only when
+                           that happened: with one giver there is nobody to warn, so the block — box and
+                           all — stays off the card instead of offering a note nobody would read.
+                           The anonymous part is the server's job (it never says who wrote a line) and
+                           the markup follows suit: there is no author field to render by accident.
+                           `x-text` everywhere, because these lines are typed by relatives. -->
+                      <template x-if="a.co_givers > 1">
+                        <div class="mt-3 pt-3 border-t border-pine-500/10">
+                          <p class="label" x-text="t('plan.title')"></p>
+                          <p class="text-[11px] text-pine-600/70 mt-1 leading-relaxed"
+                             x-text="t('plan.help', { n: a.co_givers })"></p>
+
+                          <template x-if="a.notes.length">
+                            <ul class="mt-2 space-y-1.5">
+                              <!-- Every line on this card, the reader's own included. Marking your own
+                                   is the only attribution the page makes, and it is the one thing a
+                                   relative needs to know: which sentence they already wrote. -->
+                              <template x-for="(line, j) in a.notes" :key="j">
+                                <li class="rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-3 py-2">
+                                  <span class="chip" :class="line.mine ? 'bg-gold-100 text-gold-600' : 'bg-white text-pine-600'"
+                                        x-text="line.mine ? t('plan.yours') : t('plan.anonymous')"></span>
+                                  <p class="text-sm text-pine-700 leading-relaxed break-words mt-1.5" x-text="line.text"></p>
+                                </li>
+                              </template>
+                            </ul>
+                          </template>
+
+                          <div class="flex flex-wrap items-center gap-2 mt-2">
+                            <button @click="startPlan(i, a)" :disabled="busy || planOpen(i)" class="btn btn-quiet px-3 py-1.5 text-xs">
+                              <svg class="w-3.5 h-3.5"><use href="#i-mail"/></svg>
+                              <span x-text="t('plan.write')"></span>
+                            </button>
+                            <span x-show="mine(a)" x-cloak class="text-[11px] text-pine-600/65" x-text="t('plan.editHint')"></span>
+                          </div>
+
+                          <div x-show="planOpen(i)" x-cloak class="mt-2">
+                            <textarea class="field" rows="2" :maxlength="limits.note" :placeholder="t('plan.placeholder')"
+                                      :id="`plan-input-${i}`" x-model="plans[i]"
+                                      @keydown.meta.enter.prevent="savePlan(i, a)"
+                                      @keydown.ctrl.enter.prevent="savePlan(i, a)"></textarea>
+                            <div class="flex flex-wrap items-center gap-2 mt-2">
+                              <button @click="savePlan(i, a)" :disabled="busy" class="btn btn-primary px-4 py-2 text-xs"
+                                      x-text="t('plan.save')"></button>
+                              <button x-show="mine(a)" x-cloak @click="savePlan(i, a, true)" :disabled="busy"
+                                      class="btn btn-quiet px-3 py-2 text-xs" x-text="t('plan.clear')"></button>
+                              <button @click="closePlan(i)" class="btn btn-quiet px-3 py-2 text-xs" x-text="t('plan.cancel')"></button>
+                              <span class="text-[11px] text-pine-600/60 ml-auto"
+                                    x-text="(plans[i] || '').length + '/' + limits.note"></span>
+                            </div>
+                          </div>
+                        </div>
+                      </template>
                     </div>
                   </div>
                 </article>
@@ -1336,6 +1425,17 @@ const I18N = {
     'roster.send_all_help': 'Un courriel par boîte : douze cousins à cinq adresses, ça fait cinq courriels. Chaque lien reste privé — les personnes d’une même boîte reçoivent leurs liens à eux, réunis dans un seul message.',
     'roster.bulk_done': '{sent} personne(s) par mail, en {messages} courriel(s).',
     'roster.mailboxes': '{people} personne(s) · {mailboxes} boîte(s) · {mailboxes} courriel(s)',
+    // Wishlists: what the organizer looks for when the gifts have to be bought in a hurry.
+    'roster.noIdeas': 'Aucune idée écrite',
+    'roster.ideasChip': 'Idées écrites : {done} sur {total}',
+    'roster.ideasHint': 'Le bouton « Relancer » est plus bas, dans le bloc des courriels.',
+    'roster.remind': 'Relancer les {n} sans idées',
+    'roster.reminding': 'Envoi des rappels…',
+    'roster.remind_help': 'Un rappel demande deux ou trois idées pour soi-même. Un courriel par boîte, avec leur lien à elles.',
+    'roster.remind_confirm': '{people} personne(s) n’ont rien écrit pour elles-mêmes : ça fait {mailboxes} courriel(s). Personne ne reçoit le lien d’une autre.',
+    'roster.remind_done': 'Rappel envoyé à {people} personne(s), en {messages} courriel(s).',
+    'roster.remind_noaddress': '{n} personne(s) sans idées et sans adresse',
+    'roster.remind_none': 'Tout le monde a déjà écrit ses idées.',
     'rules.preview_many': 'Aperçu à plusieurs liens',
     'roster.bulk_failed': 'Pas envoyé à : {names}',
     'roster.add': 'Ajouter',
@@ -1389,6 +1489,24 @@ const I18N = {
     'p.reveal': 'Voir mes cadeaux',
     'p.revealNone': 'Ouvrir mon lien',
     'p.privateNote': 'Lien confidentiel : garde-le pour toi.',
+    // Two or three households can draw the same person — ten adults each giving two gifts to the
+    // children means every child gets shopped for twice. These are the strings for the note they
+    // leave for each other. Plain words, and the anonymity stated where it is used.
+    'plan.title': 'Ce que les autres prévoient',
+    'plan.help': 'Vous êtes {n} à gâter cette personne. Ce que tu écris ici paraît chez les autres, sans leur dire qui l’a écrit.',
+    'plan.write': 'Dire ce que je prends',
+    'plan.anonymous': 'Anonyme',
+    'plan.yours': 'Ta note',
+    'plan.editHint': 'Modifie-la quand tu veux.',
+    'plan.placeholder': 'Ex. : je prends le livre de cuisine',
+    'plan.save': 'Enregistrer la note',
+    'plan.clear': 'Effacer ma note',
+    'plan.cancel': 'Annuler',
+    'plan.saved': 'Ta note est partie : les autres la verront.',
+    'plan.cleared': 'Ta note est effacée.',
+    'plan.failed': 'Ta note n’a pas été enregistrée.',
+    'plan.tooEarly': 'Le tirage n’est pas encore fait : rien à se passer le mot.',
+    'plan.notPick': 'Cette personne n’est pas dans tes cadeaux.',
     'p.giftAria': 'Cadeau de Noël emballé',
     'p.revealTitle': 'Les personnes que tu vas gâter',
     'p.revealSub': 'Trouve chaque personne et ses idées.',
@@ -1573,6 +1691,16 @@ const I18N = {
     'roster.send_all_help': 'One email per mailbox: twelve cousins at five addresses is five emails. Each link stays private — people sharing a mailbox get their own links together in one message.',
     'roster.bulk_done': '{sent} person(s) emailed, in {messages} email(s).',
     'roster.mailboxes': '{people} people · {mailboxes} mailbox(es) · {mailboxes} email(s)',
+    'roster.noIdeas': 'No ideas written',
+    'roster.ideasChip': 'Wishlists filled: {done} of {total}',
+    'roster.ideasHint': 'The “Remind” button is below, in the email block.',
+    'roster.remind': 'Remind the {n} with no ideas',
+    'roster.reminding': 'Sending reminders…',
+    'roster.remind_help': 'A reminder asks for two or three ideas about themselves. One email per mailbox, carrying only their own links.',
+    'roster.remind_confirm': '{people} person(s) have written nothing about themselves: that is {mailboxes} email(s). Nobody receives somebody else’s link.',
+    'roster.remind_done': 'Reminder sent to {people} person(s), in {messages} email(s).',
+    'roster.remind_noaddress': '{n} person(s) with no ideas and no address',
+    'roster.remind_none': 'Everyone has already written their ideas.',
     'rules.preview_many': 'Multi-link preview',
     'roster.bulk_failed': 'Not sent to: {names}',
     'roster.add': 'Add',
@@ -1626,6 +1754,21 @@ const I18N = {
     'p.reveal': 'Reveal my gifts',
     'p.revealNone': 'Open my link',
     'p.privateNote': 'Private link: don’t share it.',
+    'plan.title': 'What the other givers plan',
+    'plan.help': '{n} of you are shopping for this person. What you write here shows up for the others, without telling them who wrote it.',
+    'plan.write': 'Say what I’m getting',
+    'plan.anonymous': 'Anonymous',
+    'plan.yours': 'Your note',
+    'plan.editHint': 'Change it whenever you like.',
+    'plan.placeholder': 'For example: I’m taking the cookbook',
+    'plan.save': 'Save the note',
+    'plan.clear': 'Clear my note',
+    'plan.cancel': 'Cancel',
+    'plan.saved': 'Your note is on its way: the others will see it.',
+    'plan.cleared': 'Your note is cleared.',
+    'plan.failed': 'The note was not saved.',
+    'plan.tooEarly': 'The draw has not happened yet: nothing to coordinate.',
+    'plan.notPick': 'That person is not one of your picks.',
     'p.giftAria': 'Wrapped Christmas gift',
     'p.revealTitle': 'The gifts you give',
     'p.revealSub': 'Each person and their wishlist.',
@@ -1665,7 +1808,7 @@ const I18N = {
 };
 
 /* ------------------------------- app ------------------------------- */
-const DEFAULT_LIMITS = { name: 80, family_group: 60, group_key: 60, wishlist: 1000, email: 320, event_title: 120, budget_note: 500, max_quota: 10, default_password: false };
+const DEFAULT_LIMITS = { name: 80, family_group: 60, group_key: 60, wishlist: 1000, note: 300, email: 320, event_title: 120, budget_note: 500, max_quota: 10, default_password: false };
 
 /* SQLite hands back 0/1 for the checkbox preferences and the checkboxes want real booleans.
    Coerced on the way in, for both the live copy and the saved copy, otherwise rulesDirty
@@ -1702,12 +1845,18 @@ function giftExchange() {
     copiedId: null, copiedAll: false,
     /* The setTimeout handles for the "copied" flags, declared so they can be cancelled. */
     _timers: {},
-    emailEnabled: false, emailBusyId: null, sendingAll: false, previewOpen: false, previewBody: null,
+    emailEnabled: false, emailBusyId: null, sendingAll: false, sendingReminders: false,
+    previewOpen: false, previewBody: null,
 
     participant: null, data: { status: '', assignments: [] }, pError: false,
     revealed: false, burstOn: false, wishlistDraft: '', savedWishlist: '', savedAt: null,
     copiedList: false, poll: null,
     burst: [],
+    /* The coordination notes, keyed by the pick's position on this page: `plans[i]` is the draft in
+       the box for pick i, and `planBoxes[i]` says whether that box is showing. Keyed by position
+       because a giver's cards are ordered by the person's id, so the same pick keeps the same slot
+       across a reload — and a typed-but-unsaved note stays where the person left it. */
+    plans: {}, planBoxes: {},
 
     /* ---------- helpers ---------- */
     t(key, vars) {
@@ -1772,6 +1921,21 @@ function giftExchange() {
     get mailboxCount() {
       return new Set(this.participants
         .filter(p => this.looksLikeEmail(p.email))
+        .map(p => this.addressKey(p))).size;
+    },
+    /* ---------- who has written their own ideas ----------
+       The same rule the server applies when it picks the reminder recipients (`_missing_ideas` in
+       main.py): a wishlist of nothing but spaces is not something a gift giver can buy. Both numbers
+       are shown in the roster and quoted by the reminder button, so the two must not drift. */
+    hasIdeas(person) { return !!((person.wishlist || '').trim()); },
+    get ideasWrittenCount() { return this.participants.filter(p => this.hasIdeas(p)).length; },
+    get noIdeasCount() { return this.participants.length - this.ideasWrittenCount; },
+    /* Mailboxes the reminder would actually reach: the people with nothing written, grouped by the
+       address the server would accept. Zero here means the button would report every row as skipped,
+       so the chip says so in plain words instead of letting a click look like a success. */
+    get reminderMailboxes() {
+      return new Set(this.participants
+        .filter(p => !this.hasIdeas(p) && this.looksLikeEmail(p.email))
         .map(p => this.addressKey(p))).size;
     },
     looksLikeEmail(value) {
@@ -2014,6 +2178,9 @@ function giftExchange() {
       if (detail.includes('cannot be satisfied')) return this.t('err.unsolvable');
       if (detail.includes('empty target group')) return this.t('err.emptyTarget');
       if (detail.includes('no email address')) return this.t('err.noAddress');
+      // The reminder's "nothing to do": not a missing address, but a roster that has already written
+      // its ideas. The organizer should be told which one it was.
+      if (detail.includes('written their gift ideas')) return this.t('roster.remind_none');
       if (detail.includes('refused the send')) return this.t('err.sendFailed');
       if (detail.includes('locked')) return this.t('err.locked');
       if (detail.includes('no participants')) return this.t('err.noParticipants');
@@ -2021,6 +2188,10 @@ function giftExchange() {
       // nothing", and the fix is the same — go back to the list and pick one.
       if (detail.includes('draw does not exist')) return this.t('err.drawGone');
       if (detail.includes('No draw selected') || detail.includes('no draw yet')) return this.t('err.pickDraw');
+      // The two note refusals. Both are possible by tapping around a stale tab: a note written before
+      // the draw, and a handle for a person this link does not give gifts to.
+      if (detail.includes('draw has been run')) return this.t('plan.tooEarly');
+      if (detail.includes('not one of your picks')) return this.t('plan.notPick');
       return detail || this.t(fallbackKey || 'err.unknown');
     },
     showAdminError(response, fallbackKey) {
@@ -2281,6 +2452,26 @@ function giftExchange() {
       if (failed.length) this.toast(this.t('roster.bulk_failed', { names: failed.join(', ') }), 'warn');
       await this.loadState();
     },
+    async sendReminders() {
+      // Confirmed with real numbers, because this is the send that writes to relatives who already
+      // got their link: the organizer should see who and how many before the click, not after.
+      if (!window.confirm(this.t('roster.remind_confirm', {
+        people: this.noIdeasCount, mailboxes: this.reminderMailboxes }))) return;
+      this.sendingReminders = true;
+      this.clearAdminError();
+      const response = await this.api(this.drawPath('/api/admin/emails/reminder'),
+        { method: 'POST', body: '{}' }, true);
+      this.sendingReminders = false;
+      if (!response.ok) { this.showAdminError(response); return; }
+      // `sent` and not `asked`: the roster may hold people with no address at all, and a toast that
+      // claims they were reminded would be a lie about mail that never left. The skipped rows are
+      // named in the warning right after.
+      this.toast(this.t('roster.remind_done', { people: response.body.sent,
+                                               messages: response.body.messages }));
+      const skipped = (response.body.results || []).filter(r => !r.ok).map(r => r.name);
+      if (skipped.length) this.toast(this.t('roster.bulk_failed', { names: skipped.join(', ') }), 'warn');
+      await this.loadState();
+    },
     /* The same grouping the server applies when it bundles a household into one mail
        (`_group_by_address` in main.py): compare the trimmed, lowercased address. */
     addressKey(person) {
@@ -2297,12 +2488,15 @@ function giftExchange() {
       const shared = this.emailHousehold(person).length;
       return shared > 1 ? this.t('roster.sendSharedHelp', { n: shared }) : this.t('roster.sendHelp');
     },
-    async previewEmail(links = 1) {
+    async previewEmail(links = 1, state = null) {
+      // `state` is the template to show: null means "whatever this draw really is" (an invite before
+      // the draw, a reveal after it); the reminder button passes 'reminder' so the organizer can read
+      // the words before they go out to seven relatives.
       this.clearAdminError();
       const response = await this.api(this.drawPath('/api/admin/emails/preview'), {
         method: 'POST',
         body: JSON.stringify({ language: this.cfg.email_language,
-                               state: this.locked ? 'ready' : 'pending',
+                               state: state || (this.locked ? 'ready' : 'pending'),
                                links: links }),
       }, true);
       if (!response.ok) { this.showAdminError(response); return; }
@@ -2356,15 +2550,29 @@ function giftExchange() {
       const wasPending = this.data.status === 'PENDING';
       this.data = response.body;
       this.participant = response.body.participant;
-      this.wishlistDraft = response.body.participant.wishlist || '';
-      this.savedWishlist = this.wishlistDraft;
+      /* Never overwrite what somebody is typing. This is a re-read like any other, and a relative who
+         has been writing their ideas for half a minute would otherwise watch the box jump back to
+         what the server holds. The autosave (1.2 s after typing stops) is what makes the saved value
+         arrive here on the next load instead. */
+      const fresh = response.body.participant.wishlist || '';
+      if (!this.wishlistDirty) {
+        this.wishlistDraft = fresh;
+        this.savedWishlist = fresh;
+      }
       if (response.body.event_title) document.title = response.body.event_title;
       if (wasPending && response.body.status === 'READY') this.toast(this.t('p.readyTease'), 'info');
-      if (response.body.status === 'PENDING') this.schedulePoll();
+      this.schedulePoll();
     },
     schedulePoll() {
       clearTimeout(this.poll);
-      this.poll = setTimeout(() => { if (this.data.status === 'PENDING') this.loadDraw(); }, 25000);
+      this.poll = setTimeout(() => {
+        /* Polls keep running after the draw, not just before it: two households coordinating gift
+           money on the same afternoon are exactly the people with this page open, and a note the
+           other one just wrote should appear without anyone hunting for a refresh button. A hidden
+           tab stops asking — nobody is looking at it. */
+        if (document.visibilityState === 'visible') this.loadDraw();
+        else this.schedulePoll();
+      }, 25000);
     },
     async refreshParticipant() {
       this.busy = true;
@@ -2379,11 +2587,50 @@ function giftExchange() {
       setTimeout(() => { this.burstOn = false; }, 2200);
     },
     async copyMyList() {
+      // Picks and wishlists only, deliberately: the coordination notes are anonymous, and pasting them
+      // into a text message would hand somebody a list of unnamed promises to attribute on their own.
       const list = this.data.assignments.length
         ? this.data.assignments.map(a => `${a.name} (${this.t('role.' + a.role)})${a.wishlist ? ': ' + a.wishlist : ''}`).join('\n')
         : this.t('p.noGifts');
       if (!(await this.writeClipboard(list))) return;
       this.flashFlag('copiedList', true, false, 1800);
+    },
+
+    /* ---------- coordination notes ----------
+       One note per giver per pick, written for the other households who drew the same person. The
+       page never learns who wrote a line: `mine` is the only thing the server says about an author,
+       and it only ever describes the reader. */
+    mine(a) { return (a.notes || []).find(line => line.mine) || null; },
+    planOpen(i) { return this.planBoxes[i] === true; },
+    startPlan(i, a) {
+      this.planBoxes[i] = true;
+      const line = this.mine(a);
+      this.plans[i] = line ? line.text : '';
+      this.$nextTick(() => {
+        const box = document.getElementById(`plan-input-${i}`);
+        if (box) { box.focus(); box.setSelectionRange(box.value.length, box.value.length); }
+      });
+    },
+    closePlan(i) { delete this.planBoxes[i]; delete this.plans[i]; },
+    async savePlan(i, a, clear = false) {
+      const text = clear ? '' : (this.plans[i] || '').trim();
+      const current = this.mine(a);
+      // Nothing to send: closing the box must not be a write, and "Effacer" on an empty note would
+      // otherwise be a request that changes nothing but still sounds like one in the toast.
+      if (!clear && (!current || text === current.text) && this.plans[i] === (current ? current.text : '')) {
+        this.closePlan(i);
+        return;
+      }
+      this.busy = true;
+      const response = await this.api(`/api/draw/${encodeURIComponent(this.token)}/note`,
+        { method: 'PUT', body: JSON.stringify({ to: a.note_key, text }) });
+      this.busy = false;
+      if (!response.ok) { this.toast(this.errorText(response, 'plan.failed'), 'error'); return; }
+      // Repaint the card from the server's answer rather than from what was typed: the server is the
+      // one that decided a blank note is a deleted note.
+      if (this.data.assignments[i]) this.data.assignments[i].notes = response.body.notes;
+      this.toast(this.t(clear ? 'plan.cleared' : 'plan.saved'), clear ? 'warn' : 'info');
+      this.closePlan(i);
     },
     queueWishlistSave() {
       clearTimeout(this._saveTimer);

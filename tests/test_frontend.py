@@ -17,7 +17,13 @@ APP_SCRIPT_RE = re.compile(r"<script[^>]*>(?:(?!</script>).)*function giftExchan
 COMPONENT_METHODS = ("formatDate", "relative", "locale", "t", "toast", "drawsOf", "looksLikeEmail",
                      "drawPath", "showAdminError", "clearAdminError", "loadState", "loadDraws",
                      "parseDate", "tallyBy", "addressKey", "participantUrl", "consoleUrl",
-                     "flashFlag", "enterAdmin")
+                     "flashFlag", "enterAdmin",
+                     # The participant page's note composer: `mine(a)` in markup is fine, `mine(a)` in
+                     # JavaScript is a ReferenceError, and Alpine's absence of an error message made
+                     # that expensive once.
+                     "mine", "planOpen", "startPlan", "closePlan", "savePlan",
+                      # The reminder send and the wishlist counters behind it.
+                      "hasIdeas", "sendReminders")
 CALL_RE = re.compile(r"([\w$]*)\s*\(")
 API_CALL_RE = re.compile(r"this\.api\((`[^`]*`|'[^']*')")
 # Not draw-scoped by design: the list of draws, and the two calls that happen before a draw exists.

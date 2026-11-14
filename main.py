@@ -68,6 +68,9 @@ MAX_NAME = 80
 MAX_FAMILY_GROUP = 60
 MAX_GROUP_KEY = 60
 MAX_WISHLIST = 1000
+# A coordination note between gift givers ("je prends le jeu de société"), not an essay: the shorter
+# the cap, the more likely a relative actually reads all of them.
+MAX_NOTE = 300
 MAX_EVENT_TITLE = 120
 MAX_BUDGET_NOTE = 500
 MAX_EMAIL = 320
@@ -92,9 +95,16 @@ NO_PARTICIPANTS = "Cannot run a draw with no participants"
 DRAW_NOT_FOUND = "This draw does not exist"
 DRAW_ID_REQUIRED = "No draw selected"
 DRAW_NONE = "There is no draw yet"
+# Coordination notes exist inside a result: nobody can say what they are buying for a person until
+# the draw has named that person as their pick.
+NOTE_TOO_EARLY = "Notes open once the draw has been run"
+NOTE_NOT_A_PICK = "That note handle is not one of your picks"
 TOO_LARGE = "Request body too large"
 EMAIL_NOT_CONFIGURED = "Email sending is not configured on this server"
 EMAIL_NO_ADDRESS = "This participant has no email address"
+# The reminder's own "nothing to do": EMAIL_NO_ADDRESS would send the organizer off looking for a
+# missing address when what actually happened is that the whole roster already wrote their ideas.
+NO_MISSING_IDEAS = "Everyone has written their gift ideas"
 EMAIL_SEND_FAILED = "The email provider refused the send"
 # A mail whose links point at 127.0.0.1 is worse than no mail: it looks delivered, and every link in
 # it is dead for the person holding it. Seen for real — an admin call made from inside the container
@@ -163,7 +173,14 @@ def resend_api_key() -> str:
 
 
 def email_enabled() -> bool:
-    return bool(resend_api_key())
+    """Can this server mail anybody?
+
+    Both halves are required. A key with no verified sender address is a deployment that will refuse
+    every send, and the organizer should be told that up front: the panel says "not configured on this
+    server" (the fix is `RESEND_FROM`) instead of lighting up buttons whose every row comes back as
+    "the provider refused the send", which reads like somebody else's problem.
+    """
+    return bool(resend_api_key() and resend_from())
 
 
 def resend_from() -> str:
@@ -269,15 +286,15 @@ def _skip_rows(people: list[dict[str, Any]], reason: str) -> list[dict[str, Any]
 
 
 def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], event_title: str,
-                            language: str, base_url: str, ready: bool) -> list[dict[str, Any]]:
+                            language: str, base_url: str, state: str) -> list[dict[str, Any]]:
     """Send one email covering everyone at one address, and stamp every one of them.
 
     Returns a row per participant, because that is how the roster is read: a household of three is
     three rows, and the caller counts `messages` to know that only one mail left.
 
-    `ready` (has this draw been drawn?) is an argument, not a re-read of a settings row: with
-    several draws on one server there is no single row to read, and the caller knows which draw it
-    is mailing.
+    `state` (pending / ready / reminder) chooses the copy; it is an argument, not a re-read of a
+    settings row: with several draws on one server there is no single row to read, and the caller
+    knows which draw it is mailing.
 
     Never raises: a batch of twelve must not die on the fourth address.
     """
@@ -297,7 +314,7 @@ def deliver_household_email(conn: sqlite3.Connection, group: dict[str, Any], eve
     _throttle_before_send(address.lower())
     links = [{"name": person["name"], "link": participant_link(base_url, person["token"])}
              for person in people]
-    content = build_links_email(links, event_title, language, ready, assets_base=base_url)
+    content = build_links_email(links, event_title, language, state, assets_base=base_url)
     ids = [person["id"] for person in people]
     try:
         message_id = send_email(to=address, subject=content["subject"], html_body=content["html"],
@@ -418,9 +435,31 @@ CREATE TABLE IF NOT EXISTS assignments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     giver_id INTEGER NOT NULL,
     receiver_id INTEGER NOT NULL,
+    -- Which pick a note was written about, without handing a participant a participant id. It is a
+    -- lookup handle, not a credential: it only resolves through *your own* assignment row (see
+    -- save_note), so a note key leaked to a cousin buys them nothing. Minted per draw with the
+    -- pairings, which is what makes it expire: re-draw, new keys, old notes gone.
+    note_key TEXT,
     FOREIGN KEY (giver_id) REFERENCES participants(id) ON DELETE CASCADE,
     FOREIGN KEY (receiver_id) REFERENCES participants(id) ON DELETE CASCADE,
     UNIQUE(giver_id, receiver_id)
+);
+
+-- One coordination note per giver per receiver, anonymous to whoever reads it.
+--
+-- The note hangs off the two people, not off the pairing row, because the reason it exists is that
+-- several givers can land on the same person: ten adults each drawing two children, ten children,
+-- means a child gets gift money from three households who have no way of talking to each other
+-- except through the draw. "Je prends le livre de cuisine" written once has to reach the other two.
+-- So the row is (author, receiver), and `author_id` is stored for exactly two jobs: the one-note
+-- uniqueness, and letting the author overwrite their own line. No read path names the author.
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    author_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    receiver_id INTEGER NOT NULL REFERENCES participants(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT '',
+    UNIQUE(author_id, receiver_id)
 );
 """
 
@@ -467,6 +506,15 @@ MIGRATIONS = (
     # NULL on a draw that was already locked before this column existed: the console then says
     # "verrouillé" without inventing a date it never recorded.
     ("draws", "drawn_at", "ALTER TABLE draws ADD COLUMN drawn_at TEXT DEFAULT NULL", None),
+    # The handle a coordination note is written against (see the `notes` table). Pairings that already
+    # exist on a live database get a key here, so a family mid-draw gets the feature without a
+    # re-draw — their links, results and "already opened" stamps all stay exactly as they were.
+    # SQLite cannot attach UNIQUE in an ALTER, so the uniqueness is an index in _ensure_indexes,
+    # which runs after the backfill. The backfilled shape is plain hex rather than a uuid because
+    # `randomblob` is what SQLite has on hand and nothing in the app parses this field's shape —
+    # new pairings mint uuid4s like every other token in the system.
+    ("assignments", "note_key", "ALTER TABLE assignments ADD COLUMN note_key TEXT",
+     "UPDATE assignments SET note_key = lower(hex(randomblob(16))) WHERE note_key IS NULL"),
 )
 
 
@@ -527,6 +575,10 @@ def _ensure_default_draw(conn: sqlite3.Connection) -> None:
 def _ensure_indexes(conn: sqlite3.Connection) -> None:
     """Indexes that depend on migrated columns have to be created after the migrations."""
     conn.execute("CREATE INDEX IF NOT EXISTS participants_draw_id ON participants(draw_id)")
+    # The note handle is a lookup key on a write path, so it has to be unique: two picks answering the
+    # same handle would make "which pick did this cousin mean" a coin flip. Has to be an index rather
+    # than a column constraint, because SQLite will not add a UNIQUE column by ALTER.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS assignments_note_key ON assignments(note_key)")
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
@@ -1285,6 +1337,19 @@ EMAIL_STRINGS = {
                         "des personnes qu’ils nomment.",
         "subject_many": "{names} — vos liens · {event}",
         "subject_many_pending": "{names} — vos liens pour l’échange de cadeaux · {event}",
+        # The reminder: same link, same layout, one different question — "you have written nothing
+        # about yourself". There is no before/after-draw pair here on purpose: the ask is the same in
+        # both states, and one more mail in a parent's inbox has to be worth the write.
+        "title_reminder": "Ta liste d’idées est vide",
+        "body_reminder": ("Tu n’as encore rien écrit dans ta liste d’idées. Ouvre ton lien et ajoute "
+                          "deux ou trois mots — un livre, un jeu, une sortie. Ça ne prend pas une "
+                          "minute, et la personne qui te gâte sera bien contente de les lire."),
+        "subject_reminder": "{name} — ta liste d’idées · {event}",
+        "title_many_reminder": "Des listes d’idées sont vides",
+        "body_many_reminder": ("Vous êtes {n} ici à n’avoir encore rien écrit dans votre liste "
+                               "d’idées. Ouvrez vos liens et ajoutez deux ou trois mots chacun : les "
+                               "personnes qui vous gâtent seront bien contentes de les lire."),
+        "subject_many_reminder": "{names} — vos listes d’idées · {event}",
         # The hero art is not decoration for a screen reader: it is the whole idea of the mail
         # (le résultat est dans la boîte, et toi seul peux l’ouvrir), so it gets described.
         "gift_alt": "Un cadeau bien fermé : le couvercle a sauté et quelqu’un à l’intérieur "
@@ -1324,8 +1389,41 @@ EMAIL_STRINGS = {
                         "the people named on them.",
         "subject_many": "{names} — your links · {event}",
         "subject_many_pending": "{names} — your links for the gift exchange · {event}",
+        "title_reminder": "Your wishlist is empty",
+        "body_reminder": ("You have not written anything on your wishlist yet. Open your link and add "
+                          "two or three words — a book, a game, an outing. It takes a minute, and "
+                          "whoever is shopping for you will be glad to read them."),
+        "subject_reminder": "{name} — your wishlist · {event}",
+        "title_many_reminder": "Some wishlists are empty",
+        "body_many_reminder": ("There are {n} of you at this address with nothing written on their "
+                               "wishlist yet. Open your links and add two or three words each — the "
+                               "people shopping for you will be glad to read them."),
+        "subject_many_reminder": "{names} — your wishlists · {event}",
         "gift_alt": "A tightly closed gift: the lid has popped off and somebody inside is "
                     "pushing to get out.",
+    },
+}
+
+# Which strings each kind of mail reads. The three states are the three things this app can put in an
+# envelope: an invite before the draw, the same invite after it (different promise — the gift is there
+# now), and a reminder that the person's own ideas are missing. Keys rather than `if ready else`
+# chains, because the household copy has its own set and a ternary per field stops being readable at
+# six of them.
+EMAIL_KEYS = {
+    "pending": {
+        "subject": "subject_pending", "heading": "title_pending", "body": "body_pending",
+        "many_subject": "subject_many_pending", "many_heading": "title_many_pending",
+        "many_body": "body_many_pending",
+    },
+    "ready": {
+        "subject": "subject_ready", "heading": "title_ready", "body": "body_ready",
+        "many_subject": "subject_many", "many_heading": "title_many_ready",
+        "many_body": "body_many_ready",
+    },
+    "reminder": {
+        "subject": "subject_reminder", "heading": "title_reminder", "body": "body_reminder",
+        "many_subject": "subject_many_reminder", "many_heading": "title_many_reminder",
+        "many_body": "body_many_reminder",
     },
 }
 
@@ -1439,23 +1537,28 @@ font-size:12px;line-height:1.7">{html.escape(privacy)}<br>{html.escape(copy['foo
     return {"subject": subject, "html": html_body, "text": text_body}
 
 
-def build_email(name: str, event_title: str, link: str, language: str, ready: bool,
+def build_email(name: str, event_title: str, link: str, language: str, state: str,
                 assets_base: str = "") -> dict[str, str]:
     """Render the single-link email: one person, one link, one "ton lien".
 
     The household case (several participants sharing one mailbox) is `build_links_email`, and it has
     its own copy on purpose: "Salut Alec," and "ton lien" cannot be stretched over three people
     without reading like a bug.
+
+    `state` picks the strings — see EMAIL_KEYS. It is an argument rather than a re-read of a settings
+    row because with several draws on one server there is no single row to read, and the caller knows
+    which draw it is mailing.
     """
     copy = _email_copy(language)
+    keys = EMAIL_KEYS[state]
     title = event_title or copy["kicker"]
     # The name comes first, deliberately: a family shares one inbox, and six mails from the same
     # sender with one subject are impossible to tell apart in a phone's list view — which is where
     # the truncation happens anyway. Subject order is the only thing the mailbox sorts by.
-    subject = copy["subject_ready" if ready else "subject_pending"].format(event=title, name=name)
-    heading = copy["title_ready" if ready else "title_pending"]
+    subject = copy[keys["subject"]].format(event=title, name=name)
+    heading = copy[keys["heading"]]
     hello = copy["hello"].format(name=name)
-    body = copy["body_ready" if ready else "body_pending"]
+    body = copy[keys["body"]]
     link_note = copy["link_note"]
     safe_link = html.escape(link, quote=True)
 
@@ -1474,7 +1577,7 @@ def build_email(name: str, event_title: str, link: str, language: str, ready: bo
                                     f"{link_note}\n{link}"])
 
 
-def build_links_email(people: list[dict[str, str]], event_title: str, language: str, ready: bool,
+def build_links_email(people: list[dict[str, str]], event_title: str, language: str, state: str,
                       assets_base: str = "") -> dict[str, str]:
     """One email covering several people at one address: each person's link, each one labelled.
 
@@ -1488,17 +1591,17 @@ def build_links_email(people: list[dict[str, str]], event_title: str, language: 
     """
     if len(people) == 1:
         only = people[0]
-        return build_email(only["name"], event_title, only["link"], language, ready, assets_base)
+        return build_email(only["name"], event_title, only["link"], language, state, assets_base)
 
     copy = _email_copy(language)
+    keys = EMAIL_KEYS[state]
     title = event_title or copy["kicker"]
     names = [person["name"] for person in people]
     joined = _join_names(names, copy)
-    subject = copy["subject_many" if ready else "subject_many_pending"].format(event=title,
-                                                                              names=joined)
-    heading = copy["title_many_ready" if ready else "title_many_pending"]
+    subject = copy[keys["many_subject"]].format(event=title, names=joined)
+    heading = copy[keys["many_heading"]]
     hello = copy["hello_many"].format(names=joined)
-    body = copy["body_many_ready" if ready else "body_many_pending"].format(n=len(people))
+    body = copy[keys["many_body"]].format(n=len(people))
 
     blocks, text_lines = [], [hello, body, copy["links_note"]]
     for person in people:
@@ -1537,19 +1640,23 @@ def _all_participants(conn: sqlite3.Connection, draw_id: int | None = None) -> l
 
 
 def send_link_emails(conn: sqlite3.Connection, participants: list[dict[str, Any]],
-                     config_row: sqlite3.Row, base_url: str) -> dict[str, Any]:
+                     config_row: sqlite3.Row, base_url: str,
+                     state: str | None = None) -> dict[str, Any]:
     """Mail a set of participants: at most one email per address, all links inside it.
 
     The report stays one row per participant — that is how the roster is read, including the people
     with no address, so the console can show who was skipped instead of silently omitting an uncle —
     and it adds `messages`, the number of sends that actually went out. Twelve people at five
     mailboxes is five sends, and the console should say so rather than imply twelve.
+
+    `state` defaults to the draw's own (locked → the gift is waiting, unlocked → the link is an
+    invite); a reminder passes its own state because the ask, not the draw, is the subject.
     """
+    chosen = state or ("ready" if config_row["is_locked"] else "pending")
     results, messages = [], 0
     for group in _group_by_address(participants):
         rows = deliver_household_email(conn, group, config_row["event_title"],
-                                       config_row["email_language"], base_url,
-                                       ready=bool(config_row["is_locked"]))
+                                       config_row["email_language"], base_url, chosen)
         if any(row["ok"] for row in rows):
             messages += 1
         results += rows
@@ -1680,12 +1787,35 @@ class WishlistUpdate(BaseModel):
     wishlist: str = Field(max_length=MAX_WISHLIST)
 
 
+class NoteUpdate(BaseModel):
+    """One gift giver's note about one of their picks.
+
+    `to` is the note handle the participant payload carried on that pick — never a participant id,
+    because the participant API has never handed out ids and there is no reason to start. Its shape is
+    not validated on purpose: it is used only as a bound parameter in a lookup that also names the
+    caller, so a wrong or borrowed handle answers 404 the same way a typo would, and inventing a
+    pattern for it would mean legacy backfilled handles (plain hex, see MIGRATIONS) failing their own
+    feature after an upgrade.
+
+    Empty `text` is not "a blank note": it clears the note, which is what a relative pressing
+    "Effacer" means. It has no default on purpose — a client that forgets the field must not be able
+    to erase somebody's note by accident, so "clear" has to be said out loud.
+    """
+    to: str = Field(min_length=1, max_length=64)
+    text: str = Field(max_length=MAX_NOTE)
+
+    @field_validator("to", "text")
+    @classmethod
+    def _trimmed(cls, value: str) -> str:
+        return value.strip()
+
+
 class EmailPreviewRequest(BaseModel):
     """Sample-render the template. There is deliberately no participant field: the preview is
     meant to be screenshot-able, and real names should not end up in one. `links` picks the
     template — one link, or the household mail that carries several people's links in one mail."""
     language: Optional[Literal["fr", "en"]] = None
-    state: Literal["pending", "ready"] = "ready"
+    state: Literal["pending", "ready", "reminder"] = "ready"
     links: int = Field(default=1, ge=1, le=len(PREVIEW_NAMES))
 
 
@@ -1876,13 +2006,26 @@ def draw_transaction(conn: sqlite3.Connection):
             raise
 
 
-def _clear_assignments(conn: sqlite3.Connection, draw_id: int) -> int:
-    """Delete one draw's pairings and say how many went.
+def _clear_draw_results(conn: sqlite3.Connection, draw_id: int) -> int:
+    """Delete one draw's pairings, and the coordination notes written about them.
 
     `assignments` has no draw_id column — a pairing hangs off two participant ids — so the scope is a
     subquery, and it is not cosmetic: re-drawing the office exchange must not erase the family's
     results, and a reset on one draw must not clear another one's delivery stamps.
+
+    The notes go with the pairings on purpose, and it is a privacy call rather than tidy-ups: every
+    note is "here is what I am buying for this person", and the only people it was ever written for
+    are the co-givers of a draw that no longer exists. Keeping them through a reset would also break
+    the handle — the new pairings carry fresh note keys, so the old notes would be attached to nobody.
+
+    No transaction of its own: all three callers already hold one, and a nested BEGIN in SQLite is an
+    error, not a no-op.
     """
+    conn.execute(
+        "DELETE FROM notes WHERE author_id IN (SELECT id FROM participants WHERE draw_id = ?) "
+        "OR receiver_id IN (SELECT id FROM participants WHERE draw_id = ?)",
+        (draw_id, draw_id),
+    )
     return conn.execute(
         "DELETE FROM assignments WHERE giver_id IN "
         "(SELECT id FROM participants WHERE draw_id = ?) "
@@ -1927,6 +2070,7 @@ def limits() -> dict[str, Any]:
         "family_group": MAX_FAMILY_GROUP,
         "group_key": MAX_GROUP_KEY,
         "wishlist": MAX_WISHLIST,
+        "note": MAX_NOTE,
         "email": MAX_EMAIL,
         "event_title": MAX_EVENT_TITLE,
         "budget_note": MAX_BUDGET_NOTE,
@@ -2059,7 +2203,10 @@ def create_draw(
     rows get brand new tokens and no `viewed_at` / `email_sent_at`, because a link that already went
     out to last year's pairing must not silently become this year's credential. Two draws sharing a
     token would also break the one property the participant URL relies on: whoever holds a token
-    holds exactly one draw.
+    holds exactly one draw. The same reasoning keeps the coordination notes out of the copy: they are
+    new rows with new ids, so nothing points at them, and last year's "le livre de cuisine est pris"
+    is not this year's conversation. That is a consequence of how the rows are written, so
+    tests/test_notes.py pins it rather than trusting it.
     """
     created = conn.execute(
         "INSERT INTO draws (event_title, budget_note, created_at) VALUES (?, ?, ?)",
@@ -2104,7 +2251,7 @@ def delete_draw(
     row = _draw_row(conn, draw_id)
     _reject_if_locked(row)
     with draw_transaction(conn):
-        _clear_assignments(conn, draw_id)
+        _clear_draw_results(conn, draw_id)
         gone = conn.execute("DELETE FROM participants WHERE draw_id = ?", (draw_id,)).rowcount
         conn.execute("DELETE FROM draws WHERE id = ?", (draw_id,))
     audit("draw_deleted", ip=client_ip(request), draw_id=draw_id, participants_removed=gone)
@@ -2236,8 +2383,13 @@ def run_draw(
     pairs, crossed = generate_draw(_config_dict(config_row), participants)
 
     with draw_transaction(conn):
-        _clear_assignments(conn, target)
-        conn.executemany("INSERT INTO assignments (giver_id, receiver_id) VALUES (?, ?)", pairs)
+        _clear_draw_results(conn, target)
+        # A note handle per pairing: uuid4 like every other token here, so a note key is redacted by
+        # `redacted_path` if it ever shows up in a path, and it cannot be guessed.
+        conn.executemany(
+            "INSERT INTO assignments (giver_id, receiver_id, note_key) VALUES (?, ?, ?)",
+            [(giver, receiver, str(uuid.uuid4())) for giver, receiver in pairs],
+        )
         conn.execute("UPDATE draws SET is_locked = 1, drawn_at = ? WHERE id = ?", (utc_now(), target))
     audit("draw_locked", ip=client_ip(request), draw_id=target, assignments=len(pairs),
           same_group_crossings=crossed)
@@ -2248,12 +2400,13 @@ def run_draw(
     # refused, and the rest are the organizer's to hand out in person.
     emailed = None
     if config_row["auto_email_on_draw"]:
-        # Re-read the row. The mail's copy is chosen by `ready=bool(config_row["is_locked"])`, and the
-        # row in hand was read at the top of this endpoint, *before* the lock above — so it still says
-        # 0, and every link mailed by "draw and send" introduced itself as "Le tirage n'a pas encore
-        # été fait" while its own link opened straight onto the reveal. The object looks freshly named
-        # and every other column in it is still current, which is what makes the trap. The manual send
-        # paths never had it: they call `_load_config` at send time.
+        # Re-read the row. The mail's copy is chosen by `send_link_emails`'s default state, read from
+        # `config_row["is_locked"]`, and the row in hand was read at the top of this endpoint, *before*
+        # the lock above — so it still says 0, and every link mailed by "draw and send" introduced
+        # itself as "Le tirage n'a pas encore été fait" while its own link opened straight onto the
+        # reveal. The object looks freshly named and every other column in it is still current, which
+        # is what makes the trap. The manual send paths never had it: they call `_load_config` at
+        # send time.
         config_row = _load_config(conn, target)
         base_url = mail_base_url(request)
         with_email = [p for p in _all_participants(conn, target) if p["email"]]
@@ -2277,7 +2430,7 @@ def reset_draw(
 ) -> dict[str, Any]:
     target = select_draw_id(conn, draw_id)
     with draw_transaction(conn):
-        _clear_assignments(conn, target)
+        _clear_draw_results(conn, target)
         # Both stamps describe the current draw, not the person: a re-draw means the links reveal
         # something new AND the old mail quotes an obsolete draw. The addresses themselves survive —
         # only the "this draw went out" stamps reset.
@@ -2305,18 +2458,32 @@ def _email_rate_check(request: Request, attempts: int) -> None:
 
 
 def _send_rows_or_422(request: Request, conn: sqlite3.Connection, people: list[dict[str, Any]],
-                      config_row: sqlite3.Row) -> dict[str, Any]:
+                      config_row: sqlite3.Row, state: str | None = None,
+                      nothing: str = EMAIL_NO_ADDRESS) -> dict[str, Any]:
     # The limit counts *sends*, not people: twelve relatives at five mailboxes cost five provider
     # calls, and billing the organizer for twelve would throttle the wrong thing.
     _email_rate_check(request, max(1, len(_group_by_address(people))))
     if not people:
-        raise HTTPException(status_code=422, detail=EMAIL_NO_ADDRESS)
+        # `nothing` names the real reason. The bulk send has no people because nobody has an address;
+        # the reminder has no people because everybody already wrote their ideas, and sending the
+        # organizer off to look for a missing address would be a wrong diagnosis.
+        raise HTTPException(status_code=422, detail=nothing)
     if not email_enabled():
         raise HTTPException(status_code=503, detail=EMAIL_NOT_CONFIGURED)
     base_url = mail_base_url(request)
     if not base_url:
         raise HTTPException(status_code=503, detail=EMAIL_BAD_BASE_URL)
-    return send_link_emails(conn, people, config_row, base_url)
+    return send_link_emails(conn, people, config_row, base_url, state)
+
+
+def _missing_ideas(participants: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The people who have written nothing about themselves.
+
+    Whitespace counts as nothing — a stray space left in the box is not something a gift giver can
+    buy. This is the rule the console's roster shows and counts, so the reminder button's number and
+    the mail it sends can only agree while both use it.
+    """
+    return [person for person in participants if not (person["wishlist"] or "").strip()]
 
 
 @app.post("/api/admin/participants/{participant_id}/email", dependencies=[Depends(enforce_api_limit)])
@@ -2373,6 +2540,33 @@ def email_all_links(
     return {"status": "OK", **report}
 
 
+@app.post("/api/admin/emails/reminder", dependencies=[Depends(enforce_api_limit)])
+def email_reminders(
+    request: Request,
+    draw_id: int | None = None,
+    conn: sqlite3.Connection = Depends(get_db),
+    _: None = Depends(require_admin),
+) -> dict[str, Any]:
+    """Ask the people who have written no gift ideas for themselves to write some.
+
+    A separate call rather than a filter on the bulk send because the two asks carry different words:
+    "here is your link" and "nobody knows what to buy you" are different emails, and the second one is
+    answered by reading the roster. Everything else is deliberately the same machinery — one mail per
+    mailbox, and each mail carries the links of only the people it names, so nudging one parent never
+    shows another household their link.
+
+    What the reminder can say is small by construction: the reader's own empty wishlist and their own
+    link. It names nobody else's gifts, no pairing, and no other family.
+    """
+    target = select_draw_id(conn, draw_id)
+    missing = _missing_ideas(_all_participants(conn, target))
+    report = _send_rows_or_422(request, conn, missing, _load_config(conn, target),
+                               state="reminder", nothing=NO_MISSING_IDEAS)
+    audit("email_reminders", ip=client_ip(request), draw_id=target, asked=len(missing),
+          sent=report["sent"], failed=report["failed"])
+    return {"status": "OK", "asked": len(missing), **report}
+
+
 @app.post("/api/admin/emails/preview", dependencies=[Depends(enforce_api_limit)])
 def email_preview(
     payload: EmailPreviewRequest,
@@ -2394,8 +2588,8 @@ def email_preview(
     sample = "00000000-0000-0000-0000-000000000000"
     people = [{"name": name, "link": participant_link(base_url, sample)}
               for name in PREVIEW_NAMES[:max(1, payload.links)]]
-    content = build_links_email(people, config_row["event_title"], language,
-                                ready=payload.state == "ready", assets_base=base_url)
+    content = build_links_email(people, config_row["event_title"], language, payload.state,
+                                assets_base=base_url)
     audit("email_previewed", ip=client_ip(request), language=language, state=payload.state,
           links=len(people))
     return {"status": "OK", "language": language, "state": payload.state,
@@ -2417,6 +2611,45 @@ def _participant_by_token(conn: sqlite3.Connection, token: str) -> sqlite3.Row:
     if row is None:
         raise HTTPException(status_code=404, detail="Invalid link")
     return row
+
+
+def _notes_map(conn: sqlite3.Connection, receiver_ids: list[int],
+               reader_id: int) -> dict[int, list[dict[str, Any]]]:
+    """Every note about these people, as a participant may see them.
+
+    One query, keyed by receiver, so a giver with three picks pays one read instead of three. What
+    comes out is deliberately two fields: the text and whether the reader wrote it. Not the author's
+    name, not their id, not a timestamp — the point of the note is that a household can say "the
+    gift card is mine" without that being traceable to a household, and a timestamp would let two
+    co-givers work out who is who from the order the notes arrived in.
+    """
+    if not receiver_ids:
+        return {}
+    marks = ", ".join("?" * len(receiver_ids))
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    for note in conn.execute(
+            f"SELECT receiver_id, author_id, text FROM notes WHERE receiver_id IN ({marks}) "
+            "ORDER BY id", receiver_ids):
+        grouped.setdefault(note["receiver_id"], []).append(
+            {"text": note["text"], "mine": note["author_id"] == reader_id}
+        )
+    return grouped
+
+
+def _giver_counts(conn: sqlite3.Connection, receiver_ids: list[int]) -> dict[int, int]:
+    """How many people each of these participants is a gift for.
+
+    A count, never a list: the page has to know whether the note box is worth showing at all — one
+    giver means nobody would ever read what was written there — and the family does not need to learn
+    who the other households are. It is the only piece of draw structure the participant page is
+    given, and a number says nothing about who pige qui.
+    """
+    if not receiver_ids:
+        return {}
+    marks = ", ".join("?" * len(receiver_ids))
+    return {row["receiver_id"]: row["givers"] for row in conn.execute(
+        f"SELECT receiver_id, COUNT(*) AS givers FROM assignments "
+        f"WHERE receiver_id IN ({marks}) GROUP BY receiver_id", receiver_ids)}
 
 
 @app.get("/api/draw/{token}", dependencies=[Depends(enforce_draw_limit)])
@@ -2453,11 +2686,15 @@ def get_draw(
         audit("link_opened", participant_id=participant["id"])
 
     rows = conn.execute(
-        "SELECT p.name, p.role, p.wishlist FROM assignments a "
+        "SELECT p.id AS receiver_id, p.name, p.role, p.wishlist, a.note_key FROM assignments a "
         "JOIN participants p ON p.id = a.receiver_id "
         "WHERE a.giver_id = ? ORDER BY p.id",
         (participant["id"],),
     ).fetchall()
+    receiver_ids = [row["receiver_id"] for row in rows]
+    notes = _notes_map(conn, receiver_ids, participant["id"])
+    # Who else is giving to each of my picks — see _giver_counts for why that is a number.
+    givers = _giver_counts(conn, receiver_ids)
     return {
         "status": "READY",
         "event_title": config["event_title"],
@@ -2468,10 +2705,74 @@ def get_draw(
             "wishlist": participant["wishlist"],
         },
         "assignments": [
-            {"name": row["name"], "role": row["role"], "wishlist": row["wishlist"]}
+            {
+                "name": row["name"],
+                "role": row["role"],
+                "wishlist": row["wishlist"],
+                # The handle this pick's note is written against. Not an id, and not a credential:
+                # save_note resolves it only among the caller's own pairings.
+                "note_key": row["note_key"],
+                "co_givers": givers.get(row["receiver_id"], 1),
+                "notes": notes.get(row["receiver_id"], []),
+            }
             for row in rows
         ],
     }
+
+
+@app.put("/api/draw/{token}/note", dependencies=[Depends(enforce_draw_limit)])
+def save_note(
+    token: str,
+    payload: NoteUpdate,
+    request: Request,
+    conn: sqlite3.Connection = Depends(get_db),
+) -> dict[str, Any]:
+    """Write (or clear) this participant's one note about one of their picks.
+
+    Three checks, in this order, and each one is a different mistake:
+
+    * the draw has to have run — a note is "what I am buying for the person I got", and before the
+      draw there is no person they got;
+    * the handle has to resolve through *this* participant's pairing, which is what stops a note being
+      written about anybody in the family, and stops one cousin submitting another cousin's handle:
+      the handle is looked up with `giver_id = me` in the WHERE clause, so a key from someone else's
+      card is simply not found;
+    * an empty text deletes the note rather than leaving a blank line on a relative's card.
+
+    The response is the note list for that person, so the page can repaint without a round trip. The
+    other household sees it on their next load; there is no push, and a family coordinating gift money
+    over an afternoon will reload. Nothing about the note's author is ever returned, so this endpoint
+    cannot be used to ask "did Mario write something?" — the answer is always the same anonymous list.
+    """
+    participant = _participant_by_token(conn, token)
+    if not conn.execute("SELECT is_locked FROM draws WHERE id = ?",
+                        (participant["draw_id"],)).fetchone()["is_locked"]:
+        raise HTTPException(status_code=409, detail=NOTE_TOO_EARLY)
+
+    picked = conn.execute(
+        "SELECT receiver_id FROM assignments WHERE note_key = ? AND giver_id = ?",
+        (payload.to, participant["id"]),
+    ).fetchone()
+    if picked is None:
+        raise HTTPException(status_code=404, detail=NOTE_NOT_A_PICK)
+
+    if payload.text:
+        conn.execute(
+            "INSERT INTO notes (author_id, receiver_id, text, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(author_id, receiver_id) DO UPDATE SET text = excluded.text, "
+            "updated_at = excluded.updated_at",
+            (participant["id"], picked["receiver_id"], payload.text, utc_now()),
+        )
+    else:
+        conn.execute("DELETE FROM notes WHERE author_id = ? AND receiver_id = ?",
+                     (participant["id"], picked["receiver_id"]))
+    # The note's text never reaches the log: it is family conversation, and the journal on a real
+    # host is readable by anyone who can read the database.
+    audit("note_saved", ip=client_ip(request), participant_id=participant["id"],
+          draw_id=participant["draw_id"], cleared=not payload.text)
+    return {"status": "OK",
+            "notes": _notes_map(conn, [picked["receiver_id"]], participant["id"])
+                     .get(picked["receiver_id"], [])}
 
 
 @app.put("/api/draw/{token}/wishlist", dependencies=[Depends(enforce_draw_limit)])

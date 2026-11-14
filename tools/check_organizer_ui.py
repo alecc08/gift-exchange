@@ -12,7 +12,10 @@ throws renders an empty box), so this walks the exact paths:
   2. turn "Éviter les piges dans le même groupe" off, save, reload — it must still be off and the
      panel must not read "unsaved changes" (the bug that would happen if one copy kept 0 and the
      other kept false);
-  3. add a roster with two households, one of them two people deep, and filter by group;
+  3. add a roster with two households, one of them two people deep, filter by group, and check the
+     wishlist counters: the count of people who wrote their ideas, a marker on every row that did not,
+     and the bulk "Relancer les N sans idées" button — present, counting, and refused on a server that
+     cannot send mail;
   4. check the console *predicts* the crossing the arithmetic forces, that the draw button stays
      enabled (a relaxable rule must not block the draw), and that it then *reports* it;
   5. reset, add a person who makes a clean draw possible, and check the notice flips;
@@ -22,7 +25,11 @@ throws renders an empty box), so this walks the exact paths:
   8. switch to EN and fail on any raw i18n key left on screen;
   9. leave the console and check the family's half of the same bundle at 390 px: the hostname, a
      mistyped address and a stale link from the first mailing all render the landing card, with no
-     password field, no echoed token, no horizontal scroll and no raw key in either language.
+     password field, no echoed token, no horizontal scroll and no raw key in either language;
+  10. re-shape that draw so two adults drew the same person, then walk the coordination notes from
+     both ends in a browser: write one on a card, see it arrive on the co-giver's card labelled
+     *Anonyme*, see nobody's name attached to it, keep it off the person it is about, and hold the
+     revealed card at 360, 390, 768, 1024 and 1440 px without anything hanging off the screen.
 
 Exits non-zero on a failed assertion, a console error, or a page error. The Tailwind CDN warning is
 ignored: it is the documented cost of a no-build frontend.
@@ -56,8 +63,10 @@ class Console:
     status, so the check can prove the refusal happened without tripping its own alarm.
     """
 
-    def __init__(self, page):
-        self.problems = []
+    def __init__(self, page, sink=None):
+        # One list for every page the run opens: the family's links are separate browser contexts, and
+        # a console error on a relative's phone is the same problem the organizer's screen would show.
+        self.problems = sink if sink is not None else []
         self.allowed: dict[str, int] = {}
         page.on("console", lambda msg: self.record(f"console {msg.type}: {msg.text}")
                 if msg.type in ("error", "warning") and "cdn.tailwindcss.com" not in msg.text else None)
@@ -72,6 +81,41 @@ class Console:
                 self.allowed[fragment] = count - 1
                 return
         self.problems.append(text)
+
+
+# Anything drawn past the viewport edge. Fixed decorations and the falling snow are excluded on
+# purpose: they are positioned against the window by design, and the snow is deliberately allowed to
+# sit half off-screen. So is anything a parent clips — the family card's corner flakes run past the
+# edge behind `overflow-hidden`, which is the whole reason they cannot be seen or scrolled to.
+OFFSCREEN_JS = """() => {
+  const vw = document.documentElement.clientWidth;
+  const clipped = (el) => {
+    for (let node = el.parentElement; node; node = node.parentElement) {
+      const cs = getComputedStyle(node);
+      if (cs.overflowX !== 'visible' || cs.overflowY !== 'visible') return true;
+    }
+    return false;
+  };
+  return [...document.querySelectorAll('body *')].filter(el => {
+    const r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return false;
+    const cs = getComputedStyle(el);
+    if (cs.position === 'fixed' || el.closest('#snow')) return false;
+    if (r.right > vw + 1 || r.left < -1) return !clipped(el);
+    return false;
+  }).map(el => el.tagName.toLowerCase() + ' ' + (typeof el.className === 'string' ? el.className : ''));
+}"""
+
+
+def fits(page, width: int, height: int = 844) -> None:
+    """Resize, then fail on the two ways a layout breaks on a phone."""
+    page.set_viewport_size({"width": width, "height": height})
+    page.wait_for_timeout(300)
+    stray = page.evaluate(OFFSCREEN_JS)
+    assert not stray, f"{width}px: outside the viewport: {stray[:3]}"
+    scroll = page.evaluate(
+        "document.documentElement.scrollWidth - document.documentElement.clientWidth")
+    assert scroll <= 1, f"{width}px: horizontal scroll ({scroll}px)"
 
 
 def main() -> int:
@@ -89,10 +133,12 @@ def main() -> int:
             next click time out for reasons that have nothing to do with the feature."""
             page.wait_for_function(f"{DATA}.busy === false")
 
-        def add_person(name, family, group):
+        def add_person(name, family, group, wishlist=""):
             page.fill("#p-name", name)
             page.fill("#p-family", family)
             page.fill("#p-group", group)
+            if wishlist:
+                page.fill("#p-wish", wishlist)
             page.wait_for_function(f"{DATA}.draftReady === true")
             page.get_by_role("button", name="Ajouter").click()
             idle()
@@ -149,8 +195,11 @@ def main() -> int:
         page.get_by_role("button", name=re.compile("Enregistrer les règles")).click()
         idle()
 
+        # Carole writes her ideas, the others do not: that is the state the wishlist counters and the
+        # reminder button have to describe.
+        WISHLISTS = {"Carole": "Deux vinyles des années 70"}
         for name, family, group in ROSTER:
-            add_person(name, family, group)
+            add_person(name, family, group, WISHLISTS.get(name, ""))
         # The add is a fetch, and the row list is a second one after it: wait for the roster to
         # actually show three people before counting, or the count is whatever happened to be in.
         page.wait_for_function(
@@ -165,6 +214,28 @@ def main() -> int:
         assert rows.count() == 2, "filtering by group did not narrow the table"
         page.get_by_role("button", name="Montre tout le monde").click()
 
+        # ------------------------------------------------------------------ #
+        # Wishlists: the console has to show who has written nothing about themselves, and offer the
+        # nudge. This instance has no RESEND_API_KEY, so the button is checked in the state a family
+        # without mail setup really sees: counted, present, and refused.
+        # ------------------------------------------------------------------ #
+        page.locator("text=Idées écrites :").first.scroll_into_view_if_needed()
+        assert page.locator("text=Idées écrites : 1 sur 3").count() == 1, \
+            "the roster does not count the people who wrote their ideas"
+        # Counted through innerText, not the locator count: an `x-show` chip stays in the DOM with
+        # display:none, so a locator would count the marker on the one row that has ideas too.
+        visible_without_ideas = page.evaluate(
+            "() => [...document.querySelectorAll('#roster-table tr.part')]"
+            ".filter(tr => tr.innerText.includes('Aucune idée écrite')).length")
+        assert visible_without_ideas == 2, \
+            "a roster row with an empty wishlist carries no marker"
+        remind = page.get_by_role("button", name="Relancer les 2 sans idées")
+        assert remind.count() == 1, "no bulk reminder button for the two relatives with no ideas"
+        assert not remind.is_enabled(), \
+            "a reminder can be clicked on a server that cannot send mail"
+        assert page.locator("text=L’envoi de courriels n’est pas configuré").count() >= 1, \
+            "the email block does not say why it cannot send"
+
         page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
         page.wait_for_selector("text=devra bien piger 1 fois")
         draw = page.get_by_role("button", name=re.compile("Lancer le tirage"))
@@ -178,6 +249,13 @@ def main() -> int:
         page.get_by_role("button", name="Recommencer le tirage").click()
         page.wait_for_selector("text=Tirage recommencé")
         add_person("Gaétan", "Tremblay", "Tremblay (chez Réjean)")
+        # The counters follow the roster, they are not a snapshot from page load: a fourth relative
+        # with nothing written is a fourth person the reminder has to reach.
+        page.locator("text=Idées écrites : 1 sur 4").scroll_into_view_if_needed()
+        assert page.locator("text=Idées écrites : 1 sur 4").count() == 1, \
+            "the wishlist counter ignored the person just added"
+        assert page.get_by_role("button", name="Relancer les 3 sans idées").count() == 1, \
+            "the reminder button still quotes the old count"
         page.locator("h2", has_text="Le tirage").scroll_into_view_if_needed()
         assert page.locator("text=devra bien piger").first.is_hidden(), \
             "the console still predicts a crossing that is no longer needed"
@@ -269,33 +347,28 @@ def main() -> int:
         participant_token = page.evaluate(f"{DATA}.participants[0].token") or \
             "00000000-0000-0000-0000-000000000000"
         for width in (390, 360):
-            page.set_viewport_size({"width": width, "height": 844})
-            page.wait_for_timeout(300)
-            offscreen = page.evaluate("""() => {
-              const vw = document.documentElement.clientWidth;
-              return [...document.querySelectorAll('body *')].filter(el => {
-                const r = el.getBoundingClientRect();
-                if (!r.width || !r.height) return false;
-                const cs = getComputedStyle(el);
-                if (cs.position === 'fixed' || el.closest('#snow')) return false;
-                return r.right > vw + 1 || r.left < -1;
-              }).map(el => el.tagName.toLowerCase() + ' ' + (typeof el.className === 'string' ? el.className : ''));
-            }""")
-            assert not offscreen, f"{width}px: outside the viewport: {offscreen[:3]}"
-            assert page.evaluate("document.documentElement.scrollWidth") <= \
-                page.evaluate("document.documentElement.clientWidth") + 1, f"{width}px: horizontal scroll"
+            fits(page, width)
         assert page.evaluate("getComputedStyle(document.querySelector('#roster-table thead')).display") == "none", \
             "the roster is still a wide table at phone width"
         unlabelled = page.evaluate(
             "[...document.querySelectorAll('#roster-table tr.part td')].filter(td => !td.dataset.label).length")
         assert unlabelled == 0, "a card cell lost the column name it is labelled with"
+        assert page.get_by_role("button", name=re.compile(r"^Relancer les \d+ sans idées$")).count() == 1, \
+            "the reminder row falls off the console at phone width"
+        assert page.evaluate(
+            "() => [...document.querySelectorAll('#roster-table tr.part')]"
+            ".filter(tr => tr.innerText.includes('Aucune idée écrite')).length") >= 1, \
+            "the roster cards lost the no-ideas marker"
         page.set_viewport_size({"width": 1440, "height": 950})
         page.wait_for_timeout(250)
 
         page.get_by_role("button", name="EN", exact=True).click()
         page.wait_for_selector("text=Avoid picks within the same group")
         page.wait_for_selector("text=Nobody drew inside their own group.")
-        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z0-9_.]+/").count(), \
+        assert page.get_by_role("button", name=re.compile(r"^Remind the \d+ with no ideas$")).count() == 1, \
+            "the reminder button has no English label"
+        assert page.locator("text=Wishlists filled:").count() == 1, "the wishlist counter is not translated"
+        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn|plan)\.[a-zA-Z0-9_.]+/").count(), \
             "a raw i18n key is visible on screen"
 
         # ------------------------------------------------------------------ #
@@ -337,6 +410,137 @@ def main() -> int:
             page.wait_for_timeout(200)
             assert title_en and page.title() != title_en, \
                 f"{path}: the tab title ignores the language switch ({title_en!r} / {page.title()!r})"
+
+        # ------------------------------------------------------------------ #
+        # The family's half again, this time with two households on the same person: the notes they
+        # leave each other. The draw is re-shaped first — four adults each giving two gifts means
+        # everybody has two givers, which is the situation the feature exists for. After that,
+        # everything happens the way a relative does it: open the link, open the gift, type in the box,
+        # and look at what the other person's phone says.
+        # ------------------------------------------------------------------ #
+        page.evaluate("""async () => {
+          const headers = { 'Content-Type': 'application/json',
+                            Authorization: 'Bearer ' + sessionStorage.getItem('ge_admin_token') };
+          await fetch('/api/admin/reset', { method: 'POST', headers, body: '{}' });
+          await fetch('/api/admin/config', { method: 'PUT', headers, body: JSON.stringify({
+            adult_draws_adult: 2, adult_draws_child: 0,
+            child_draws_adult: 0, child_draws_child: 0 }) });
+          await fetch('/api/admin/draw', { method: 'POST', headers, body: '{}' });
+        }""")
+        shared = page.evaluate("""async () => {
+          const headers = { 'Content-Type': 'application/json',
+                            Authorization: 'Bearer ' + sessionStorage.getItem('ge_admin_token') };
+          const state = await (await fetch('/api/admin/state', { headers })).json();
+          const givers = {};
+          for (const person of state.participants) {
+            const view = await (await fetch(`/api/draw/${person.token}`)).json();
+            for (const card of view.assignments || []) {
+              givers[card.name] = givers[card.name] || [];
+              givers[card.name].push({ name: person.name, token: person.token, key: card.note_key });
+            }
+          }
+          const shared = Object.entries(givers).filter(([, group]) => group.length >= 2);
+          return shared.length ? { person: shared[0][0], givers: shared[0][1] } : null;
+        }""")
+        assert shared, "with every adult giving two gifts, nobody ended up with two givers"
+        author, reader = shared["givers"][:2]
+        note = "je prends le livre de cuisine"
+
+        # ...and the person the note is about, straight out of the pairing the draw made.
+        target = page.evaluate(
+            """async (name) => {
+              const headers = { 'Content-Type': 'application/json',
+                                Authorization: 'Bearer ' + sessionStorage.getItem('ge_admin_token') };
+              const state = await (await fetch('/api/admin/state', { headers })).json();
+              return (state.participants.find(person => person.name === name) || {}).token || null;
+            }""", shared["person"])
+        assert target, "the person with two givers has no link, which should be impossible"
+
+        # The author, at a desk: the block is on the card, the box opens, the note saves.
+        writer = browser.new_context(viewport={"width": 1440, "height": 950}, locale="fr-CA").new_page()
+        Console(writer, problems.problems)
+        writer.goto(f"{BASE}/?t={author['token']}", wait_until="networkidle")
+        writer.wait_for_selector("#reveal-btn")
+        writer.click("#reveal-btn")
+        card = writer.locator("article", has_text=shared["person"])
+        assert card.locator("text=Ce que les autres prévoient").count() == 1, \
+            "a gift card has no room for the co-givers' notes"
+        assert card.locator("text=Vous êtes 2 à gâter cette personne").count() == 1, \
+            "the card never says how many households share this person"
+        assert card.locator("text=Anonyme").count() == 0, "a note appeared before anybody wrote one"
+        card.get_by_role("button", name="Dire ce que je prends").click()
+        card.locator("textarea").fill(note)
+        card.get_by_role("button", name="Enregistrer la note").click()
+        writer.wait_for_selector("text=Ta note est partie")
+        writer.wait_for_selector(".chip:text-is('Ta note')")
+        assert writer.locator("article", has_text=shared["person"]).locator(f"text={note}").count() == 1, \
+            "my own note is not on my own card"
+
+        # The same card, every width it will be read at: a long anonymous line and a two-button row
+        # have to survive a 360 px phone without pushing anything past the edge.
+        for width in (360, 390, 768, 1024, 1440):
+            fits(writer, width, 900)
+            assert writer.locator("article", has_text=shared["person"]).locator(f"text={note}").count() == 1, \
+                f"{width}px: the note disappeared from the card"
+
+        # The other household, on a phone: it arrived, it is labelled anonymous, and nothing on the
+        # screen says who wrote it.
+        other = browser.new_context(viewport={"width": 390, "height": 844}, locale="fr-CA").new_page()
+        Console(other, problems.problems)
+        other.goto(f"{BASE}/?t={reader['token']}", wait_until="networkidle")
+        other.wait_for_selector("#reveal-btn")
+        other.click("#reveal-btn")
+        their_card = other.locator("article", has_text=shared["person"])
+        assert their_card.locator(f"text={note}").count() == 1, "the second household never got the note"
+        assert their_card.locator("text=Anonyme").count() == 1, "the note arrived without its label"
+        assert author["name"] not in other.locator("body").inner_text(), \
+            "a note could be traced back to the household that wrote it"
+        fits(other, 390)
+
+        # English, because the block has to exist in both locales and a missing key renders its name.
+        other.get_by_role("button", name="EN", exact=True).click()
+        other.wait_for_timeout(300)
+        assert their_card.locator("text=What the other givers plan").count() == 1, \
+            "the note block has no English copy"
+        assert their_card.locator("text=Anonymous").count() == 1, "the anonymous label is not translated"
+        assert not other.locator(r"text=/\bplan\.[a-zA-Z0-9]+/").count(), "a raw i18n key on a relative's page"
+        other.get_by_role("button", name="FR", exact=True).click()
+        other.wait_for_timeout(300)
+
+        # Writing and clearing from the phone, which is where the second household really is.
+        answer = "le jeu de société est déjà pris"
+        their_card.get_by_role("button", name="Dire ce que je prends").click()
+        their_card.locator("textarea").fill(answer)
+        their_card.get_by_role("button", name="Enregistrer la note").click()
+        other.wait_for_selector("text=Ta note est partie")
+
+        HAS_NOTE = """(needle) => [...document.querySelectorAll('article')]
+          .some(article => article.innerText.includes(needle))"""
+        LOST_NOTE = """(needle) => ![...document.querySelectorAll('article')]
+          .some(article => article.innerText.includes(needle))"""
+        # No reload on the first household's screen: the page keeps re-reading itself, which is the
+        # half of the feature that makes it usable by two people in one house. The interval is 25 s,
+        # so the wait is bounded by that — and a poll that stopped running fails here, not in December.
+        writer.wait_for_function(HAS_NOTE, arg=answer, timeout=45000)
+
+        their_card.get_by_role("button", name="Dire ce que je prends").click()
+        their_card.get_by_role("button", name="Effacer ma note").click()
+        other.wait_for_selector("text=Ta note est effacée")
+        writer.wait_for_function(LOST_NOTE, arg=answer, timeout=45000)
+        assert writer.locator("article", has_text=shared["person"]).locator(
+            f"text={answer}").count() == 0, "a cleared note stayed on the card"
+
+        # The spoiler rule, in the browser: the person three households are shopping for sees their
+        # own picks and wishlists, never what people are planning to buy them.
+        subject = browser.new_context(viewport={"width": 390, "height": 844}, locale="fr-CA").new_page()
+        Console(subject, problems.problems)
+        subject.goto(f"{BASE}/?t={target}", wait_until="networkidle")
+        subject.wait_for_selector("#reveal-btn")
+        subject.click("#reveal-btn")
+        assert note not in subject.locator("body").inner_text(), \
+            "a relative was shown what other people are buying for them"
+        fits(subject, 390)
+
         browser.close()
 
     for problem in dict.fromkeys(problems.problems):
