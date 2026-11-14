@@ -1116,7 +1116,7 @@ password, the login budget and the lockout. What was wrong was the front door.
 
 | Path | Screen | Notes |
 |---|---|---|
-| `/` | the family's page | landing card, or one person's own page with `?t=<uuid>` |
+| `/` | the family's page | the page that explains the game and says where their link is; with `?t=<uuid>` it is one person's own page |
 | `/admin` | the organizer console | `ADMIN_PATH` moves it; `X-Robots-Tag: noindex, nofollow`; no share tags |
 | an address that is not the console, the API or a file | the family's page | a mistyped address gets an explanation instead of `{"detail":"Not Found"}`; `/api/…`, `/openapi.json`, `/favicon.ico` and `/admin/…` are probes, and answer the API's 404 |
 
@@ -1125,7 +1125,7 @@ password, the login budget and the lockout. What was wrong was the front door.
 document with no flag opens the family's page, never the console. Nothing on the family's page names
 the console path, and `tests/test_pages.py` fails if it ever does: every `/admin` in the bundle must be
 preceded by `/api`, and `'/?draw=` / `replaceState({}, '', '/')` are banned outright, because those two
-were how a signed-in organizer would have been ejected onto the landing card mid-session.
+were how a signed-in organizer would have been ejected onto the family's page mid-session.
 
 **`ADMIN_PATH` is validated, not trusted.** `normalize_organizer_path()` corrects the obvious
 (`admin` → `/admin`, `/Admin/` → `/Admin`, `/a/./b` → `/a/b`) and refuses what it cannot make safe: a
@@ -1143,7 +1143,7 @@ was the repair. The links were re-sent from the one builder (`participant_link()
 button uses the same shape, and a redirect whose only customer is an address nobody mails any more is
 a route nobody maintains — it also needed its own rate limit, its own UUID-shape check and its own log
 redaction to stay honest. What replaces it is the honest behaviour: the path is not an endpoint, so it
-renders the landing card, which tells the family where their real link is. It never reads a token out
+renders the family's landing page, which tells them where their real link is. It never reads a token out
 of a path segment, and a test asserts the token appears nowhere in the response. Two tests that pinned
 the 302 were deleted with it; `test_the_link_shape_the_mail_carries_is_the_shape_the_spa_reads` stays,
 because that is the one holding the console and the mail template together.
@@ -1185,16 +1185,17 @@ because that is the one holding the console and the mail template together.
   call (the throttle sizes are import-time), `DRAW_RULE_COLUMNS` said three places had to agree (it is
   four), and `participant_link()` described `/draw/<uuid>` as a route that answers something.
 
-**Verification.** 233 tests, up from 186: `tests/test_pages.py` (44 cases — the two shells, the
+**Verification.** 234 tests, up from 186: `tests/test_pages.py` (44 cases — the two shells, the
 fail-closed flag, the catch-all leaving `/api`, `/static` and asset requests alone, and `ADMIN_PATH`
 normalization), the CSP/preview-origin test, the rate-limiter and send-throttle sweeps, and the
 rewritten stale-link test. `tools/check_organizer_ui.py` passes clean against a live instance at
 `/admin` (login → draw list → rules → roster → group filter → predicted crossing → second draw →
-delete → 390 px → EN, no console errors, no raw keys), and a Playwright pass over the family's page confirms: root, `/Reveillon` and a stale `/draw/<uuid>` all
-render the landing card with no `#pw` anywhere and the token never echoed; the card switches to
-English; `/?t=<uuid>` still opens the participant page; and the card does not overflow a 390 px
-viewport. New gallery still `22-family-landing.jpg`; the rest of the gallery is unchanged because no
-console screen moved visually.
+delete → 390 px → EN, no console errors, no raw keys), and the same pass now covers the family's half
+too: root, `/Reveillon` and a stale `/draw/<uuid>` all render the family's page with no `#pw` anywhere
+and the token never echoed; every landing string the markup asks for has become visible text; the page
+switches to English and its tab title follows; and nothing overflows a 390 px viewport. New gallery
+stills `22-family-landing.jpg` and `23-family-landing-guide.jpg`; the rest of the gallery is unchanged
+because no console screen moved visually.
 
 **Deployment consequence, stated before it surprises anyone:** organizer bookmarks and dashboard cards
 pointing at the bare hostname now land on the family's page. Point them at `/admin`. Participant links
@@ -1255,3 +1256,46 @@ against the code. What that found, in the order that mattered:
   quotes rather than a mechanical swap, and the banned-French reasons in `tests/test_i18n.py` had to be
   re-quoted by hand, because substituting into a double-quoted Python string is how you get
   `""brisé""` — a syntax error the suite reports as an import failure, not as a typo.
+
+**The root stops being a card and becomes a page.** Once the console had moved, the hostname was left
+with one card and a sentence. That card answers a question ("where is my link?") but the page is also
+the only screen a stranger ever reads, and "what is this thing, and could my family use it?" was going
+unanswered. It is now a short explanation of the game, written for a relative rather than an operator:
+the answer stays first — the gold callout, *ton lien arrive par courriel*, and the privacy line already
+used on the participant page — then what the game is in one sentence, then three steps in the order
+they happen, then six things an organizer actually sets (who pige who, households, more than one
+exchange on one site, the budget as a note, links without email, both languages), then three reasons
+the result cannot be gamed, then a closing line for a visitor who wants the same thing for their own
+family. Nothing technical: no quotas, no tokens, no server. The container widened to `max-w-3xl` for
+the two-column flexibility grid, and the icons come from the sprite already in the bundle — no new
+assets, no new requests.
+
+**Copy, and the guards that kept it honest.** Twenty-five `landing.*` keys, in both dictionaries, so
+each language now carries 218. Three guards matter here:
+
+* The landing block's markup is scanned for `<form`, `password`, `mot de passe`, `login.` and `admin.`.
+  A page whose whole job is to not be a login form should not have to be re-read by a human every time
+  someone adds a paragraph — the ban is asserted, in both languages, in the words themselves.
+* `tools/check_organizer_ui.py` now walks every `[x-text^="t('landing."]` element on the live page and
+  fails on one that renders empty. Twenty-five strings is a page long enough to lose one quietly, and
+  an empty paragraph is invisible in a screenshot nobody reads closely.
+* **French punctuation spacing** is now a test: `: ; ! ?` take a space before them here, and a letter
+  sitting directly against one of them is English spacing. The guard covers the UI dictionary and the
+  mail dictionary together, because the mail is what a relative actually reads. It found its first bug
+  in the copy that arrived with it — a dozen landing strings written with `famille:` — and one older
+  semicolon in the console's own help text. Letters only count, so `12:30` and `http://` stay legal.
+
+Two stale claims surfaced while doing it, both caught by a guard rather than by reading: the README
+quoted **196 keys each** while the dictionaries had 218, and the browser tool's raw-key scan used
+`[a-zA-Z_.]+`, which cannot see a digit — so `landing.step1Title`, and every other key with a number in
+it, would have rendered literally on screen without that assertion noticing. The same blind spot in the
+i18n guards is what the shared `KEY_CHARS` fixed earlier in this pass; the pattern keeps recurring
+because a regex that silently matches less than it looks like it does fails closed into a *passing*
+test.
+
+**Gallery.** `22-family-landing.jpg` is the top of the page, `23-family-landing-guide.jpg` is scrolled
+to the flexibility and fairness sections — one viewport of a two-screen page documents only its hero.
+`capture_docs_media.py` shoots both from a context with its viewport written down (1440×900 at 2x) and
+scrolls by measurement rather than with `scroll_into_view_if_needed`, which decided that an already
+partly visible section needed no scrolling and re-shot the top instead. `tests/test_docs.py` keeps the
+pair honest: a still with no README row fails, and a README row with no still fails.

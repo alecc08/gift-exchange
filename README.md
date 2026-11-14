@@ -46,8 +46,9 @@ Then open **http://localhost:8085/admin**, sign in, and:
 4. Each person opens their link, unwraps the gift, and can edit their wishlist at any time —
    it saves itself.
 
-The site root is the **family's** page, not the console: it tells a relative that their link arrives
-by email and nothing more. The console lives at `/admin` (`ADMIN_PATH` moves it), it is not linked
+The site root is the **family's** page, not the console: it explains how the exchange runs, what an
+organizer can set, and where a relative's own link is. It never shows a password field and never
+mentions that one exists. The console lives at `/admin` (`ADMIN_PATH` moves it), it is not linked
 from the family's page, and it asks search engines not to index it. One bundle, one document — the
 server stamps each response with the single flag that says which screen to open.
 
@@ -180,7 +181,7 @@ delete and re-add the participant.
 |---|---|
 | Password guessing | Per-IP fixed-window limit on `POST /api/admin/login` → `429` + `Retry-After`, and a temporary lockout after repeated failures; constant-time comparison. |
 | Misconfigured secret | A **blank** `ADMIN_PASSWORD` (the usual result of an unset `${SECRET}` expanding in a compose file) is not treated as a password: the organizer console answers `503` to every login and every admin request, `/api/limits` reports `default_password: true`, the console shows the banner and the log says so. It can never authenticate `""`. |
-| Console discovery | The organizer console is served at `/admin` (configurable with `ADMIN_PATH`), not at the site root, and nothing on the family's page names it. The root and every unmatched path render the family's landing card, so typing the hostname from an email cannot land on a password form by accident. The console document also carries `X-Robots-Tag: noindex, nofollow` and no share tags. This is discovery control, not authentication: what guards the console is the password, the login budget and the lockout. |
+| Console discovery | The organizer console is served at `/admin` (configurable with `ADMIN_PATH`), not at the site root, and nothing on the family's page names it. The root and every unmatched path render the family's landing page — the one that explains the game and says where their own link is — so typing the hostname from an email cannot land on a password form by accident. The console document also carries `X-Robots-Tag: noindex, nofollow` and no share tags. This is discovery control, not authentication: what guards the console is the password, the login budget and the lockout. |
 | Token guessing | `GET /api/draw/{token}` has its own per-IP budget; tokens are UUIDv4; unknown tokens are an indistinguishable `404`. |
 | Volume / payload abuse | Shared per-IP budget for the rest, and a request-body cap → `413`. |
 | Password on every request | Login also returns a short-lived **HMAC-SHA256 session token** (12 h) usable as `Authorization: Bearer`; `POST /api/admin/logout` revokes it server-side; the SPA stores the token, never the password. |
@@ -403,10 +404,10 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
   link works whatever path the page is opened at. The first real send built it from the API's path
   shape instead (`/draw/<uuid>`), and twelve inboxes got `{"detail":"Not Found"}` — the API lives
   under `/api`, so the pretty path was never a route. The links were re-sent from the one builder,
-  and that path is still not a route: it renders the family's landing card, which says where the real
-  link is, and it never reads a token out of a path segment. A redirect kept alive only by an address
-  nobody mails any more is a route nobody maintains. The test that would have caught the original
-  failure follows the href out of the mail body and demands `200 text/html`.
+  and that path is still not a route: it renders the family's landing page, which says where the real
+  link is and how the game runs, and it never reads a token out of a path segment. A redirect kept
+  alive only by an address nobody mails any more is a route nobody maintains. The test that would have
+  caught the original failure follows the href out of the mail body and demands `200 text/html`.
 * **The subject leads with the people:** `Ghislaine — your secret link · New Year at Gaétan's` for
   one person, `Alec, Gabrielle and Hugo — your links · Adult draw` for a household. A family shares
   one inbox, so mails from one sender with one subject are impossible to tell apart in a phone's
@@ -488,15 +489,18 @@ answers 503 (fail closed, same posture as a blank `ADMIN_PASSWORD`).
 
 ## The participant view
 
-The address the family is given is not the console: it is the card below, which says where their link
-is. Nobody has to find the site to take part — they start from the email — but the page behind the
-hostname still has to explain that to an aunt who typed it, and to a cousin whose address was one
-character off. Every address that is not the console, the API or a file renders it, and it carries
-no login form and no hint that one exists.
+The address the family is given is not the console: it is the page below, which explains the game and
+says where their own link is. Nobody has to find the site to take part — they start from the email —
+but the page behind the hostname still has to explain that to an aunt who typed it, and to a cousin
+whose address was one character off. Every address that is not the console, the API or a file renders
+it, and it carries no login form and no hint that one exists.
 
 <table>
   <tr>
-    <td colspan="2"><img src="docs/screenshots/22-family-landing.jpg" alt="The page at the site root: a card saying the draw does not open here and the link arrives by email"><br><b>The page behind the hostname</b> — one card, in the family's language, with the privacy line reused from the participant page. The console is not mentioned and not linked.</td>
+    <td colspan="2"><img src="docs/screenshots/22-family-landing.jpg" alt="The page at the site root: what the game is, and the callout saying your link arrives by email"><br><b>The page behind the hostname</b> — it answers the question the visitor came with (their link is in their inbox), then explains the exchange in three steps, in the family's language, with the privacy line reused from the participant page. The console is not mentioned and not linked.</td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/23-family-landing-guide.jpg" alt="The lower half of the page at the site root: what an organizer can set, why nobody can cheat, and the closing note"><br><b>The same page, further down</b> — what it adapts to (who pige who, households, more than one exchange, budget, links without email, both languages) and why the result cannot be gamed. Copy, not promises: every line here is a rule the console really has a switch for.</td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/07-participant-pending.jpg" alt="Participant page before the draw"><br><b>Before the draw</b> — "the draw hasn't been finalized yet"; it polls, and offers a manual check.</td>
@@ -541,7 +545,7 @@ Québec family wants.
 
 What makes "two locales" a fact rather than a claim:
 
-* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **196 keys each** — and
+* One dictionary per language in `static/index.html` (`I18N.fr`, `I18N.en`) — **218 keys each** — and
   `tests/test_i18n.py` fails on a key that exists in one and not the other. A missing key would render
   its raw name on screen, which is exactly how a half-translated UI gets born. The same test fails when
   the README quotes a different number, because that count is the sentence a translator checks.
@@ -562,7 +566,7 @@ What makes "two locales" a fact rather than a claim:
 * One honest gap, narrowed: the share card's title is fixed French in both locales — `SHARE_TITLE` is
   "Échange de cadeaux · Père Noël secret", and *Père Noël secret* is what the family calls the game.
   That string is also the `<title>` the server sends, so it is what a browser tab shows before the SPA
-  runs; the SPA replaces it immediately — the localized brand on the family's landing card, the event
+  runs; the SPA replaces it immediately — the localized brand on the family's landing page, the event
   title wherever an event has been loaded — and the language switch moves it with the rest of the
   copy. The mail kicker is written twice too: "Tirage de Noël · Père Noël secret" in French, "Secret
   Santa draw · Family gift exchange" in English. What stays fixed is only the card, which is generic —
@@ -648,7 +652,7 @@ gift-exchange/
 ├── .env.example                  # copy to .env (git-ignored)
 ├── Dockerfile                    # python:3.12-slim + pinned fastapi/uvicorn
 ├── main.py                       # API + matching engine + SQLite schema + the two page routes
-├── static/index.html             # SPA: landing card + participant view + organizer console
+├── static/index.html             # SPA: family landing page + participant view + organizer console
 │                                 # (one bundle, three screens, FR-CA/EN)
 │                                 # + og-image.png, favicon.svg, icons, site.webmanifest
 ├── docs/                         # screenshots + GIFs used by this README

@@ -260,7 +260,7 @@ def main() -> int:
         page.get_by_role("button", name="EN", exact=True).click()
         page.wait_for_selector("text=Avoid picks within the same group")
         page.wait_for_selector("text=Nobody drew inside their own group.")
-        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z_.]+/").count(), \
+        assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z0-9_.]+/").count(), \
             "a raw i18n key is visible on screen"
 
         # ------------------------------------------------------------------ #
@@ -278,6 +278,16 @@ def main() -> int:
                 problems.record(f"{path}: a password field on the page that is only {why}")
             heading = page.locator("h2").first.inner_text().strip()
             assert heading, f"{path}: the landing card rendered an empty heading"
+            # The root is an explanatory page now, not one card: about two dozen strings, several
+            # headings, three steps. A page that long is a page where a key can go missing quietly,
+            # so every landing string the markup asks for has to have become visible text here.
+            strings = page.evaluate("""() => [...document.querySelectorAll(`[x-text^="t('landing."]`)]
+              .map(el => [el.getAttribute('x-text'), (el.textContent || '').trim()])""")
+            assert len(strings) >= 24, f"{path}: only {len(strings)} landing strings in the markup"
+            blank = [expr for expr, text in strings if not text]
+            assert not blank, f"{path}: rendered with no text: {blank[:3]}"
+            assert page.locator("section").count() >= 5, \
+                f"{path}: the landing page lost its sections ({page.locator('section').count()} sections)"
             if participant_token in page.content():
                 problems.record(f"{path}: the token came back in the served document")
             width_check = page.evaluate(
@@ -285,7 +295,7 @@ def main() -> int:
             assert width_check <= 1, f"{path}: horizontal scroll at 390 px ({width_check}px)"
             page.get_by_role("button", name="EN", exact=True).click()
             page.wait_for_timeout(200)
-            assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z_.]+/").count(), \
+            assert not page.locator(r"text=/\b(landing|draw|roster|rules|note|warn)\.[a-zA-Z0-9_.]+/").count(), \
                 f"{path}: a raw i18n key on the family's page in English"
             title_en = page.title()
             page.get_by_role("button", name="FR", exact=True).click()

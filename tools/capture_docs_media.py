@@ -154,10 +154,24 @@ def capture_family_page(page):
 
     No auth, no token, no roster — which is the point of the still. It is also the response a
     mistyped address gets, since every unmatched path renders this screen.
+
+    Two stills, because the root is a page now and not one card. The first is its top: the answer a
+    relative came for. The second is scrolled to the flexibility and fairness sections, which is the
+    half of a two-screen document a single viewport would never show.
     """
     goto_family_page(page)
     time.sleep(1.0)
     shot(page, "22-family-landing.png")
+    # scrolled by measurement, not by scroll_into_view_if_needed: that one decides a partly visible
+    # section is already in view and leaves the still showing the same top again.
+    below_fold = page.evaluate("""() => {
+      const section = document.querySelectorAll('section')[2];
+      return section ? Math.round(section.getBoundingClientRect().top + window.scrollY - 40) : 0;
+    }""")
+    assert below_fold > 0, "the landing page has nothing below the fold: the second still would repeat the first"
+    page.evaluate("y => window.scrollTo(0, y)", below_fold)
+    time.sleep(0.6)
+    shot(page, "23-family-landing-guide.png")
 
 
 def capture_admin_page(page):
@@ -406,9 +420,14 @@ def main():
         view.close()
 
         # ---- the page behind the hostname (before any login touches the state) ----
-        landing = browser.new_page()
+        # Its own context, with the viewport named: this page runs long, and a two-still set of it
+        # is only reproducible if the width and height it was shot at are written down here.
+        landing_context = browser.new_context(viewport={"width": 1440, "height": 900},
+                                              device_scale_factor=2, locale="fr-FR")
+        landing = landing_context.new_page()
         capture_family_page(landing)
         landing.close()
+        landing_context.close()
 
         # ---- organizer flow, recorded (unlock -> panels -> toast) ----
         view = browser.new_context(viewport={"width": 1180, "height": 760},

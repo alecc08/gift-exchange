@@ -870,22 +870,125 @@
   </template>
 
   <!-- ===================== FAMILY LANDING (the hostname, no token) =====================
-       What a relative sees when they type the address from the email, or fat-finger it. Its only
-       job is to say where their link really is. It shows no form and no hint that a console
-       exists: this is the page people used to stumble into by accident. -->
+       Two jobs, in this order. First the one a relative needs answered: where their link is. Then
+       the page explains the game itself — how it runs, what it adapts to, why nobody can cheat —
+       because this is also the only page a stranger ever sees, and "what is this thing?" deserves an
+       answer that is not a login form. No form, and no hint that one exists anywhere: the landing
+       block is tested for those words, not trusted to stay clean. -->
   <template x-if="mode === 'landing'">
-    <div class="max-w-2xl mx-auto px-5 pt-10 pb-28 space-y-6">
+    <div class="max-w-3xl mx-auto px-5 pt-10 pb-28 space-y-5">
+
+      <!-- the answer first, then the pitch: whoever typed this address came looking for their link -->
       <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-8 md:p-10 text-center relative overflow-hidden pop-in">
         <svg class="absolute -right-8 -top-8 w-32 h-32 text-pine-100 pointer-events-none"><use href="#i-flake"/></svg>
         <svg class="absolute -left-10 bottom-0 w-24 h-24 text-gold-100 pointer-events-none"><use href="#i-flake"/></svg>
 
         <p class="label" x-text="t('landing.kicker')"></p>
         <h2 class="font-display text-3xl md:text-4xl text-pine-800 mt-1.5" x-text="t('landing.title')"></h2>
+        <p class="text-pine-700 mt-4" x-text="t('landing.lead')"></p>
 
-        <svg class="w-16 h-16 text-pine-300 wrapped mx-auto mt-7"><use href="#i-gift"/></svg>
+        <div class="mt-7 rounded-2xl bg-gold-100 ring-1 ring-gold-300/50 p-5 md:p-6 text-left">
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-10 h-10 shrink-0 rounded-xl bg-white text-gold-600">
+              <svg class="w-5 h-5"><use href="#i-mail"/></svg>
+            </span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.whereTitle')"></h3>
+              <p class="text-sm text-pine-700 mt-1" x-text="t('landing.whereBody')"></p>
+            </div>
+          </div>
+        </div>
 
-        <p class="text-pine-700 mt-5" x-text="t('landing.help')"></p>
         <p class="text-[11px] text-pine-600/70 mt-4" x-text="t('p.privateNote')"></p>
+      </section>
+
+      <!-- three steps, in the order they happen -->
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-7 md:p-9">
+        <p class="label" x-text="t('landing.howTitle')"></p>
+        <ol class="mt-5 space-y-5">
+          <li class="flex gap-4">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-full bg-pine-100 text-pine-700 font-semibold text-sm">1</span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.step1Title')"></h3>
+              <p class="text-sm text-pine-600 mt-1" x-text="t('landing.step1Body')"></p>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-full bg-pine-100 text-pine-700 font-semibold text-sm">2</span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.step2Title')"></h3>
+              <p class="text-sm text-pine-600 mt-1" x-text="t('landing.step2Body')"></p>
+            </div>
+          </li>
+          <li class="flex gap-4">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-full bg-pine-100 text-pine-700 font-semibold text-sm">3</span>
+            <div>
+              <h3 class="font-display text-lg text-pine-800" x-text="t('landing.step3Title')"></h3>
+              <p class="text-sm text-pine-600 mt-1" x-text="t('landing.step3Body')"></p>
+            </div>
+          </li>
+        </ol>
+      </section>
+
+      <!-- what an organizer can set: six things a family actually asks for -->
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-7 md:p-9">
+        <p class="label" x-text="t('landing.flexTitle')"></p>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-tree"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexRoles')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-bauble"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexHome')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-gift"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexMany')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-candy"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexBudget')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-link"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexLinks')"></p>
+          </div>
+          <div class="flex items-start gap-3">
+            <span class="grid place-items-center w-9 h-9 shrink-0 rounded-xl bg-pine-50 text-pine-600">
+              <svg class="w-5 h-5"><use href="#i-star"/></svg></span>
+            <p class="text-sm text-pine-700" x-text="t('landing.flexLanguage')"></p>
+          </div>
+        </div>
+      </section>
+
+      <section class="bg-white rounded-[2rem] ring-1 ring-black/5 shadow-lift p-7 md:p-9">
+        <p class="label" x-text="t('landing.fairTitle')"></p>
+        <ul class="mt-4 space-y-3">
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 shrink-0 mt-0.5 text-pine-500"><use href="#i-check"/></svg>
+            <p class="text-sm text-pine-700" x-text="t('landing.fairBlind')"></p>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 shrink-0 mt-0.5 text-pine-500"><use href="#i-check"/></svg>
+            <p class="text-sm text-pine-700" x-text="t('landing.fairFair')"></p>
+          </li>
+          <li class="flex items-start gap-3">
+            <svg class="w-5 h-5 shrink-0 mt-0.5 text-pine-500"><use href="#i-check"/></svg>
+            <p class="text-sm text-pine-700" x-text="t('landing.fairLink')"></p>
+          </li>
+        </ul>
+      </section>
+
+      <section class="rounded-[2rem] ring-1 ring-pine-200/70 bg-pine-50/70 p-6 md:p-7 text-center">
+        <svg class="w-9 h-9 text-gold-500 mx-auto"><use href="#i-flake"/></svg>
+        <h3 class="font-display text-lg text-pine-800 mt-2" x-text="t('landing.askTitle')"></h3>
+        <p class="text-sm text-pine-600 mt-1.5 max-w-xl mx-auto" x-text="t('landing.askBody')"></p>
       </section>
     </div>
   </template>
@@ -1072,11 +1175,35 @@ const I18N = {
   fr: {
     'brand': 'Temps des Fêtes',
 
-    /* The screen at the site's own address, for a relative who types it instead of using their
-       link. Nothing about a console or a password appears here. */
-    'landing.kicker': 'Ton lien personnel',
-    'landing.title': 'Le tirage ne s’ouvre pas ici',
-    'landing.help': 'Ton lien arrive par courriel, ou l’organisateur te le donne en main propre. Ouvre-le pour écrire tes idées de cadeaux et pour voir qui tu gâtes dès que le tirage est lancé.',
+    /* The screen at the site's own address: for a relative who typed it instead of using their
+       link, and for anyone else who lands here. It explains the game and where the link is. Nothing
+       about a console or a signing-in form appears here, and the words themselves stay out: the
+       landing block is tested for them. */
+    'landing.kicker': 'Échange de cadeaux en famille',
+    'landing.title': 'Tout le monde gâte quelqu’un. Personne ne sait qui.',
+    'landing.lead': 'Un tirage au sort pensé pour une grande famille : les règles se décident à l’avance, chacun reçoit son propre lien, et le résultat ne se découvre qu’en ouvrant ce lien.',
+    'landing.whereTitle': 'Ton lien arrive par courriel',
+    'landing.whereBody': 'Ou l’organisateur te le donne en main propre. Ouvre-le pour écrire tes idées de cadeaux, puis pour voir qui tu gâtes dès que le tirage est lancé. Rien à installer, aucun compte à créer : le lien, c’est tout.',
+    'landing.howTitle': 'Comment ça marche',
+    'landing.step1Title': 'Le monde et les règles',
+    'landing.step1Body': 'L’organisateur écrit la liste des participants et décide qui pige qui : les adultes entre eux, les enfants aussi, les deux mélangés si tu préfères. Il peut ajouter un mot sur le budget.',
+    'landing.step2Title': 'Un lien par personne',
+    'landing.step2Body': 'Chacun reçoit son propre lien, par courriel ou en main propre. Douze cousins, ça fait douze liens ; un seul courriel part par boîte quand trois personnes partagent la même.',
+    'landing.step3Title': 'Le tirage, puis la surprise',
+    'landing.step3Body': 'Une fois les règles verrouillées, chacun ouvre son lien : c’est là que le nom apparaît, avec la liste d’idées de la personne. Personne ne peut voir celle des autres.',
+    'landing.flexTitle': 'Ça se règle sur ta famille',
+    'landing.flexRoles': 'Adultes et enfants : qui gâte qui se décide case par case — un enfant peut gâter un adulte, ou jamais.',
+    'landing.flexHome': 'Personne ne gâte quelqu’un de sa propre maison, même quand deux familles portent le même nom.',
+    'landing.flexMany': 'Un Noël en famille, un échange au bureau, un autre entre cousins : tout peut tourner sur le même site, sans se mélanger.',
+    'landing.flexBudget': 'Le budget reste une note libre, pas une case à remplir au centime près.',
+    'landing.flexLinks': 'Les liens partent d’un clic, ou s’écrivent à la main pour ceux qui n’ont pas de courriel.',
+    'landing.flexLanguage': 'Le site est en français ou en anglais, d’un clic, et les courriels peuvent être dans l’autre langue.',
+    'landing.fairTitle': 'Pourquoi personne ne triche',
+    'landing.fairBlind': 'Le tirage est fait d’un seul coup et personne ne peut le regarder : pas même l’organisateur.',
+    'landing.fairFair': 'Chacun reçoit un nombre de cadeaux égal à celui qu’il donne — pas de cousin qui gâte tout le monde.',
+    'landing.fairLink': 'Le lien ne se partage pas : il ne montre que ton nom à toi, et la personne que tu gâtes.',
+    'landing.askTitle': 'Envie de la même chose pour ta famille ?',
+    'landing.askBody': 'Cet échange a été monté par un proche, sur son propre serveur. Demande-lui : ça se monte en une soirée, et ça se joue toute la saison des Fêtes.',
 
     'admin.title': 'Espace organisateur',
     'lang.switch': 'Choisir la langue',
@@ -1112,7 +1239,7 @@ const I18N = {
     'draws.budgetField': 'Note de budget (facultatif)',
     'draws.copyField': 'Copier les participants de…',
     'draws.copyNone': 'Personne (roster vide)',
-    'draws.copyHelp': 'Les personnes et leurs adresses viennent avec; pas les liens, pas les résultats.',
+    'draws.copyHelp': 'Les personnes et leurs adresses viennent avec ; pas les liens, pas les résultats.',
     'draws.create': 'Créer le tirage',
     'draws.back': 'Tous les tirages',
     'draws.opened_on': 'Ouvert le {at}',
@@ -1286,9 +1413,31 @@ const I18N = {
   en: {
     'brand': 'Gift exchange',
 
-    'landing.kicker': 'Your own link',
-    'landing.title': 'Your draw does not open here',
-    'landing.help': 'Your link arrives by email, or the organizer hands it to you in person. Open it to write down your gift ideas, and to see who you are buying for once the draw has run.',
+    'landing.kicker': 'A family gift exchange',
+    'landing.title': 'Everyone buys for somebody. Nobody knows for whom.',
+    'landing.lead': 'A draw built for a big family: the rules are decided up front, everyone gets their own link, and the pairing is only ever visible inside that link.',
+    'landing.whereTitle': 'Your link arrives by email',
+    'landing.whereBody': 'Or the organizer hands it to you in person. Open it to write down your gift ideas, and to see who you are buying for once the draw has run. Nothing to install, no account to create: the link is everything.',
+    'landing.howTitle': 'How it works',
+    'landing.step1Title': 'The people and the rules',
+    'landing.step1Body': 'The organizer writes out the guest list and decides who buys for whom: adults among themselves, children too, or the two mixed together. A note about the budget can go along.',
+    'landing.step2Title': 'One link each',
+    'landing.step2Body': 'Everyone gets their own link, by email or in person. Twelve cousins means twelve links; when three people share one mailbox, only one message goes out.',
+    'landing.step3Title': 'The draw, then the surprise',
+    'landing.step3Body': 'Once the rules are locked, each person opens their own link: that is where the name appears, with the other person’s gift ideas. Nobody can see anyone else’s.',
+    'landing.flexTitle': 'It bends to your family',
+    'landing.flexRoles': 'Adults and children: who gives to whom is set one box at a time — a child can buy for an adult, or never.',
+    'landing.flexHome': 'Nobody buys for someone in their own household, even when two families carry the same surname.',
+    'landing.flexMany': 'A holiday exchange, an office one, another among cousins: they can all run on the same site without mixing.',
+    'landing.flexBudget': 'The budget stays a note in your own words, not a field to fill in to the cent.',
+    'landing.flexLinks': 'Links go out with one click, or get written by hand for the people with no email.',
+    'landing.flexLanguage': 'The site switches between French and English in one click, and the emails can be in the other language.',
+    'landing.fairTitle': 'Why nobody can cheat',
+    'landing.fairBlind': 'The draw happens all at once and nobody can look at it — not even the organizer.',
+    'landing.fairFair': 'Everyone receives as many gifts as they give — no cousin buying for the whole room.',
+    'landing.fairLink': 'A link is not shareable: it shows only your name, and the person you are buying for.',
+    'landing.askTitle': 'Want the same thing for your family?',
+    'landing.askBody': 'This exchange was set up by someone close to you, on their own server. Ask them: it takes an evening to put together, and it runs all season.',
 
     'admin.title': 'Organizer space',
     'lang.switch': 'Language choice',

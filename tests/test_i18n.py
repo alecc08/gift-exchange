@@ -35,6 +35,9 @@ KEY_CHARS = r"[a-z0-9_.]+"
 ENTRY_RE = re.compile(rf"^\s*'({KEY_CHARS})':\s*'((?:[^'\\]|\\.)*)',\s*$", re.IGNORECASE)
 KEY_START_RE = re.compile(r"^\s*'([^']{1,60})':")
 PLACEHOLDER_RE = re.compile(r"\{(\w+)\}")
+# A letter sitting directly against `: ; ! ?` is English spacing. `[^\W\d_]` is "a letter, in any
+# alphabet", which keeps `12:30` and `http://` out of the way.
+TIGHT_PUNCTUATION_RE = re.compile(r"[^\W\d_][:;!?]")
 # `detail.includes('...')` is how the SPA decides which explanation to show, and `t('key')` is how
 # the markup asks for a label. Both are stringly-typed, so both drift silently.
 INCLUDE_RE = re.compile(r"detail\.includes\('([^']+)'\)")
@@ -93,6 +96,22 @@ def test_french_is_plain_quebec_french_not_caricature():
             if re.search(pattern, value, re.IGNORECASE):
                 broken.append(f"{key}: {value!r} -> {why}")
     assert not broken, "\n".join(broken)
+
+
+def test_french_punctuation_keeps_the_space_before_it():
+    """In Quebec typography `: ; ! ?` all take a space before them, and the app's French was written
+    that way throughout — until the landing page arrived with English spacing on a dozen strings.
+
+    Asserted, because spacing is invisible to a spell-checker and a reader only notices that the page
+    looks translated. Both dictionaries are checked: the mail is the text a relative actually reads.
+    The English side is deliberately not checked — tight punctuation is correct there. Letters only
+    count as violations, so `12:30` and `http://` stay legal.
+    """
+    sources = {f"ui.{key}": value for key, value in dictionary("fr").items()}
+    sources.update({f"email.{key}": value for key, value in main.EMAIL_STRINGS["fr"].items()
+                    if isinstance(value, str)})
+    tight = [f"{key}: {sources[key]!r}" for key in sorted(sources) if TIGHT_PUNCTUATION_RE.search(sources[key])]
+    assert not tight, "no space before : ; ! ?\n" + "\n".join(tight)
 
 
 def test_no_two_different_controls_share_a_label():
