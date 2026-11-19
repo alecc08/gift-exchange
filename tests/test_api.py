@@ -131,13 +131,34 @@ def test_locked_roster_and_config_are_read_only(client):
 
     assert client.put("/api/admin/config", headers=ADMIN,
                       json={"adult_draws_adult": 2}).status_code == 400
+    assert client.put("/api/admin/config", headers=ADMIN,
+                      json={"avoid_same_group": False}).status_code == 400
+    assert client.put("/api/admin/config", headers=ADMIN,
+                      json={"auto_email_on_draw": True}).status_code == 400
+    assert client.put("/api/admin/config", headers=ADMIN,
+                      json={"budget_note": "$40", "adult_draws_adult": 2}).status_code == 400
     assert client.post("/api/admin/participants", headers=ADMIN,
                        json={"name": "Late", "role": "ADULT", "family_group": "New"}).status_code == 400
     assert client.delete(f"/api/admin/participants/{people[0]['id']}", headers=ADMIN).status_code == 400
 
+    # Non-pairing metadata (budget, title, email language) can still be updated while live.
+    r = client.put("/api/admin/config", headers=ADMIN,
+                   json={"budget_note": "$40 CAD", "event_title": "Noël 2026", "email_language": "en"})
+    assert r.status_code == 200
+    cfg = r.json()["config"]
+    assert cfg["budget_note"] == "$40 CAD"
+    assert cfg["event_title"] == "Noël 2026"
+    assert cfg["email_language"] == "en"
+
     state = client.get("/api/admin/state", headers=ADMIN).json()
     assert state["config"]["adult_draws_adult"] == 1
+    assert state["config"]["budget_note"] == "$40 CAD"
     assert len(state["participants"]) == 8
+
+    # Participant view reflects the updated budget and title.
+    draw_view = client.get(f"/api/draw/{people[0]['token']}").json()
+    assert draw_view["budget_note"] == "$40 CAD"
+    assert draw_view["event_title"] == "Noël 2026"
 
 
 def test_viewed_at_transitions_and_token_flow(client):
