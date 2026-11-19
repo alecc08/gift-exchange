@@ -508,14 +508,14 @@
           <div class="grid md:grid-cols-2 gap-4 mt-6">
             <div>
               <label class="label" for="title" x-text="t('rules.eventTitle')"></label>
-              <input id="title" class="field mt-1.5" x-model="cfg.event_title" :disabled="locked"
+              <input id="title" class="field mt-1.5" x-model="cfg.event_title"
                      :maxlength="limits.event_title">
               <p class="text-[11px] text-pine-600/60 mt-1 text-right"
                  x-text="(cfg.event_title || '').length + '/' + limits.event_title"></p>
             </div>
             <div>
               <label class="label" for="budget" x-text="t('rules.budget')"></label>
-              <input id="budget" class="field mt-1.5" x-model="cfg.budget_note" :disabled="locked"
+              <input id="budget" class="field mt-1.5" x-model="cfg.budget_note"
                      :placeholder="t('rules.budgetPlaceholder')" :maxlength="limits.budget_note">
               <p class="text-[11px] text-pine-600/60 mt-1 text-right"
                  x-text="(cfg.budget_note || '').length + '/' + limits.budget_note"></p>
@@ -590,7 +590,7 @@
             <div class="rounded-2xl bg-pine-50/70 ring-1 ring-pine-500/15 px-4 py-3.5 space-y-3.5">
               <div class="flex flex-wrap items-center gap-3">
                 <span class="text-sm text-pine-800" x-text="t('rules.email_lang')"></span>
-                <select class="field w-36 py-1.5 text-sm" x-model="cfg.email_language" :disabled="locked">
+                <select class="field w-36 py-1.5 text-sm" x-model="cfg.email_language">
                   <option value="fr">Français</option>
                   <option value="en">English</option>
                 </select>
@@ -619,7 +619,7 @@
           </div>
 
           <div class="flex flex-wrap items-center gap-3 mt-6">
-            <button @click="saveConfig()" :disabled="locked || busy || !rulesDirty" class="btn btn-primary px-5 py-2.5 text-sm">
+            <button @click="saveConfig()" :disabled="busy || !rulesDirty" class="btn btn-primary px-5 py-2.5 text-sm">
               <svg class="w-3.5 h-3.5"><use href="#i-check"/></svg>
               <span x-text="t('rules.save')"></span>
             </button>
@@ -1385,7 +1385,7 @@ const I18N = {
     'rules.quotaHelp': '0 = pas de cadeau de ce genre. Le compte doit être pareil du côté de ceux qui donnent et de ceux qui reçoivent.',
     'rules.save': 'Enregistrer les règles',
     'rules.unsaved': 'Il y a des changements pas enregistrés',
-    'rules.lockedHint': 'Le tirage est verrouillé : recommence-le avant de toucher aux règles.',
+    'rules.lockedHint': 'Tirage verrouillé : quotas et règle de groupe figés. Titre, budget et langue restent modifiables.',
     'rules.saved': 'Règles enregistrées.',
 
     'rules.email_policy': 'Courriels',
@@ -1651,7 +1651,7 @@ const I18N = {
     'rules.quotaHelp': '0 = that kind of gift is not planned. Totals must stay balanced between givers and receivers.',
     'rules.save': 'Save rules',
     'rules.unsaved': 'Unsaved changes',
-    'rules.lockedHint': 'Draw locked: reset it before editing the rules.',
+    'rules.lockedHint': 'Draw locked: quotas and group rule are frozen. Title, budget, and email language can still be edited.',
     'rules.saved': 'Rules saved.',
 
     'rules.email_policy': 'Emails',
@@ -2334,12 +2334,17 @@ function giftExchange() {
     async saveConfig() {
       this.busy = true;
       this.clearAdminError();
-      const numeric = ['adult_draws_adult', 'adult_draws_child', 'child_draws_adult', 'child_draws_child'];
-      const body = { event_title: this.cfg.event_title, budget_note: this.cfg.budget_note };
-      for (const key of numeric) body[key] = Math.max(0, Math.min(this.limits.max_quota, Number(this.cfg[key]) || 0));
-      body.avoid_same_group = !!this.cfg.avoid_same_group;
-      body.email_language = this.cfg.email_language === 'en' ? 'en' : 'fr';
-      body.auto_email_on_draw = !!this.cfg.auto_email_on_draw;
+      const body = {
+        event_title: this.cfg.event_title,
+        budget_note: this.cfg.budget_note,
+        email_language: this.cfg.email_language === 'en' ? 'en' : 'fr',
+      };
+      if (!this.locked) {
+        const numeric = ['adult_draws_adult', 'adult_draws_child', 'child_draws_adult', 'child_draws_child'];
+        for (const key of numeric) body[key] = Math.max(0, Math.min(this.limits.max_quota, Number(this.cfg[key]) || 0));
+        body.avoid_same_group = !!this.cfg.avoid_same_group;
+        body.auto_email_on_draw = !!this.cfg.auto_email_on_draw;
+      }
       const response = await this.api(this.drawPath('/api/admin/config'), { method: 'PUT', body: JSON.stringify(body) }, true);
       this.busy = false;
       if (response.ok) this.toast(this.t('rules.saved'));

@@ -482,6 +482,8 @@ DRAW_RULE_COLUMNS = (
 # to add it here. `is_locked` is the one exception: it is the server's answer to a draw having run,
 # never a field a client sets.
 EDITABLE_CONFIG_FIELDS = tuple(column for column in DRAW_RULE_COLUMNS if column != "is_locked")
+# Fields that do not affect pairings and can still be adjusted after a draw is locked.
+LOCKED_EDITABLE_CONFIG_FIELDS = frozenset({"event_title", "budget_note", "email_language"})
 
 MIGRATIONS = (
     ("participants", "group_key", "ALTER TABLE participants ADD COLUMN group_key TEXT NOT NULL DEFAULT ''",
@@ -2267,9 +2269,11 @@ def update_config(
     _: None = Depends(require_admin),
 ) -> dict[str, Any]:
     target = select_draw_id(conn, draw_id)
-    _reject_if_locked(_load_config(conn, target))
+    config_row = _load_config(conn, target)
     updates = {key: value for key, value in payload.model_dump(exclude_unset=True).items()
                if key in EDITABLE_CONFIG_FIELDS and value is not None}
+    if config_row["is_locked"] and set(updates) - LOCKED_EDITABLE_CONFIG_FIELDS:
+        raise HTTPException(status_code=400, detail=LOCKED_MSG)
     if updates:
         _update_columns(conn, "draws", target, updates)
     audit("config_updated", ip=client_ip(request), draw_id=target, fields=sorted(updates))

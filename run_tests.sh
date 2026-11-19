@@ -7,10 +7,14 @@ cd "$(dirname "$0")"
 
 VENV=${VENV:-.venv}
 if command -v uv >/dev/null 2>&1; then
-  uv venv --python 3.12 "$VENV" >/dev/null 2>&1 || uv venv "$VENV" >/dev/null 2>&1
+  if [ ! -d "$VENV" ]; then
+    uv venv --python 3.12 "$VENV" >/dev/null 2>&1 || uv venv "$VENV" >/dev/null 2>&1
+  fi
   uv pip install --python "$VENV/bin/python" -q -r requirements.txt "httpx==0.27.2" "pytest==8.3.3"
 else
-  python3 -m venv "$VENV"
+  if [ ! -d "$VENV" ]; then
+    python3 -m venv "$VENV"
+  fi
   "$VENV/bin/pip" install -q --upgrade pip
   "$VENV/bin/pip" install -q -r requirements.txt "httpx==0.27.2" "pytest==8.3.3"
 fi
