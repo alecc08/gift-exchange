@@ -1,27 +1,47 @@
 name: release
 
+# Automatically tags and publishes a GitHub Release when a commit merged to main
+# introduces a new VERSION that does not have a v<VERSION> tag yet.
+
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check VERSION and existing tags
+        id: meta
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          TAG="v${VERSION}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${TAG} already exists; skipping release."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Extract changelog notes
+        if: steps.meta.outputs.exists == 'false'
         env:
-          TAG: ${{ github.ref_name }}
+          VER: ${{ steps.meta.outputs.version }}
         run: |
           python3 - <<'PY'
           import os, pathlib, re
 
-          tag = os.environ["TAG"]
-          ver = tag.lstrip("v")
+          ver = os.environ["VER"]
           text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
           pattern = re.compile(
               rf"^## \[{re.escape(ver)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
@@ -32,13 +52,22 @@ jobs:
           pathlib.Path("/tmp/release-notes.md").write_text(notes, encoding="utf-8")
           PY
 
-      - name: Create GitHub Release
+      - name: Create tag and GitHub Release
+        if: steps.meta.outputs.exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ steps.meta.outputs.tag }}
         run: |
           if [ -s /tmp/release-notes.md ]; then
-            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --notes-file /tmp/release-notes.md
           else
-            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "$TAG" --generate-notes
           fi
+
+      - name: Trigger versioned Docker image build
+        if: steps.meta.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          gh workflow run build.yml --ref "$TAG"
