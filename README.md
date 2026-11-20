@@ -1,5 +1,13 @@
 # Family Gift Exchange
 
+[![Tests](https://github.com/alecc08/gift-exchange/actions/workflows/test.yml/badge.svg)](https://github.com/alecc08/gift-exchange/actions/workflows/test.yml)
+[![Build](https://github.com/alecc08/gift-exchange/actions/workflows/build.yml/badge.svg)](https://github.com/alecc08/gift-exchange/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/alecc08/gift-exchange?sort=semver)](https://github.com/alecc08/gift-exchange/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi&logoColor=white)
+[![GHCR](https://img.shields.io/badge/ghcr.io-alecc08%2Fgift--exchange-2496ED?logo=docker&logoColor=white)](https://github.com/alecc08/gift-exchange/pkgs/container/gift-exchange)
+
 Self-hosted Secret Santa for a big family: role-based draw quotas (adult / child), soft household grouping, one private link per person, and an organizer console that **never sees the pairings**.
 
 FastAPI + SQLite · zero-build SPA (Tailwind CDN + Alpine.js) · **Québec French (`fr-CA`, default) and English (`en-CA`)** · amounts in CAD.
@@ -36,7 +44,7 @@ mkdir -p data && chown -R 1000:1000 data
 docker compose -f docker-compose.hardened.yml up -d
 ```
 
-Prebuilt images are published to `ghcr.io/alecc08/gift-exchange:latest` (or pin a commit SHA).
+Prebuilt images are published to `ghcr.io/alecc08/gift-exchange:latest` (or pin a semver tag like `:1.0.0` or a commit SHA).
 
 Open **`http://localhost:8085/admin`** to sign in, configure rules, add participants, and lock the draw. The root path `/` serves a family landing page with no admin link.
 

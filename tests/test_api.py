@@ -27,6 +27,17 @@ def test_health_and_index(client):
     assert "Voir mes cadeaux" in page.text        # French is the default language
 
 
+def test_version_file_is_semver():
+    import pathlib
+    import re
+    import main as app_main
+
+    version = (pathlib.Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+    assert re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version)
+    assert app_main.__version__ == version
+    assert app_main.app.version == version
+
+
 def test_login_and_admin_auth(client):
     assert client.post("/api/admin/login", json={"password": "nope"}).status_code == 401
     assert client.post("/api/admin/login", json={"password": "s3cret"}).status_code == 200

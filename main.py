@@ -53,6 +53,8 @@ from pydantic import BaseModel, Field, field_validator
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
+VERSION_FILE = BASE_DIR / "VERSION"
+__version__ = VERSION_FILE.read_text(encoding="utf-8").strip() if VERSION_FILE.exists() else "0.0.0"
 
 # Starlette picks content types from `mimetypes`, and the stdlib map does not know every
 # extension this app ships. A manifest served as application/octet-stream is a silently broken
@@ -1839,7 +1841,7 @@ async def lifespan(app: FastAPI):
 # No docs UI and no schema route: `/docs`, `/redoc` and `/openapi.json` are all unanswered, so the
 # API surface is not something a visitor can enumerate. Nothing in this repository reads the schema —
 # the SPA calls the endpoints by hand and the tests call the functions directly.
-app = FastAPI(title="Family Gift Exchange", lifespan=lifespan,
+app = FastAPI(title="Family Gift Exchange", version=__version__, lifespan=lifespan,
               docs_url=None, redoc_url=None, openapi_url=None)
 
 
