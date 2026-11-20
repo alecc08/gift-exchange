@@ -1,0 +1,44 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract changelog notes
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+
+          tag = os.environ["TAG"]
+          ver = tag.lstrip("v")
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          pattern = re.compile(
+              rf"^## \[{re.escape(ver)}\][^\n]*\n(.*?)(?=^## \[|\Z)",
+              re.MULTILINE | re.DOTALL,
+          )
+          m = pattern.search(text)
+          notes = m.group(1).strip() if m else ""
+          pathlib.Path("/tmp/release-notes.md").write_text(notes, encoding="utf-8")
+          PY
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if [ -s /tmp/release-notes.md ]; then
+            gh release create "$TAG" --verify-tag --title "$TAG" --notes-file /tmp/release-notes.md
+          else
+            gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes
+          fi
