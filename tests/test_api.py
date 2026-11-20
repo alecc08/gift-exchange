@@ -32,10 +32,14 @@ def test_version_file_is_semver():
     import re
     import main as app_main
 
-    version = (pathlib.Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+    root = pathlib.Path(__file__).resolve().parents[1]
+    version = (root / "VERSION").read_text(encoding="utf-8").strip()
     assert re.fullmatch(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?", version)
     assert app_main.__version__ == version
     assert app_main.app.version == version
+
+    changelog = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert re.search(rf"^## \[{re.escape(version)}\]", changelog, re.MULTILINE)
 
 
 def test_login_and_admin_auth(client):
